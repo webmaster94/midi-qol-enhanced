@@ -136,9 +136,9 @@
   "flags": {
     "allowBugReporter": true
   },
-  "url": "https://gitlab.com/tposney/midi-qol",
-  "manifest": "https://gitlab.com/tposney/midi-qol/raw/v13/package/module.json",
-  "download": "https://gitlab.com/tposney/midi-qol/raw/v13/package/midi-qol-v{{version}}.zip",
+  "url": "https://gitlab.com/garrysmod367/midi-qol-mr",
+  "manifest": "https://gitlab.com/garrysmod367/midi-qol-mr/-/raw/v13/package/module.json",
+  "download": "https://gitlab.com/garrysmod367/midi-qol-mr/-/raw/v13/package/midi-qol-v{{version}}.zip",
   "changelog": "https://gitlab.com/tposney/midi-qol/raw/v13/Changelog.md",
   "documentTypes": {
     "ChatMessage": {
