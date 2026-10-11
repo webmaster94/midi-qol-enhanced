@@ -1,3 +1,4 @@
+import { getRollModes } from "../compatibility.js";
 import { Activity, ActivityUseConfiguration, RollDialogConfig, DND5ETargetDescriptor, RollMessageConfig, RollProcessConfig } from "../../globals.js";
 import { GameSystemConfig, MODULE_ID, allAttackTypes, debugEnabled, error, i18n, i18nFormat, warn, busyWait, getHealingLabel } from "../../midi-qol.js";
 import { socketlibSocket } from "../GMAction.js";
@@ -25,6 +26,7 @@ import {
 } from "../settings.js";
 import { installedModules } from "../setupModules.js";
 import { saveUndoData } from "../undo.js";
+import { usesSystemChatData, renderChatButtons, resolveActivityEffect, createActivityRegions } from "../compatibility.js";
 import {
   activityHasAreaTarget,
   callActivityHooks,
@@ -492,13 +494,17 @@ export let MidiActivityMixin = Base => {
       const templates: MeasuredTemplateDocument[] = [];
 
       try {
-        const previews = AbilityTemplate.fromActivity(this);
-        if (!previews) return;
-        for (const template of previews) {
-          const result = await template.drawPreview();
-          if (result) {
-            const docs = Array.isArray(result) ? result : [result];
-            templates.push(...docs);
+        if (usesSystemChatData()) {
+          templates.push(...await globalThis.dnd5e.canvas.TemplatePlacement.fromActivity(this) ?? []);
+        } else {
+          const previews = AbilityTemplate.fromActivity(this);
+          if (!previews) return;
+          for (const template of previews) {
+            const result = await template.drawPreview();
+            if (result) {
+              const docs = Array.isArray(result) ? result : [result];
+              templates.push(...docs);
+            }
           }
         }
       } catch (err) {
@@ -936,7 +942,7 @@ export let MidiActivityMixin = Base => {
           });
           const rollMode = safeGetGameSetting("core", "rollMode");
           message.create ??= false;
-          const showChatDamageCard = game.user?.isGM && configSettings.gmAttackDamageCards && [CONST.DICE_ROLL_MODES.SELF, CONST.DICE_ROLL_MODES.BLIND, CONST.DICE_ROLL_MODES.PRIVATE].includes(rollMode);
+          const showChatDamageCard = game.user?.isGM && configSettings.gmAttackDamageCards && [getRollModes().SELF, getRollModes().BLIND, getRollModes().PRIVATE].includes(rollMode);
           if (showChatDamageCard) {
             // Show a chat card for damage rolls if the players are not going to see the midi card.
             message.create = true;
@@ -1715,7 +1721,7 @@ export let MidiActivityMixin = Base => {
       const autoCreateTemplate = activityHasAutoPlaceTemplate(this);
       const emanationNoTemplate = activityHasEmanationNoTemplate(this);
       if (autoCreateTemplate || emanationNoTemplate) {
-        buttons = buttons.filter(b => b.dataset?.action !== "placeTemplate")
+        buttons = buttons.filter(b => (b.action ?? b.dataset?.action) !== "placeTemplate")
       }
 
       // Add other activity consumption buttons (mirroring dnd5e pattern)
@@ -1731,6 +1737,12 @@ export let MidiActivityMixin = Base => {
         });
       }
 
+      if (usesSystemChatData()) return buttons.map(button => ({
+        ...button,
+        action: button.action ?? button.dataset?.action,
+        label: typeof button.label === "string" ? { value: button.label } : button.label,
+        icon: button.icon?.startsWith("<") ? (foundry.utils.parseHTML(button.icon) as HTMLElement).className : button.icon
+      }));
       return buttons;
     }
 
@@ -1738,9 +1750,9 @@ export let MidiActivityMixin = Base => {
      * Determine whether a chat button should be hidden based on current state.
      * Mirrors dnd5e's shouldHideChatButton pattern.
      */
-    shouldHideChatButton(button: HTMLButtonElement, message: ChatMessage.Implementation): boolean {
+    shouldHideChatButton(button: any, message: ChatMessage.Implementation): boolean {
       const consumed = message.getFlag(MODULE_ID, "use.consumed");
-      switch (button.dataset.action) {
+      switch (button.action ?? button.dataset?.action) {
         // Show consume button only when rolled but didn't consume (empty object {})
         // Hide if: cancelled (false), not checked (undefined), or already consumed (non-empty object)
         case "consumeOtherActivity": return !(consumed && foundry.utils.isEmpty(consumed));
@@ -1748,9 +1760,41 @@ export let MidiActivityMixin = Base => {
         case "refundOtherActivity": return !consumed || foundry.utils.isEmpty(consumed);
         // dnd5e hides placeTemplate when !game.canvas.scene, which is true during page reload
         // before canvas is ready — only check permission here
-        case "placeTemplate": return !game.user?.can("TEMPLATE_CREATE");
+        // @ts-expect-error REGION_CREATE is a v14 permission absent from the bundled v13 types.
+        case "placeTemplate": return !game.user?.can(usesSystemChatData() ? "REGION_CREATE" : "TEMPLATE_CREATE");
       }
       return super.shouldHideChatButton?.(button, message) ?? false;
+    }
+
+    onRenderChatCard(message, element) {
+      super.onRenderChatCard?.(message, element);
+      if (!usesSystemChatData()) return;
+      if (message.system.concealed && !game.user?.isGM) element.querySelector(".description .details")?.remove();
+      const description = element.querySelector(".midi-chat-card .description");
+      const summary = description?.querySelector(".summary");
+      if (summary && description.querySelector(".details")) {
+        description.classList.toggle("collapsed", !!safeGetGameSetting("dnd5e", "autoCollapseItemCards"));
+        summary.setAttribute("role", "button");
+        summary.tabIndex = 0;
+        summary.setAttribute("aria-expanded", String(!description.classList.contains("collapsed")));
+        const toggle = event => {
+          if (event.type === "keydown" && !["Enter", " "].includes(event.key)) return;
+          event.preventDefault(); event.stopPropagation();
+          description.classList.toggle("collapsed");
+          summary.setAttribute("aria-expanded", String(!description.classList.contains("collapsed")));
+        };
+        summary.addEventListener("click", toggle);
+        summary.addEventListener("keydown", toggle);
+      }
+      const isCreator = game.user?.isGM || this.actor?.isOwner || message.isAuthor;
+      for (const button of element.querySelectorAll(".midi-chat-card button[data-action]")) {
+        const descriptor = message.system.buttons?.find(entry => entry.action === button.dataset.action)
+          ?? { action: button.dataset.action, visibility: button.dataset.visibility ?? "creator" };
+        button.hidden = descriptor.visibility !== "all" && (
+          !isCreator || (descriptor.visibility === "gm" && !game.user?.isGM)
+          || this.shouldHideChatButton(descriptor, message)
+        );
+      }
     }
 
     async _placeEmanationTemplate(workflow: Workflow) {
@@ -1766,6 +1810,19 @@ export let MidiActivityMixin = Base => {
         let target = this.target ?? { value: 0, template: { size: 0 } };
         const fudge = 0.1;
         const { width, height } = tokenToUse.document;
+
+        if (usesSystemChatData()) {
+          const regions = await createActivityRegions(this, {
+            x: tokenToUse.center.x, y: tokenToUse.center.y,
+            size: Math.ceil(Number(target.template.size) + Math.max(width / 2, height / 2) * gs),
+            flags: { [MODULE_ID]: { actorUuid: actor?.uuid, tokenId: tokenToUse.id, workflowId: workflow?.id, itemUuid: this.item.uuid } }
+          });
+          if (workflow) for (const region of regions) {
+            workflow.templateUuid = region.uuid;
+            await workflow.setupTemplateCleanup(region);
+          }
+          return regions;
+        }
 
         templateOptions.distance = Math.ceil(Number(target.template.size) + Math.max((width ?? 1) / 2, (height ?? 1) / 2, 0) * (canvas.dimensions?.distance ?? 0));
         templateOptions.x = tokenToUse.center?.x ?? 0;
@@ -1805,7 +1862,17 @@ export let MidiActivityMixin = Base => {
       }
     }
 
-    async _usageChatContext(message) {
+    async _createUsageMessage(message) {
+      if (usesSystemChatData()) {
+        message.data ??= {};
+        message.data.content = await foundry.applications.handlebars.renderTemplate(
+          "modules/midi-qol/templates/activity-card.hbs", await this._midiUsageChatContext(message)
+        );
+      }
+      return super._createUsageMessage(message);
+    }
+
+    async _midiUsageChatContext(message) {
       // TODO major revisit needed for this
       const workflow = message.workflow as Workflow;
       let systemCard = message.systemCard ?? false;
@@ -1823,9 +1890,27 @@ export let MidiActivityMixin = Base => {
       if (tokenToUse && emanationNoTemplate) {
         setRangedTargets(tokenToUse, this.target);
         message.workflow?.setTargets(validTargetTokens(new Set(game.user?.targets)));
-        foundry.utils.setProperty(message.data, "flags.dnd5e.targets", globalThis.dnd5e.utils.getTargetDescriptors());
+        const targets = usesSystemChatData()
+          ? globalThis.dnd5e.dataModels.chatMessage.fields.TargetsField.getDescriptors()
+          : globalThis.dnd5e.utils.getTargetDescriptors();
+        foundry.utils.setProperty(message.data, usesSystemChatData() ? "system.targets" : "flags.dnd5e.targets", targets);
       }
-      const context = await super._usageChatContext(message);
+      let context;
+      if (usesSystemChatData()) {
+        // @ts-expect-error no dnd5e-types
+        const data = await this.item.system.getCardData({ activity: this });
+        const properties = globalThis.dnd5e.dataModels.shared.PropertyField.getLabels(
+          data.properties.filter(property => !property.identity), { ...data, properties: data.item.properties }
+        );
+        context = {
+          actor: this.item.actor, item: this.item, activity: this, token: this.item.actor?.token,
+          concealed: data.concealed, description: { chat: data.description, concealed: data.concealed },
+          subtitle: this.description.chatFlavor || data.subtitle.filter(Boolean).join(" • "),
+          properties, supplements: [], buttons: renderChatButtons(this._usageChatButtons(message))
+        };
+        if (this.activation.condition) context.supplements.push(`<strong>${i18n("DND5E.Trigger")}</strong> ${this.activation.condition}`);
+        if (data.materials) context.supplements.push(`<strong>${i18n("DND5E.Materials")}</strong> ${data.materials}`);
+      } else context = await super._usageChatContext(message);
       if (debugEnabled > 0) warn("show item card ", this, this.actor, this.actor?.token, systemCard, workflow);
       let needAttackButton = !getRemoveAttackButtons(this) || configSettings.mergeCardMulti
         || configSettings.confirmAttackDamage !== "none" ||
@@ -1841,7 +1926,8 @@ export let MidiActivityMixin = Base => {
       const hideItemDetails = (["none", "cardOnly"].includes(configSettings.showItemDetails) || (configSettings.showItemDetails === "pc" && !isPlayerOwned))
         || !configSettings.itemTypeList?.includes(this.item.type);
       // Are there any potential effects to apply
-      let hasEffects = workflow?.workflowType === "BaseWorkflow" && this.effects.some(ae => !ae.effect?.transfer && !ae.effect?.flags?.dae?.dontApply);;
+      const effects = await Promise.all(this.effects.map(resolveActivityEffect));
+      let hasEffects = workflow?.workflowType === "BaseWorkflow" && effects.some(effect => effect && !effect.transfer && !effect.flags?.dae?.dontApply);
       // if target type is not blank or there are targets only set hasEffects if we are not going to remove the button later
       if (this.target?.affects.type !== "" || workflow?.targets.size !== 0)
         hasEffects &&= !["applyNoButton", "applyRemove"].includes(configSettings.autoItemEffects);
@@ -1883,9 +1969,11 @@ export let MidiActivityMixin = Base => {
       rollSaveOptions.add(configSettings.playerRollSaves);
       const showSaveButtons = rollSaveOptions.has("none") || rollSaveOptions.has("chat") || configSettings.autoCheckSaves === "none";
       if (this.otherActivity?.save && !this.save && showSaveButtons) {
-        context.buttons = context.buttons.concat(this.otherActivity!._usageChatButtons(message));
+        const buttons = this.otherActivity!._usageChatButtons(message);
+        context.buttons = (context.buttons ?? []).concat(usesSystemChatData() ? renderChatButtons(buttons) : buttons);
       } else if (this.otherActivity?.check && !this.check && showSaveButtons) {
-        context.buttons = context.buttons.concat(this.otherActivity!._usageChatButtons(message));
+        const buttons = this.otherActivity!._usageChatButtons(message);
+        context.buttons = (context.buttons ?? []).concat(usesSystemChatData() ? renderChatButtons(buttons) : buttons);
       }
       context.buttons = context.buttons?.filter(b => !["rollAttack", "rollDamage", "rollHealing"].includes(b.dataset?.action));
       if (!showSaveButtons) context.buttons = context.buttons?.filter(b => !["rollSave", "rollCheck"].includes(b.dataset?.action));
@@ -1985,6 +2073,11 @@ export let MidiActivityMixin = Base => {
     get hasSave() {
       return (!!this.save || !!this.check);
     }
+  }
+  if (!usesSystemChatData()) {
+    Object.defineProperty(MidiActivityMixin.prototype, "_usageChatContext", {
+      value: function(message) { return this._midiUsageChatContext(message); }
+    });
   }
   return MidiActivityMixin;
 }
@@ -2087,7 +2180,7 @@ export let MidiActivityMixinSheet = Base => {
       // context = await super._prepareEffectContext(context);
       context.ConfirmTargetOptions = Object.entries(confirmTargetOptions).map(([value, label]) => ({ value, label }));
       if (this.activity.forcedTargetConfirmation) context.ConfirmTargetOptions = context.ConfirmTargetOptions.filter(o => o.value === this.activity.forcedTargetConfirmation);
-      const ROLL_MODES = CONST.DICE_ROLL_MODES;
+      const ROLL_MODES = getRollModes();
       context.RollModeOptions = [
         { value: "default", label: i18n("Default") },
         { value: ROLL_MODES.PUBLIC, label: i18n("CHAT.RollPublic") },

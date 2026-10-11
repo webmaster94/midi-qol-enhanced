@@ -1,3 +1,4 @@
+import { getRollModes } from "../compatibility.js";
 import { Activity, ActivityUseConfiguration, RollMessageConfig, TokenOrDocument } from "../../globals.js";
 import { MODULE_ID, debugEnabled, warn, error } from "../../midi-qol.js";
 import { Workflow } from "../Workflow.js";
@@ -393,9 +394,9 @@ export async function showItemInfo(this: Item.Implementation): Promise<ChatMessa
 
   // Toggle default roll mode
   let rollMode = safeGetGameSetting("core", "rollMode") ?? "public";
-  if (["gmroll", "blindroll"].includes(rollMode)) chatData["whisper"] = ChatMessage.getWhisperRecipients("GM").filter(u => u.active);
-  if (rollMode === "blindroll") chatData["blind"] = true;
-  if (rollMode === "selfroll") chatData["whisper"] = [game.user?.id];
+  if ([getRollModes().PRIVATE, getRollModes().BLIND].includes(rollMode)) chatData["whisper"] = ChatMessage.getWhisperRecipients("GM").filter(u => u.active);
+  if (rollMode === getRollModes().BLIND) chatData["blind"] = true;
+  if (rollMode === getRollModes().SELF) chatData["whisper"] = [game.user?.id];
 
   // Create the chat message
   return ChatMessage.create(chatData);
@@ -525,6 +526,17 @@ export function computeTargetsFromTemplate(
 ): Token.Implementation[] {
   if (!autoTarget) autoTarget = configSettings.autoTarget;
   if (autoTarget === "none") return [];
+
+  // D&D 6 uses Regions, including multiple shapes and scene levels. Let the
+  // native document determine containment instead of rebuilding a legacy shape.
+  const document: any = typeof template === "string" ? fromUuidSync(template) : (template as any).document ?? template;
+  if (document?.documentName === "Region") {
+    const selfToken = getToken(selfTokenRef);
+    return (canvas.tokens?.placeables ?? []).filter(token =>
+      isAoETargetable(token, { selfToken, ignoreSelf, AoETargetType, autoTarget })
+      && (token.document as any).testInsideRegion(document)
+    );
+  }
 
   // Resolve to a MeasuredTemplate placeable
   let mTemplate: foundry.canvas.placeables.MeasuredTemplate.Implementation | undefined;

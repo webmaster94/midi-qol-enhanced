@@ -1,3 +1,4 @@
+import { usesSystemChatData } from "../compatibility.js";
 import { AnyObject } from "fvtt-types/utils";
 import { Activity, ActivityUseConfiguration, RollDialogConfig, RollMessageConfig } from "../../globals.js";
 import { debugEnabled, GameSystemConfig, i18n, warn } from "../../midi-qol.js";
@@ -36,7 +37,7 @@ let defineMidiCastActivityClass =  <T extends Activity>(ActivityClass: T) => {
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiCastSheet,
         usage: {
-          chatCard: "modules/midi-qol/templates/activity-card.hbs",
+          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
           dialog: ActivityClass.metadata.usage.dialog,
         },
       }, { inplace: false, insertKeys: true, insertValues: true });

@@ -1,3 +1,4 @@
+import { effectChange, getRollModes, normalizeRollMode } from "./compatibility.js";
 import { debug, i18n, error, warn, busyWait, allAttackTypes, debugEnabled, overTimeEffectsToDelete, getStaticID, savedOverTimeEffectsToDelete, GameSystemConfig, systemConcentrationId, MQItemMacroLabel, MODULE_ID, midiReactionEffect, midiBonusActionEffect, MQActivityMacroLabel, ceInterface, createEffects, updateEffects } from "../midi-qol.js";
 import { configSettings, autoRemoveTargets, checkRule, criticalDamage, criticalDamageGM, checkMechanic, safeGetGameSetting, debounceInterval, autoRollDamageOptions, showReactionAttackRollOptions, shouldDisplaySaveDC } from "./settings.js";
 import { log } from "../midi-qol.js";
@@ -969,7 +970,7 @@ export function requestPCActiveDefence(player: User, actor: Actor, saveItemName:
   const useUuid = true;
   const actorId = useUuid ? actor.uuid : actor.id;
 
-  let rollMode = checkRule("activeDefenceShow") ?? CONST.DICE_ROLL_MODES.SELF;
+  let rollMode = checkRule("activeDefenceShow") ?? getRollModes().SELF;
   // TODO: Right check?
   let flavor = `${saveItemName} ${configSettings.optionalRules.activeDefence ? "DC " + options.rollOptions.target : ""} ${i18n("midi-qol.ActiveDefenceString")}`;
   const midiType = "defenceRoll";
@@ -1219,7 +1220,7 @@ export async function doActivityOverTimeEffect(actor: Actor.Implementation, effe
   if (effect.disabled || effect.isSuppressed) return;
   const auraFlags = effect.flags?.ActiveAuras ?? {};
   if (auraFlags.isAura && auraFlags.ignoreSelf) return;
-  const ROLL_MODES = CONST.DICE_ROLL_MODES;
+  const ROLL_MODES = getRollModes();
   const owner = playerForActor(actor);
   const changes = effect.changes;
   let requiresUserExecution = false;
@@ -1447,12 +1448,7 @@ export async function applyTriggeredActivityAsOverTime(triggeringWorkflow: Workf
       name: activity.name,
       duration,
       changes: [
-        {
-          key: `flags.${MODULE_ID}.ActivityOverTime`,
-          mode: CONST.ACTIVE_EFFECT_MODES.OVERRIDE,
-          value: activityRef,
-          priority: 20,
-        },
+        effectChange("override", `flags.${MODULE_ID}.ActivityOverTime`, activityRef, 20),
       ],
       flags: {
         dae: {
@@ -5263,7 +5259,7 @@ export async function bonusDialog(
       if (game.user?.isGM) {
         dialog.data.content = newRollHTML;
       } else {
-        if (["publicroll", "gmroll", "selfroll"].includes(rollMode)) dialog.data.content = newRollHTML;
+        if ([getRollModes().PUBLIC, getRollModes().PRIVATE, getRollModes().SELF].includes(rollMode)) dialog.data.content = newRollHTML;
         else dialog.data.content = "Hidden Roll";
       }
       dialog.render(true);
@@ -5364,7 +5360,7 @@ export async function bonusDialog(
     if (game.user?.isGM) {
       content = rollHTML;
     } else {
-      if (["publicroll", "gmroll", "selfroll"].includes(rollMode)) content = rollHTML;
+      if ([getRollModes().PUBLIC, getRollModes().PRIVATE, getRollModes().SELF].includes(rollMode)) content = rollHTML;
       else content = "Hidden Roll";
     }
     const dialog = new RollModifyDialog(
@@ -6595,9 +6591,14 @@ export function createConditionData(data: {
       rollData.workflow = data.workflow;
       rollData.activity = data.workflow.activity;
       rollData.riderStatuses = {};
-      data.workflow.activity.applicableEffects?.forEach((effect) => {
-        Array.from(effect?.statuses).forEach((status) => (rollData.riderStatuses[status] = true));
-        effect.flags?.dnd5e?.riders?.statuses?.forEach((rider) => (rollData.riderStatuses[rider] = true));
+      data.workflow.activity.applicableEffects?.forEach((profile: any) => {
+        // Conditions are synchronous. Compendium documents already loaded by the effect workflow
+        // can be resolved synchronously here; local profiles resolve against the source item.
+        const effect = profile.relativeUUID
+          ? profile.uuid ? fromUuidSync(profile.uuid) : data.workflow!.activity.item.effects.get(profile._id)
+          : profile;
+        Array.from(effect?.statuses ?? []).forEach((status) => (rollData.riderStatuses[status as string] = true));
+        effect?.flags?.dnd5e?.riders?.statuses?.forEach((rider) => (rollData.riderStatuses[rider] = true));
       });
       rollData.otherDamageActivity = data.workflow?.otherActivity;
       rollData.hasSave = data.workflow.hasSave;
@@ -6919,9 +6920,9 @@ export async function setReactionUsed(actor: Actor.Implementation, active: boole
     effect.updateSource({
       origin: actor.uuid,
       changes: [
-        { key: 'flags.midi-qol.actions.reaction', mode: CONST.ACTIVE_EFFECT_MODES.OVERRIDE, value: String(allReactionsUsed) },
-        { key: 'flags.midi-qol.actions.reactionsUsed', mode: CONST.ACTIVE_EFFECT_MODES.OVERRIDE, value: String(newCount) },
-        { key: 'flags.midi-qol.actions.reactionCombatRound', mode: CONST.ACTIVE_EFFECT_MODES.OVERRIDE, value: String(game.combat?.round ?? false) }
+        effectChange("override", 'flags.midi-qol.actions.reaction', String(allReactionsUsed)),
+        effectChange("override", 'flags.midi-qol.actions.reactionsUsed', String(newCount)),
+        effectChange("override", 'flags.midi-qol.actions.reactionCombatRound', String(game.combat?.round ?? false))
       ]
     });
     if (actions?.reactionsReset === "eachTurn") {
@@ -6953,9 +6954,9 @@ export async function setBonusActionUsed(actor: Actor.Implementation) {
   effect.updateSource({
     origin: actor.uuid,
     changes: [
-      { key: 'flags.midi-qol.actions.bonus', mode: CONST.ACTIVE_EFFECT_MODES.OVERRIDE, value: String(allBonusActionsUsed) },
-      { key: 'flags.midi-qol.actions.bonusActionsUsed', mode: CONST.ACTIVE_EFFECT_MODES.OVERRIDE, value: String(newCount) },
-      { key: 'flags.midi-qol.actions.bonusActionCombatRound', mode: CONST.ACTIVE_EFFECT_MODES.OVERRIDE, value: String(game.combat?.round ?? false) }
+      effectChange("override", 'flags.midi-qol.actions.bonus', String(allBonusActionsUsed)),
+      effectChange("override", 'flags.midi-qol.actions.bonusActionsUsed', String(newCount)),
+      effectChange("override", 'flags.midi-qol.actions.bonusActionCombatRound', String(game.combat?.round ?? false))
     ]
   });
   if (actions?.bonusActionsReset === "eachTurn") {
@@ -8343,7 +8344,7 @@ export async function displayDSNForRoll(rolls?: Roll | Roll[], rollType?: string
       const dice3d = game.dice3d;
       let ghostRoll = false;
       let whisperUsers: User.Implementation[] | null = null;
-      const rollMode = defaultRollMode || game.settings.get("core", "rollMode");
+      const rollMode = normalizeRollMode(defaultRollMode || game.settings.get("core", "rollMode"));
       let hideRoll = false;
       if (game.user?.isGM) {
         let dsnSetting: string = "show";
@@ -8371,12 +8372,12 @@ export async function displayDSNForRoll(rolls?: Roll | Roll[], rollType?: string
         }
       }
       if (!ghostRoll) {
-        ghostRoll = rollMode === "blindroll";
+        ghostRoll = rollMode === getRollModes().BLIND;
       }
 
-      if (rollMode === "selfroll" || rollMode === "gmroll" || rollMode === "blindroll") {
+      if (rollMode === getRollModes().SELF || rollMode === getRollModes().PRIVATE || rollMode === getRollModes().BLIND) {
         whisperUsers = ChatMessage.getWhisperRecipients("GM") as unknown as User[];
-        if (rollMode !== "blindroll" && game.user) whisperUsers.concat(game.user as unknown as User);
+        if (rollMode !== getRollModes().BLIND && game.user) whisperUsers.concat(game.user as unknown as User);
       }
       if (!hideRoll) {
         let displayRoll = Roll.fromData(JSON.parse(JSON.stringify(roll))); // make a copy of the roll
@@ -8406,7 +8407,7 @@ export async function displayDSNForRoll(rolls?: Roll | Roll[], rollType?: string
             promises.push(dice3d?.showForRoll(displayRoll, game.user, true, game.users?.players.map(u => (u as User).id), game.user?.isGM));
           }
         } else
-          promises.push(dice3d?.showForRoll(displayRoll, game.user, true, whisperUsers, rollMode === "blindroll" && !game.user?.isGM));
+          promises.push(dice3d?.showForRoll(displayRoll, game.user, true, whisperUsers, rollMode === getRollModes().BLIND && !game.user?.isGM));
       }
     }
 
@@ -9178,9 +9179,9 @@ export async function processConcentrationRequestMessage(message: ChatMessage.Im
         await message.setFlag(MODULE_ID, "concentrationRolled", true);
         const user = playerForActor(actor);
         if (user?.active) {
-          socketlibSocket.executeAsUser("rollConcentration", user.id, { actorUuid: actor.uuid, target: dc, create: true, rollMode: "gmroll" });
+          socketlibSocket.executeAsUser("rollConcentration", user.id, { actorUuid: actor.uuid, target: dc, create: true, rollMode: getRollModes().PRIVATE });
           // @ts-expect-error no dnd5e-types
-        } else actor.rollConcentration({ legacy: false, target: dc }, {}, { create: true, rollMode: "gmroll" });
+        } else actor.rollConcentration({ legacy: false, target: dc }, {}, { create: true, rollMode: getRollModes().PRIVATE });
       }
     }
   }
@@ -9448,14 +9449,14 @@ export function convertDuration(
 
 export function getSaveRollModeFor(abilityId: string) {
   if (configSettings.rollChecksBlind.includes("all") || configSettings.rollChecksBlind.includes(abilityId))
-    return "blindroll";
-  return configSettings.autoCheckSaves !== "allShow" ? "gmroll" : "public";
+    return getRollModes().BLIND;
+  return configSettings.autoCheckSaves !== "allShow" ? getRollModes().PRIVATE : "public";
 }
 
 export function getCheckRollModeFor(abilityId: string) {
   if (configSettings.rollSavesBlind.includes("all") || configSettings.rollSavesBlind.includes(abilityId))
-    return "blindroll";
-  return configSettings.autoCheckSaves !== "allShow" ? "gmroll" : "public";
+    return getRollModes().BLIND;
+  return configSettings.autoCheckSaves !== "allShow" ? getRollModes().PRIVATE : "public";
 }
 
 export function areMidiKeysPressed(event: AugmentedEvent | undefined, action: string) {

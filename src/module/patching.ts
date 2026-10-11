@@ -1,3 +1,5 @@
+import { isCustomEffectChange, makeEffectChangeCustom } from "./compatibility.js";
+import { getRollModes, setMessageOrigin, getMessageOrigin } from "./compatibility.js";
 import { log, i18n, error, i18nFormat, warn, debugEnabled, GameSystemConfig, MODULE_ID, gameStats } from "../midi-qol.js";
 import { configSettings, checkRule, checkMechanic, safeGetGameSetting, playerControlsInvisibleTokens } from "./settings.js";
 import { bonusDialog, ConvenientEffectsHasEffect, createConditionData, displayDSNForRoll, expireRollEffect, getCriticalDamage, getDeadStatus, getOptionalCountRemainingShortFlag, getOrCreateTokenForActor, getSpeaker, getUnconsciousStatus, getVitalityDeadStatus, getWoundedStatus, hasAutoPlaceTemplate, hasUsedAction, hasUsedBonusAction, hasUsedReaction, midiRenderRoll, notificationNotify, removeActionUsed, removeBonusActionUsed, removeReactionUsed, tokenForActor, expireEffects, DSNMarkDiceDisplayed, evalAllConditions, evalAllConditionsAsync, CEAddEffectWith, isConvenientEffect, CERemoveEffect, hasCondition, areMidiKeysPressed, MidiOptions, getVitalityItem, checkMagicResistanceAndVulnerability, isAutoFastForward, FastForwardRollType, buildRollChoices, selectBestRollChoice, getTokenPerimeterPolygon, closestPointOnPerimeter, measurePointDistance, setUserInitiatedTarget } from "./utils.js";
@@ -327,18 +329,18 @@ function applyBlindRollMode(
   let rollMode: keyof CONFIG.Dice.RollModes = messageRollMode ?? safeGetGameSetting("core", "rollMode");
 
   // If already blind, keep it
-  if (rollMode === CONST.DICE_ROLL_MODES.BLIND) return rollMode;
+  if (rollMode === getRollModes().BLIND) return rollMode;
 
   // Check if this roll should be forced to blind
   const shouldBeBlind = blindRollSettings.includes("all") || blindRollSettings.includes(choiceId ?? "");
-  if (shouldBeBlind && [CONST.DICE_ROLL_MODES.PUBLIC, "roll", CONST.DICE_ROLL_MODES.PRIVATE].includes(rollMode)) {
+  if (shouldBeBlind && [getRollModes().PUBLIC, "roll", getRollModes().PRIVATE].includes(rollMode)) {
     if ((configSettings.blindRollDisplay ?? "hidden") === "obscured") {
       // Keep the card public, but flag it so the result renders as "??" to non-GM players
       // (obscureRollRender) and the DSN animation is kept private (see the displayDSNForRoll calls).
       if (messageDetails) foundry.utils.setProperty(messageDetails, "data.flags.midi-qol.obscureRoll", true);
     } else {
-      rollMode = CONST.DICE_ROLL_MODES.BLIND;
-      game.settings.set("core", "rollMode", CONST.DICE_ROLL_MODES.BLIND);
+      rollMode = getRollModes().BLIND;
+      game.settings.set("core", "rollMode", getRollModes().BLIND);
     }
   }
 
@@ -578,7 +580,7 @@ async function doRollSkill(this: Actor.Implementation, wrapped, config: RollProc
     // Set originatingMessage so dnd5e's MessageRegistry and getOriginatingMessage() work correctly
     const originatingCardId = config.midiOptions?.workflow?.itemCardId
       ?? (config.midiOptions?.itemCardUuid ? fromUuidSync(config.midiOptions.itemCardUuid)?.id : undefined);
-    if (originatingCardId) foundry.utils.setProperty(message, "data.flags.dnd5e.originatingMessage", originatingCardId);
+    if (originatingCardId) setMessageOrigin(message, originatingCardId);
 
     if (this.token) foundry.utils.setProperty(dialog, "options.window.subtitle", this.token.name);
     result = await wrapped(config, dialog, message);
@@ -588,11 +590,11 @@ async function doRollSkill(this: Actor.Implementation, wrapped, config: RollProc
     rollMode = message.rollMode ?? rollMode;
     result.forEach(r => r.options.rollMode = rollMode);
     /*
-    if (rollMode !== CONST.DICE_ROLL_MODES.BLIND) rollMode = result.options.rollMode;
-    else result.options.rollMode = CONST.DICE_ROLL_MODES.BLIND;
+    if (rollMode !== getRollModes().BLIND) rollMode = result.options.rollMode;
+    else result.options.rollMode = getRollModes().BLIND;
     */
     // When obscuring, keep the 3D dice animation private so it can't reveal the hidden result to players
-    const skillDsnRollMode = foundry.utils.getProperty(message, "data.flags.midi-qol.obscureRoll") ? CONST.DICE_ROLL_MODES.BLIND : rollMode;
+    const skillDsnRollMode = foundry.utils.getProperty(message, "data.flags.midi-qol.obscureRoll") ? getRollModes().BLIND : rollMode;
     await displayDSNForRoll(result, "skill", skillDsnRollMode);
     DSNMarkDiceDisplayed(result);
     if (!config.simulate) {
@@ -620,7 +622,7 @@ async function doRollSkill(this: Actor.Implementation, wrapped, config: RollProc
     if ((config.midiOptions?.rollSkills?.length ?? 0) > 1) result.forEach(r => { if (r?.options) r.options.midiChosenId = _chosenSkill; });
 
     // Set originatingMessage on roll options so modules can access it without .parent
-    const rollOriginatingId = foundry.utils.getProperty(message, "data.flags.dnd5e.originatingMessage") as string | undefined
+    const rollOriginatingId = getMessageOrigin(message)
       ?? originatingCardId;
     if (rollOriginatingId) result.forEach(r => { if (r?.options) r.options.originatingMessage = rollOriginatingId; });
 
@@ -1187,7 +1189,7 @@ async function doRollAbility(this: Actor.Implementation, wrapped, rollType: stri
     // Set originatingMessage so dnd5e's MessageRegistry and getOriginatingMessage() work correctly
     const originatingCardId = config.midiOptions.workflow?.itemCardId
       ?? (config.midiOptions.itemCardUuid ? fromUuidSync(config.midiOptions.itemCardUuid)?.id : undefined);
-    if (originatingCardId) foundry.utils.setProperty(message, "data.flags.dnd5e.originatingMessage", originatingCardId);
+    if (originatingCardId) setMessageOrigin(message, originatingCardId);
 
     let abilityModifiers: RollModifierResult | undefined;
     const midiOptions = config.midiOptions;
@@ -1269,7 +1271,7 @@ async function doRollAbility(this: Actor.Implementation, wrapped, rollType: stri
     // @ts-expect-error
     result.forEach(r => r.options.rollMode = rollMode);
     // When obscuring, keep the 3D dice animation private so it can't reveal the hidden result to players
-    const abilityDsnRollMode = foundry.utils.getProperty(message, "data.flags.midi-qol.obscureRoll") ? CONST.DICE_ROLL_MODES.BLIND : rollMode;
+    const abilityDsnRollMode = foundry.utils.getProperty(message, "data.flags.midi-qol.obscureRoll") ? getRollModes().BLIND : rollMode;
     await displayDSNForRoll(result, rollType, abilityDsnRollMode);
     DSNMarkDiceDisplayed(result);
     foundry.utils.mergeObject(message.data, { "flags": config.flags ?? {} });
@@ -1298,7 +1300,7 @@ async function doRollAbility(this: Actor.Implementation, wrapped, rollType: stri
     if (hasMultipleChoices) result.forEach(r => { if (r?.options) r.options.midiChosenId = chosenAbility; });
 
     // Set originatingMessage on roll options so modules can access it without .parent
-    const rollOriginatingId = foundry.utils.getProperty(message, "data.flags.dnd5e.originatingMessage") as string | undefined
+    const rollOriginatingId = getMessageOrigin(message)
       ?? originatingCardId;
     //@ts-expect-error originatingMessage is a custom roll option
     if (rollOriginatingId) result.forEach(r => { if (r?.options) r.options.originatingMessage = rollOriginatingId; });
@@ -1428,10 +1430,10 @@ async function rollDeathSave(this: Actor.Implementation, wrapped, config: RollPr
       roll.options.advantage = advantage;
       roll.options.disadvantage = disadvantage;
       if (!autoFail && !autoSuccess && configData.midiOptions?.parts?.length) roll.parts = [...(roll.parts ?? []), ...configData.midiOptions.parts];
-      if (blindSaveRoll) roll.options.rollMode = CONST.DICE_ROLL_MODES.BLIND;
+      if (blindSaveRoll) roll.options.rollMode = getRollModes().BLIND;
     }
     setRollDialogOptions(configData, dialogData, "save");
-    if (blindSaveRoll) messageData.rollMode = CONST.DICE_ROLL_MODES.BLIND;
+    if (blindSaveRoll) messageData.rollMode = getRollModes().BLIND;
   });
 
   try {
@@ -2191,10 +2193,10 @@ export function actorPrepareData(this: Actor.Implementation, wrapped) {
     if (debugEnabled > 0) for (let effect of this.appliedEffects) {
       for (let change of effect.changes) {
         if (change.key === "flags.midi-qol.onUseMacroName") {
-          if (change.mode !== CONST.ACTIVE_EFFECT_MODES.CUSTOM) {
+          if (!isCustomEffectChange(change)) {
             error("onUseMacro effect mode is not custom", `Actor ${this.name} Effect: ${effect.name} ${this.uuid}`);
             TroubleShooter.recordError(new Error("onUseMacro effect mode is not custom"), `Actor ${this.name} Effect: ${effect.name} ${this.uuid} `);
-            change.mode = CONST.ACTIVE_EFFECT_MODES.CUSTOM;
+            makeEffectChangeCustom(change);
           }
         }
       }
@@ -2222,10 +2224,10 @@ export function itemPrepareData(this: Item.Implementation, wrapped) {
   if (debugEnabled > 0) for (let effect of this.effects) {
     for (let change of effect.changes) {
       if (change.key === "flags.midi-qol.onUseMacroName") {
-        if (change.mode !== CONST.ACTIVE_EFFECT_MODES.CUSTOM) {
+        if (!isCustomEffectChange(change)) {
           error("onUseMacro effect mode is not custom", `Actor: ${this.parent?.name} Item: ${this.name} Effect: ${effect.name} ${this.uuid} `);
           TroubleShooter.recordError(new Error("onUseMacro effect mode is not custom - mode treated as custom"), `Actor: ${this.parent?.name} Item: ${this.name} Effect: ${effect.name} ${this.uuid} `);
-          change.mode = CONST.ACTIVE_EFFECT_MODES.CUSTOM;
+          makeEffectChangeCustom(change);
         }
       }
     }
@@ -2406,7 +2408,7 @@ export async function challengeConcentration(this: Actor.Implementation, wrapped
   return;
 }
 
-export async function checkDeleteTemplate(templateDocument: MeasuredTemplateDocument, options: any, user: string) {
+export async function checkDeleteTemplate(templateDocument: MeasuredTemplateDocument | RegionDocument, options: any, user: string) {
   if (user !== game.user?.id) return;
   if (options.undo) return;
 
@@ -2418,7 +2420,7 @@ export async function checkDeleteTemplate(templateDocument: MeasuredTemplateDocu
   // Check if this template was dependent on a concentration effect - if so, clean up the effect if no more dependents
   if (options.noConcentrationCheck || configSettings.removeConcentrationEffects === "none") return;
 
-  const dependentOn = templateDocument.getFlag("dnd5e", "dependentOn");
+  const dependentOn = foundry.utils.getProperty(templateDocument, "flags.dnd5e.dependentOn") as string | undefined;
   if (!dependentOn) return;
 
   const parentEffect = fromUuidSync(dependentOn);
@@ -2447,7 +2449,7 @@ export async function rollToolCheck(this: Actor.Implementation, wrapped, config:
     // Set originatingMessage so dnd5e's MessageRegistry and getOriginatingMessage() work correctly
     const originatingCardId = config.midiOptions?.workflow?.itemCardId
       ?? (config.midiOptions?.itemCardUuid ? fromUuidSync(config.midiOptions.itemCardUuid)?.id : undefined);
-    if (originatingCardId) foundry.utils.setProperty(message, "data.flags.dnd5e.originatingMessage", originatingCardId);
+    if (originatingCardId) setMessageOrigin(message, originatingCardId);
 
     if (dialog.configure === undefined && isAutoFastForward("tool")) dialog.configure = false;
 
@@ -2544,7 +2546,7 @@ export async function rollToolCheck(this: Actor.Implementation, wrapped, config:
     let rollMode = message.rollMode ?? safeGetGameSetting("core", "rollMode");
     if (result) {
       // When obscuring, keep the 3D dice animation private so it can't reveal the hidden result to players
-      const toolDsnRollMode = foundry.utils.getProperty(message, "data.flags.midi-qol.obscureRoll") ? CONST.DICE_ROLL_MODES.BLIND : rollMode;
+      const toolDsnRollMode = foundry.utils.getProperty(message, "data.flags.midi-qol.obscureRoll") ? getRollModes().BLIND : rollMode;
       await displayDSNForRoll(result, "toolCheck", toolDsnRollMode);
       DSNMarkDiceDisplayed(result);
       result![0] = await bonusCheck(this, result![0], "check", config.ability ?? "", message.data);
@@ -2558,7 +2560,7 @@ export async function rollToolCheck(this: Actor.Implementation, wrapped, config:
     if (hasMultipleTools) result.forEach(r => { if (r?.options) r.options.midiChosenId = _chosenTool; });
 
     // Set originatingMessage on roll options so modules can access it without .parent
-    const rollOriginatingId = foundry.utils.getProperty(message, "data.flags.dnd5e.originatingMessage") as string | undefined
+    const rollOriginatingId = getMessageOrigin(message)
       ?? originatingCardId;
     //@ts-expect-error originatingMessage is a custom roll option
     if (rollOriginatingId) result.forEach(r => { if (r?.options) r.options.originatingMessage = rollOriginatingId; });

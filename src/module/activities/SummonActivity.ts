@@ -1,3 +1,4 @@
+import { usesSystemChatData } from "../compatibility.js";
 import { Activity } from "../../globals.js";
 import { debugEnabled, GameSystemConfig, i18n, warn } from "../../midi-qol.js";
 import { Workflow } from "../Workflow.js";
@@ -41,7 +42,7 @@ let defineMidiSummonActivityClass = <T extends Activity>(ActivityClass: T) => {
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiSummonSheet,
         usage: {
-          chatCard: "modules/midi-qol/templates/activity-card.hbs",
+          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
           dialog: ActivityClass.metadata.usage.dialog,
           actions: {
             // placeSummons: MidiSummonActivity.#placeSummons 

@@ -1,3 +1,4 @@
+import { usesSystemChatData } from "../compatibility.js";
 import { AnyMutableObject } from "fvtt-types/utils";
 import { Activity, RollDialogConfig, RollMessageConfig, RollProcessConfig } from "../../globals.js";
 import { debugEnabled, GameSystemConfig, i18n, warn } from "../../midi-qol.js";
@@ -32,7 +33,7 @@ let defineMidiHealActivityClass = <T extends Activity>(ActivityClass: T) => {
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiHealSheet,
         usage: {
-          chatCard: "modules/midi-qol/templates/activity-card.hbs",
+          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
           actions: {
             rollHealing: MidiHealActivity.#rollHealing
           }

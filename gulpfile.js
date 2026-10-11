@@ -513,7 +513,7 @@ function createPackSrcSymlink(output = null) {
   return (cb) => {
     const target = (output || DIST) + "pack-src";
     if (!fs.existsSync(target)) {
-      fs.symlinkSync("../pack-src", target);
+      fs.symlinkSync(path.resolve("pack-src"), path.resolve(target), process.platform === "win32" ? "junction" : "dir");
     }
     cb();
   };

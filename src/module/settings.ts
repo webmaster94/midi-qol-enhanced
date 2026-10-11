@@ -1,3 +1,4 @@
+import { getRollModes } from "./compatibility.js";
 import { debug, setDebugLevel, i18n, debugEnabled, error, gameStats, updateFlankingStatusEffects } from "../midi-qol.js";
 import { ConfigPanel } from "./apps/ConfigPanel.js"
 import { DependentsExplorer } from "./apps/DependentsExplorer.js";
@@ -286,7 +287,7 @@ class ConfigSettings {
     actionSpecialDurationImmediate: false,
     activeDefence: false,
     activeDefenceModifier: 12,
-    activeDefenceShow: "selfroll",
+    activeDefenceShow: getRollModes().SELF,
     ActiveDefenceDC: true,
     autoRerollInitiative: false,
     challengeModeArmor: "none",
@@ -780,7 +781,7 @@ export let fetchParams = () => {
     actionSpecialDurationImmediate: false,
     activeDefence: false,
     activeDefenceModifier: 12, // default value for active defence modifier
-    activeDefenceShow: "selfroll",
+    activeDefenceShow: getRollModes().SELF,
     ActiveDefenceDC: true,
     challengeModeArmor: "none",
     challengeModeArmorScale: false,
@@ -831,7 +832,7 @@ export let fetchParams = () => {
   //@ts-expect-error legacy nonexistent value
   if (configSettings.optionalRules.activeDefenceShowGM === true) {
     // old setting replaced with new
-    configSettings.optionalRules.activeDefenceShow = "gmroll";
+    configSettings.optionalRules.activeDefenceShow = getRollModes().PRIVATE;
     //@ts-expect-error legacy nonexistent value
     delete configSettings.optionalRules.activeDefenceShowGM;
   }

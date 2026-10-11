@@ -1,3 +1,14 @@
+### 13.0.65.2
+* Support Foundry v14 and D&D 5e 6.0.6 while retaining the D&D 5.x integration.
+* Restore damage totals, damage-type icons, and labelled damage breakdowns on Midi item cards under D&D 6.
+* Center totals in condensed cards and use the selected theme's colors for buttons, hit/save rows, and tooltips.
+* Create custom card content through `_createUsageMessage` and use structured button descriptors instead of the deprecated D&D 6 card APIs.
+* Await card enrichment, retain resource-button visibility, and adapt damage trays to the new target callback and damage groups.
+* Resolve activity effect profiles asynchronously, including effects from compendiums, and store originating messages in the new system field.
+* Use Foundry v14 roll modes and string Active Effect change types, with v13 fallbacks.
+* Use native Region placement and containment for D&D 6 areas, including automatic areas, traps, and multiple shapes in one region.
+* Fix the Windows build's sample-item link by creating a directory junction.
+
 ### 13.0.65
 * Fixed the damage card no longer showing which modifications applied (DR, resistance, immunity); the markers are stored with the card rather than recomputed from the raw damage detail.
 * Fixed the damage card total freezing after a multiplier was used: the preview replaced the total span's contents, so later refreshes had nothing to write to.

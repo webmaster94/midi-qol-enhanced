@@ -1,3 +1,4 @@
+import { effectChange } from "./module/compatibility.js";
 import { registerSettings, fetchParams, configSettings, checkRule, enableWorkflow, fetchSoundSettings, midiSoundSettingsBackup, readySettingsSetup, collectSettingData, exportSettingsToJSON, importSettingsFromJSON, safeGetGameSetting, shouldDisplaySaveDC, triggeredActivityTargetOptions, triggeredActivityRollAsOptions, resetConfigSettingsToDefaults } from './module/settings.js';
 import { preloadTemplates } from './module/preloadTemplates.js';
 import { checkModules, setupModules } from './module/setupModules.js';
@@ -455,9 +456,9 @@ Hooks.once('init', async function () {
 });
 //@ts-expect-error
 Hooks.on("dae.modifySpecials", (specKey, specials, _characterSpec) => {
-  specials[`flags.${MODULE_ID}.onUseMacroName`] = [new StringField(), CONST.ACTIVE_EFFECT_MODES.CUSTOM];
+  specials[`flags.${MODULE_ID}.onUseMacroName`] = [new StringField(), 0];
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.onUseMacroName`);
-  specials[`flags.${MODULE_ID}.optional.NAME.macroToCall`] = [new StringField(), CONST.ACTIVE_EFFECT_MODES.CUSTOM];
+  specials[`flags.${MODULE_ID}.optional.NAME.macroToCall`] = [new StringField(), 0];
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.optional.NAME.macroToCall`);
   for (let type of ["dm", "da", "di", "dv", "dr"]) {
     // specials[`system.traits.${type}.midi.all`] = [new StringField(), -1];
@@ -1845,8 +1846,8 @@ export function setupMidiStatusEffects() {
         _id: getStaticID("bonusaction"),
         name: i18n("midi-qol.bonusActionUsed"),
         changes: [
-          { key: "flags.midi-qol.actions.bonus", mode: CONST.ACTIVE_EFFECT_MODES.CUSTOM, value: "true" },
-          { key: "flags.midi-qol.actions.bonusActionsUsed", mode: CONST.ACTIVE_EFFECT_MODES.ADD, value: "1", priority: 20 }
+          effectChange("custom", "flags.midi-qol.actions.bonus", "true"),
+          effectChange("add", "flags.midi-qol.actions.bonusActionsUsed", "1", 20)
         ],
         img: "modules/midi-qol/icons/bonus-action.svg",
 
@@ -1866,8 +1867,8 @@ export function setupMidiStatusEffects() {
         _id: getStaticID("reaction"),
         name: i18n("midi-qol.reactionUsed"),
         changes: [
-          { key: "flags.midi-qol.actions.reaction", mode: CONST.ACTIVE_EFFECT_MODES.CUSTOM, value: "true" },
-          { key: "flags.midi-qol.actions.reactionsUsed", mode: CONST.ACTIVE_EFFECT_MODES.ADD, value: "1", priority: 20 }
+          effectChange("custom", "flags.midi-qol.actions.reaction", "true"),
+          effectChange("add", "flags.midi-qol.actions.reactionsUsed", "1", 20)
         ],
         img: "modules/midi-qol/icons/reaction.svg",
         // effectData: { transfer: false },
@@ -1918,8 +1919,8 @@ function getFlankingStatusChanges(): object[] {
   const bonus = configSettings.optionalRules?.flankingBonus ?? "advantage";
   if (bonus === "advantage") {
     return [
-      { key: "flags.midi-qol.advantage.attack.mwak", mode: CONST.ACTIVE_EFFECT_MODES.CUSTOM, value: "true" },
-      { key: "flags.midi-qol.advantage.attack.msak", mode: CONST.ACTIVE_EFFECT_MODES.CUSTOM, value: "true" }
+      effectChange("custom", "flags.midi-qol.advantage.attack.mwak", "true"),
+      effectChange("custom", "flags.midi-qol.advantage.attack.msak", "true")
     ];
   }
   // Fixed bonus: flanking status is visual-only; bonus computed per-target in recordFlankingBonuses
@@ -1930,8 +1931,8 @@ function getFlankedStatusChanges(): object[] {
   const bonus = configSettings.optionalRules?.flankingBonus ?? "advantage";
   if (bonus === "advantage") {
     return [
-      { key: "flags.midi-qol.grants.advantage.attack.mwak", mode: CONST.ACTIVE_EFFECT_MODES.CUSTOM, value: "true" },
-      { key: "flags.midi-qol.grants.advantage.attack.msak", mode: CONST.ACTIVE_EFFECT_MODES.CUSTOM, value: "true" }
+      effectChange("custom", "flags.midi-qol.grants.advantage.attack.mwak", "true"),
+      effectChange("custom", "flags.midi-qol.grants.advantage.attack.msak", "true")
     ];
   }
   // Fixed bonus: flanked status is visual-only; bonus computed per-target in recordFlankingBonuses

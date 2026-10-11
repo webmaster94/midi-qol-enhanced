@@ -1,3 +1,4 @@
+import { usesSystemChatData } from "../compatibility.js";
 import { Activity } from "../../globals.js";
 import { debugEnabled, GameSystemConfig, i18nFormat, warn } from "../../midi-qol.js";
 import { replaceDefaultActivities, configSettings } from "../settings.js";
@@ -41,7 +42,7 @@ let defineMidiTransformActivityClass = <T extends Activity>(ActivityClass: T) =>
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiTransformSheet,
         usage: {
-          chatCard: "modules/midi-qol/templates/activity-card.hbs",
+          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
           dialog: ActivityClass.metadata.usage.dialog
         },
       }, { inplace: false, insertKeys: true, insertValues: true });

@@ -1,3 +1,4 @@
+import { usesSystemChatData } from "../compatibility.js";
 import { templates } from "handlebars";
 import { debugEnabled, GameSystemConfig, i18n, warn } from "../../midi-qol.js";
 import { Workflow } from "../Workflow.js";
@@ -69,7 +70,7 @@ let defineMidiOverTimeActivityClass = <T extends Activity>(ActivityClass: T) => 
         dnd5eTitle: "midi-qol.OVERTIME.Title.one",
         sheetClass: MidiOverTimeSheet,
         usage: {
-          chatCard: "modules/midi-qol/templates/activity-card.hbs",
+          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
         },
       }, { inplace: false, insertKeys: true, insertValues: true });
 

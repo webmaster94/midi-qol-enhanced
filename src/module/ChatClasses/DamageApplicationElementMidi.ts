@@ -3,6 +3,7 @@ import { GameSystemConfig, MODULE_ID, MQDamageRollTypes, debugEnabled, i18nForma
 import { TroubleShooter } from "../apps/TroubleShooter.js";
 import { CombinedTargetDescriptor, DamageApplicationOptions } from "../../globals.js";
 import { WorkflowDataFlags } from "../Workflow.js";
+import { usesSystemChatData } from "../compatibility.js";
 
 // SVG Icons for midi-qol custom change sources (using dnd5e SVGs for consistent styling)
 const MIDI_CHANGE_ICONS: Record<string, string> = {
@@ -49,25 +50,29 @@ export class DamageApplicationElementMidi extends globalThis.dnd5e.applications.
   /**
    * Override to handle "all" type and midi custom change types for labels
    */
-  getChangeSourceOptions(type: string, change: string, options: DamageApplicationOptions): { label: string, pressed: string } {
+  getChangeSourceOptions(type: string, change: string, options: DamageApplicationOptions): { label: string, pressed: string, title: string, mode: string } {
     let mode = "active";
     if ((options.ignore?.[change] === true) || options.ignore?.[change]?.has?.(type)) mode = "ignore";
     else if ((change === "immunity") && (options.downgrade as Set<string>)?.has(type)) mode = "downgrade";
 
     const changeKey = change.charAt(0).toUpperCase() + change.slice(1);
-    const typeLabel = GameSystemConfig.damageTypes[type]?.label ?? GameSystemConfig.healingTypes?.[type]?.label ?? "";
-    let label = i18nFormat(`DND5E.DamageApplication.Change.${changeKey}`, { type: typeLabel });
+    const typeLabel = type === "ALL" ? game.i18n!.localize("DND5E.DAMAGE.All")
+      : GameSystemConfig.damageTypes[type]?.label ?? GameSystemConfig.healingTypes?.[type]?.label ?? "";
+    const title = i18nFormat(`DND5E.DamageApplication.Change.${changeKey}`, { type: typeLabel });
+    let label = title;
 
     if (mode === "ignore") label = i18nFormat("DND5E.DamageApplication.Ignoring", { source: label });
     if (mode === "downgrade") label = i18nFormat("DND5E.DamageApplication.Downgrading", { source: label });
 
-    return { label, pressed: mode === "active" ? "false" : mode === "ignore" ? "true" : "mixed" };
+    return { label, title, mode, pressed: mode === "active" ? "false" : mode === "ignore" ? "true" : "mixed" };
   }
 
   /**
    * Override to append midi custom change source buttons after parent builds the entry
    */
-  buildTargetListEntry({ uuid, name }): HTMLLIElement | void {
+  buildTargetListEntry(targetListOrDescriptor: any, descriptor?: any): HTMLLIElement | void {
+    if (usesSystemChatData()) return super.buildTargetListEntry(targetListOrDescriptor, descriptor);
+    const { uuid, name } = targetListOrDescriptor;
     // Let parent build the base entry
     const li = super.buildTargetListEntry({ uuid, name }) as HTMLLIElement | undefined;
     if (!li) return;
@@ -99,6 +104,16 @@ export class DamageApplicationElementMidi extends globalThis.dnd5e.applications.
     return li;
   }
 
+  connectedCallback() {
+    super.connectedCallback();
+    if (!usesSystemChatData() || !this.chatMessage) return;
+    const rolls = this.chatMessage.rolls.filter(roll => foundry.utils.getProperty(roll, "options.midi-qol.rollType") === this.damageType);
+    this.damages = globalThis.dnd5e.dice.aggregateDamageRolls(rolls, { respectProperties: true }).map(roll => ({
+      properties: new Set(roll.options.properties ?? []), type: roll.options.type, value: Math.max(0, roll.total)
+    }));
+    this.targetList?.buildTargetsList();
+  }
+
   getTargetOptions(uuid: string): DamageApplicationOptions {
     if (!this.#targetOptions.has(uuid)) this.#targetOptions.set(uuid, { multiplier: 1 } as DamageApplicationOptions);
     const options = this.#targetOptions.get(uuid);
@@ -107,7 +122,8 @@ export class DamageApplicationElementMidi extends globalThis.dnd5e.applications.
     try {
       let targetDetails;
         const targets = (foundry.utils.getProperty(this.chatMessage, WorkflowDataFlags.targetDescriptors) ?? []) as Array<CombinedTargetDescriptor>;
-        targetDetails = targets.find(target => target.uuid === uuid);
+        const targetActorUuid = (fromUuidSync(uuid) as any)?.actor?.uuid ?? uuid;
+        targetDetails = targets.find(target => target.uuid === uuid || target.uuid === targetActorUuid);
         if (!targetDetails) return options;
         options.midi = foundry.utils.duplicate(targetDetails);
         const saveMultiplier = targetDetails.saveMults?.[this.damageType];

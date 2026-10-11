@@ -278,7 +278,7 @@ export class MidiRollChoiceDialog extends D20RollConfigurationDialog {
             prof: abilityData[profKey]?.hasProficiency ? abilityData[profKey].term : null,
             [`${formAbility}${typeCapitalized}Bonus`]: abilityData.bonuses?.[rollType],
             //@ts-expect-error no dnd5e-types
-            [`${rollType}Bonus`]: actor.system.bonuses?.abilities?.[rollType],
+            [`${rollType}Bonus`]: actor.system.rolls?.ability?.[rollType]?.bonus ?? actor.system.bonuses?.abilities?.[rollType],
             //@ts-expect-error no dnd5e-types
             cover: (formAbility === "dex" && rollType === "save") ? actor.system.attributes?.ac?.cover : null
           }, rollData);

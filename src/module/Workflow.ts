@@ -1,3 +1,4 @@
+import { getRollModes, activityEffectReferences, resolveActivityEffect, countTemplateShapes, usesSystemChatData, createActivityRegions } from "./compatibility.js";
 import { warn, debug, log, i18n, i18nFormat, busyWait, MESSAGE_TYPES, error, debugEnabled, MQItemMacroLabel, GameSystemConfig, MODULE_ID, MQActivityMacroLabel, gameStats, getHealingLabel } from "../midi-qol.js";
 import { preferredActiveGM, prepareDamageListToJSON, socketlibSocket, timedAwaitExecuteAsGM, timedExecuteAsGM, unTimedExecuteAsGM } from "./GMAction.js";
 import { installedModules } from "./setupModules.js";
@@ -1271,7 +1272,11 @@ export class Workflow {
   }
 
   get needTemplate(): boolean {
-    return this.expectedTemplateCount > 0 && this.templateUuids.length < this.expectedTemplateCount;
+    return this.expectedTemplateCount > this.placedTemplateShapeCount;
+  }
+
+  get placedTemplateShapeCount(): number {
+    return countTemplateShapes(this.templateUuids.map(uuid => fromUuidSync(uuid)).filter(Boolean));
   }
 
   get itemUuid(): string | undefined {
@@ -1778,7 +1783,8 @@ export class Workflow {
 
     // Validate template count
     const expectedCount = Number(activity?.target?.template?.count) || 1;
-    if (templates.length < expectedCount) {
+    const placedCount = countTemplateShapes(templates);
+    if (placedCount < expectedCount) {
       // Incomplete placement: delete any templates placed so far
       for (const tDoc of templates) {
         try { await tDoc.delete(); } catch (e) { /* template may already be gone */ }
@@ -1791,7 +1797,7 @@ export class Workflow {
       this.templateUuid = tDoc.uuid;  // setter pushes to array + persists
       await this.setupTemplateCleanup(tDoc);
     }
-    this.placedTemplateCount = templates.length;
+    this.placedTemplateCount = placedCount;
 
     // Compute targets from ALL templates at once
     this.selectAllTemplateTargets(activity);
@@ -2069,7 +2075,7 @@ export class Workflow {
   }
   async WorkflowState_AwaitTemplate(context: WorkflowContext = {}): Promise<WorkflowState> {
     if (debugEnabled > 0) warn("WorkflowState_AwaitTemplate started");
-    if (this.templateUuids.length >= this.expectedTemplateCount) {
+    if (this.placedTemplateShapeCount >= this.expectedTemplateCount) {
       if (debugEnabled > 0) warn("WorkflowState_AwaitTemplate context - template placed", "needTemplate", this.needTemplate, "needItemCard", this.needItemCard, "itemUseComplete", this.itemUseComplete);
       return this.WorkflowState_TemplatePlaced;
     }
@@ -2157,7 +2163,7 @@ export class Workflow {
     if ((!getAutoRollAttack(this) && this.activity.attack) || this.activity instanceof MidiTransformActivity) {
       // Not auto rolling so display targets
       const rollMode = safeGetGameSetting("core", "rollMode");
-      this.whisperAttackCard = configSettings.autoCheckHit === "whisper" || rollMode === CONST.DICE_ROLL_MODES.BLIND || rollMode === CONST.DICE_ROLL_MODES.PRIVATE;
+      this.whisperAttackCard = configSettings.autoCheckHit === "whisper" || rollMode === getRollModes().BLIND || rollMode === getRollModes().PRIVATE;
       if (this.activity.target?.affects?.type !== "self") {
         await this.displayHitTargets(this.whisperAttackCard);
       }
@@ -2244,7 +2250,7 @@ export class Workflow {
       await this.checkHits();
       await this.displayAttackRoll();
       const rollMode = safeGetGameSetting("core", "rollMode");
-      this.whisperAttackCard = configSettings.autoCheckHit === "whisper" || rollMode === CONST.DICE_ROLL_MODES.BLIND || rollMode === CONST.DICE_ROLL_MODES.PRIVATE;
+      this.whisperAttackCard = configSettings.autoCheckHit === "whisper" || rollMode === getRollModes().BLIND || rollMode === getRollModes().PRIVATE;
       await this.callMidiHooks("midi-qol.hitsChecked");
       if (this.aborted) return this.WorkflowState_Abort;
       await this.displayHits(this.whisperAttackCard);
@@ -2810,20 +2816,23 @@ export class Workflow {
     }
     let ceEffect = getCEEffectByName(this.activity.name);
     if (!ceEffect) ceEffect = getCEEffectByName(this.activity.item.name);
-    const isApplicableEffect = (activity: Activity | undefined | null, efData: ActivityEffectData | undefined | null): boolean => {
+    const isApplicableEffect = (activity: Activity | undefined | null, efData: any): boolean => {
       if (!efData || !activity) return false;
       const level = activity.relevantLevel;
       //@ts-expect-error no dnd5e-types
       if (((efData.level?.min ?? -Infinity) > level) || (level > (efData.level?.max ?? Infinity)))
         return false;
-      // @ts-expect-error no dnd5e-types
       return !!efData.effect && efData.effect?.transfer !== true && efData.effect?.type !== "enchantment";
     }
     // can't use this.activity.applicableEffects since we need to know about onSave or not
-    let activityEffects = (this.activity.effects ?? []).filter(efData => isApplicableEffect(this.activity, efData) && efData.onSave !== true).map(efData => efData.effect!);
-    let onSaveActivityEffects = (this.activity.effects ?? []).filter(efData => isApplicableEffect(this.activity, efData) && efData.onSave === true).map(efData => efData.effect!);
-    let otherActivityEffects = (this.otherActivity?.effects ?? []).filter(efData => isApplicableEffect(this.otherActivity, efData) && efData.onSave !== true).map(efData => efData.effect!);
-    let onSaveOtherActivityEffects = (this.otherActivity?.effects ?? []).filter(efData => isApplicableEffect(this.otherActivity, efData) && efData.onSave === true).map(efData => efData.effect!);
+    const resolveProfiles = (activity: Activity | null | undefined) => Promise.all((activity?.effects ?? []).map(async profile => ({
+      ...profile, effect: await resolveActivityEffect(profile)
+    })));
+    const [profiles, otherProfiles] = await Promise.all([resolveProfiles(this.activity), resolveProfiles(this.otherActivity)]);
+    let activityEffects = profiles.filter(profile => isApplicableEffect(this.activity, profile) && profile.onSave !== true).map(profile => profile.effect);
+    let onSaveActivityEffects = profiles.filter(profile => isApplicableEffect(this.activity, profile) && profile.onSave === true).map(profile => profile.effect);
+    let otherActivityEffects = otherProfiles.filter(profile => isApplicableEffect(this.otherActivity, profile) && profile.onSave !== true).map(profile => profile.effect);
+    let onSaveOtherActivityEffects = otherProfiles.filter(profile => isApplicableEffect(this.otherActivity, profile) && profile.onSave === true).map(profile => profile.effect);
     if (activityEffects.length > 0 && this.effectTargets.size > 0 && this.activity.midiProperties?.chooseEffects) { // WIP
       activityEffects = await this.chooseEffects(activityEffects, { activity: this.activity, activityUuid: this.activity.uuid, isOtherActivity: false });
     }
@@ -5402,7 +5411,10 @@ return {
         position.x += (template.document.width ?? 1) / (dimensions?.distance ?? 5) / 2 * (dimensions?.size ?? 100);
         position.y += (template.document.width ?? 1) / (dimensions?.distance ?? 5) / 2 * (dimensions?.size ?? 100);
       }
-      originElevation = template.document.elevation;
+      const region: any = template.document;
+      originElevation = region.documentName === "Region"
+        ? Number.isFinite(region.elevation.bottom) ? region.elevation.bottom : originElevation
+        : template.document.elevation;
     }
 
     if (position) {
@@ -5703,7 +5715,7 @@ return {
     if (!whisper) {
       const rollMode = ((this.activity.midiProperties?.rollMode ?? "default") !== "default")
         ? this.activity.midiProperties!.rollMode
-        : CONST.DICE_ROLL_MODES.PUBLIC;
+        : getRollModes().PUBLIC;
       timedExecuteAsGM("monksTokenBarSaves", buildRequestData(monkRequests, rollMode));
     } else {
       // Whisper mode - send GM and player requests separately with different roll modes
@@ -5714,7 +5726,7 @@ return {
         timedExecuteAsGM("monksTokenBarSaves", buildRequestData(monkRequestsPlayer, playerRollMode));
       }
       if (monkRequestsGM.length > 0) {
-        timedExecuteAsGM("monksTokenBarSaves", buildRequestData(monkRequestsGM, CONST.DICE_ROLL_MODES.PRIVATE));
+        timedExecuteAsGM("monksTokenBarSaves", buildRequestData(monkRequestsGM, getRollModes().PRIVATE));
       }
     }
   }
@@ -5878,7 +5890,7 @@ return {
               // Non-GM users don't have permission to create chat cards impersonating the GM
               const rollMode = ((this.activity.midiProperties?.rollMode ?? "default") !== "default")
                 ? this.activity.midiProperties?.rollMode
-                : CONST.DICE_ROLL_MODES.PUBLIC;
+                : getRollModes().PUBLIC;
               result = await timedAwaitExecuteAsGM("rollAbility", {
                 saveDetails,
                 displayOptions: {
@@ -5983,18 +5995,18 @@ return {
 
     let rollMode = ((this.activity.midiProperties?.rollMode ?? "default") !== "default")
       ? this.activity.midiProperties!.rollMode
-      : whisper ? CONST.DICE_ROLL_MODES.PRIVATE : CONST.DICE_ROLL_MODES.PUBLIC;
+      : whisper ? getRollModes().PRIVATE : getRollModes().PUBLIC;
 
     if (!owner?.isGM) {
       if ((this.activity.midiProperties?.rollMode ?? "default") === "default") {
         if (["noneDialogPublic", "nonePublic"].includes(configSettings.playerRollSaves)) {
-          rollMode = CONST.DICE_ROLL_MODES.PUBLIC;
+          rollMode = getRollModes().PUBLIC;
         } else if (["noneDialogPrivate", "none"].includes(configSettings.playerRollSaves)) {
-          rollMode = CONST.DICE_ROLL_MODES.PRIVATE;
+          rollMode = getRollModes().PRIVATE;
         } else if (configSettings.playerRollSaves === "noneDialogSelf") {
-          rollMode = CONST.DICE_ROLL_MODES.SELF;
+          rollMode = getRollModes().SELF;
         } else if (configSettings.playerRollSaves === "noneDialogBlind") {
-          rollMode = CONST.DICE_ROLL_MODES.BLIND;
+          rollMode = getRollModes().BLIND;
         }
       }
     }
@@ -7125,7 +7137,7 @@ return {
   async processDamageRollBonusFlags(damageRolls: Roll[]): Promise<Roll[]> {
     let damageBonus = "damage.all";
     const rollMode = safeGetGameSetting("core", "rollMode");
-    const hideDSN = game.user?.isGM && [CONST.DICE_ROLL_MODES.SELF, CONST.DICE_ROLL_MODES.BLIND, CONST.DICE_ROLL_MODES.PRIVATE].includes(rollMode);
+    const hideDSN = game.user?.isGM && [getRollModes().SELF, getRollModes().BLIND, getRollModes().PRIVATE].includes(rollMode);
     if (this.activity) damageBonus = `damage.${this.activity.actionType}`;
     const { keys: allOptionalKeys, owners: flagOwners } = this.collectOptionalFlagSources();
     const ownerOfShort = (flag: string): any => flagOwners[`flags.${MODULE_ID}.optional.${flag}`] ?? this.actor;
@@ -8318,8 +8330,7 @@ export class DamageOnlyWorkflow extends Workflow {
               ...(this.activity.messageFlags as AnyObject),
               messageType: "usage",
               use: {
-                // @ts-expect-error TODO: is this right?
-                effects: this.applicableEffects?.map(e => e.id)
+                effects: activityEffectReferences(this.activity)
               }
             }
           },
@@ -8331,7 +8342,7 @@ export class DamageOnlyWorkflow extends Workflow {
       this.itemCard = await this.activity._createUsageMessage(messageConfig);
       this.itemCardUuid = this.itemCard?.uuid;
     }
-    const whisperCard = configSettings.autoCheckHit === "whisper" || safeGetGameSetting("core", "rollMode") === CONST.DICE_ROLL_MODES.BLIND;
+    const whisperCard = configSettings.autoCheckHit === "whisper" || safeGetGameSetting("core", "rollMode") === getRollModes().BLIND;
     if (this.actor) { // Hacky process bonus flags
       // TODO come back and fix this for dnd3
       const newRolls = await this.processDamageRollBonusFlags(this.damageRolls);
@@ -8416,6 +8427,14 @@ export class TrapWorkflow extends Workflow {
     if (!activityHasAreaTarget(this.activity) || !this.templateLocation) {
       return this.WorkflowState_TemplatePlaced;
     }
+    if (usesSystemChatData()) {
+      const regions = await createActivityRegions(this.activity, this.templateLocation);
+      await this.processPlacedTemplates(regions, this.activity);
+      if (this.templateLocation.removeDelay) setTimeout(() => {
+        regions.forEach(region => region.delete());
+      }, this.templateLocation.removeDelay * 1000);
+      return this.WorkflowState_TemplatePlaced;
+    }
     //@ts-expect-error no dnd5e-types
     const TemplateClass = game.system.canvas.AbilityTemplate;
     const abilityTemplates = TemplateClass.fromActivity(this.activity);
@@ -8472,7 +8491,7 @@ export class TrapWorkflow extends Workflow {
     await this.displayAttackRoll();
     this.recordTargetACModifiers();
     await this.checkHits(this.workflowOptions);
-    const whisperCard = configSettings.autoCheckHit === "whisper" || safeGetGameSetting("core", "rollMode") === CONST.DICE_ROLL_MODES.BLIND;
+    const whisperCard = configSettings.autoCheckHit === "whisper" || safeGetGameSetting("core", "rollMode") === getRollModes().BLIND;
     await this.displayHits(whisperCard);
     return this.WorkflowState_WaitForSaves;
   }
@@ -8626,6 +8645,11 @@ export class DDBGameLogWorkflow extends Workflow {
 
   async WorkflowState_AwaitTemplate(context: WorkflowContext = {}): Promise<WorkflowState> {
     if (!activityHasAreaTarget(this.activity)) return super.WorkflowState_AwaitTemplate;
+    if (usesSystemChatData()) {
+      const regions = await globalThis.dnd5e.canvas.TemplatePlacement.fromActivity(this.activity);
+      if (regions?.length) await this.processPlacedTemplates(regions, this.activity);
+      return super.WorkflowState_AwaitTemplate(context);
+    }
     let system: any = game.system;
     // Create the template
     const template = system.canvas.AbilityTemplate.Activity(this.activity);

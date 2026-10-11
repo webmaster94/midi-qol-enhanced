@@ -2,6 +2,7 @@ import { GameSystemConfig, MESSAGE_TYPES, MODULE_ID, MQDamageRollTypes, debugEna
 import { configSettings, safeGetGameSetting, saveToChatCard } from "../settings.js";
 import { getToken } from "../utils.js";
 import { setDamageRollMinTerms } from "../activities/activityHelpers.js";
+import { usesSystemChatData } from "../compatibility.js";
 
 const midiAutoAppliesDamage = () => !!configSettings.autoApplyDamage?.toLowerCase().includes("yes");
 const removeAll = (html: HTMLElement, sel: string) => html.querySelectorAll(sel).forEach(el => el.remove());
@@ -72,6 +73,15 @@ export function setupChatMessageMidi() {
 
 export function defineChatMessageMidiClass(baseClass: ChatMessage.ImplementationClass) {
   return class ChatMessageMidi extends baseClass /*globalThis.dnd5e.documents.ChatMessage5e*/ {
+    #enrichmentPromises = new WeakMap<HTMLElement, Promise<void>>();
+
+    async renderHTML(options = {}) {
+      const html = await super.renderHTML(options);
+      // D&D 6's model starts enrichment without awaiting it. Await the work for
+      // this element before exposing it to callers or the chat log.
+      await this.#enrichmentPromises.get(html);
+      return html;
+    }
 
     prepareDerivedData() {
       super.prepareDerivedData();
@@ -255,7 +265,7 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
           obj.formula.push(r.formula);
           obj.total += Math.max(0, r.total);
           // @ts-expect-error no dnd5e-types
-          obj.breakdown.push(this._simplifyDamageRoll(r));
+          obj.breakdown.push(usesSystemChatData() ? r.aggregateTerms() : this._simplifyDamageRoll(r));
           return obj;
         }, { formula: [], total: 0, breakdown: [] });
         formula = formula.join(" ");
@@ -301,12 +311,12 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
       <div class="dice-result">
       ${formulaInToolTip ? "" : diceFormula}
         <div class="dice-tooltip-collapser">
-          <div class="dice-tooltip">
+          <div class="dice-tooltip midi-dice-tooltip">
             ${formulaInToolTip ? diceFormula : ""}
             ${tooltipContents}
           </div>
         </div>
-        <h4 class="dice-total">${total}${this._buildDamageTypeIcons(breakdown)}</h4>
+        <h4 class="dice-total"><span class="midi-roll-total">${total}</span>${this._buildDamageTypeIcons(breakdown)}</h4>
       </div>
     `;
         returns.push(roll);
@@ -316,11 +326,12 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
 
     _buildDamageTypeIcons(breakdown: { type: string }[]): string {
       const uniqueTypes = [...new Set(breakdown.map(b => b.type).filter(Boolean))];
-      return uniqueTypes.map(type => {
+      const icons = uniqueTypes.map(type => {
         const config = GameSystemConfig.damageTypes[type] ?? GameSystemConfig.healingTypes?.[type];
         if (!config?.icon) return "";
         return `<dnd5e-icon class="midi-damage-type-icon" src="${config.icon}" aria-label="${config.label ?? ""}" data-tooltip="${config.label ?? ""}"></dnd5e-icon>`;
       }).join("");
+      return icons ? `<span class="midi-damage-type-icons">${icons}</span>` : "";
     }
 
     // Removes the dnd5e effects tray from the rendered chat card when midi's
@@ -337,7 +348,7 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
     _enrichDamageTooltip(rolls: Roll[], html: HTMLElement) {
       if (this.flags?.dnd5e?.roll?.type !== undefined || !this.flags?.[MODULE_ID])
         // @ts-expect-error no dnd5e-types
-        return super._enrichDamageTooltip(rolls, html);
+        return super._enrichDamageTooltip?.(rolls, html);
       for (let rollType of MQDamageRollTypes) {
         const rollsToCheck = this.rolls.filter(r => foundry.utils.getProperty(r, "options.midi-qol.rollType") === rollType);
         let rType = "damage";
@@ -700,20 +711,30 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
       }
     }
 
-    _enrichChatCard(html: HTMLElement) {
+    _enrichChatCard(html: HTMLElement, options = {}) {
+      const enrichment = this._enrichMidiChatCard(html, options);
+      this.#enrichmentPromises.set(html, enrichment);
+      return enrichment;
+    }
+
+    private async _enrichMidiChatCard(html: HTMLElement, options = {}) {
       if (!this.flags?.[MODULE_ID]?.messageType) {
         this.applyChatVisibility(html);
         // @ts-expect-error no dnd5e-types
-        super._enrichChatCard(html);
+        await super._enrichChatCard(html, options);
         this._maybeStripEffectsTray(html);
         this._addMarkerClasses(html);
         return;
       }
       if (debugEnabled > 1) log("Enriching chat card", Date.now(), this.id);
-      this.maskAttackRolls(html); // This has to run first to stop errors when ChatMessage5e._enrichDamageTooltip runs
+      if (usesSystemChatData()) {
+        this._enrichDamageTooltip(this.rolls, html);
+        this._enrichAttackTargets(html);
+      }
+      this.maskAttackRolls(html); // Apply visibility before the system binds roll interaction.
 
       // @ts-expect-error no dnd5e-types
-      super._enrichChatCard(html);
+      await super._enrichChatCard(html, options);
       this._maybeStripEffectsTray(html);
       this.applyChatVisibility(html);
       // For usage-type messages, Foundry skips _highlightCriticalSuccessFailure.

@@ -1,3 +1,4 @@
+import { usesSystemChatData } from "../compatibility.js";
 import { AnyMutableObject } from "fvtt-types/utils";
 import { Activity, RollDialogConfig, RollMessageConfig, RollProcessConfig } from "../../globals.js";
 import { debugEnabled, i18n, warn, error, GameSystemConfig } from "../../midi-qol.js";
@@ -36,7 +37,7 @@ let defineMidiUtilityActivityClass = <T extends Activity>(ActivityClass: T) => {
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiUtilitySheet,
         usage: {
-          chatCard: "modules/midi-qol/templates/activity-card.hbs",
+          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
           actions: {
             rollFormula: MidiUtilityActivity.#rollFormula
           }
@@ -134,8 +135,8 @@ let defineMidiUtilityActivityClass = <T extends Activity>(ActivityClass: T) => {
       }
       return result;
     }
-    async _usageChatContext(message) {
-      const context = await super._usageChatContext(message);
+    async _midiUsageChatContext(message) {
+      const context = await super._midiUsageChatContext(message);
       context.hasRollFormula = true; // TODO fix this when able to do a proper card !!this.roll?.formula;
       return context;
     }

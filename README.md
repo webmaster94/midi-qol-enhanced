@@ -4,10 +4,12 @@
 ![](https://img.shields.io/badge/Foundry-v11-informational)
 ![](https://img.shields.io/badge/Foundry-v12-informational)
 ![](https://img.shields.io/badge/Foundry-v13-informational)
+![](https://img.shields.io/badge/Foundry-v14-informational)
 ![](https://img.shields.io/badge/Dnd5e-v3.3.1-informational)
 ![](https://img.shields.io/badge/Dnd5e-v4.4.2-informational)
 ![](https://img.shields.io/badge/Dnd5e-v5.2.4+-informational)
 ![](https://img.shields.io/badge/Dnd5e-v5.3+-informational)
+![](https://img.shields.io/badge/Dnd5e-v6.0.6-informational)
 ![Forge Installs](https://img.shields.io/badge/dynamic/json?label=Forge%20Installs&query=package.installs&suffix=%25&url=https%3A%2F%2Fforge-vtt.com%2Fapi%2Fbazaar%2Fpackage%2Fmidi-qol&colorB=4aa94a)
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/tposney)
@@ -16,6 +18,8 @@
 <a href="https://discord.gg/Xd4NEvw5d7"><img src="https://img.shields.io/discord/915186263609454632?logo=discord" alt="chat on Discord"></a>
 
 **Midi-QOL** is an automation module for D&D 5e in Foundry VTT that streamlines combat and spellcasting.
+
+For the fork's D&D 6 card regression checks, run `scripts/dnd6-card-regression.js` as an async Foundry macro in an isolated v14 world with Midi and its dependencies enabled. The script creates a fixture actor and real chat messages, renders six activity types, and checks damage icons, labelled breakdowns, descriptions, alignment, contrast in both themes, resource-button visibility, and separation of damage groups. It restores display settings after checking and leaves a temporary card preview on screen for inspection. With a scene open, run `scripts/dnd6-region-regression.js` afterward to check native area placement, multiple shapes, and targeting. Back up worlds before upgrading their system.
 
 ## Key Features
 

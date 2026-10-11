@@ -1,3 +1,5 @@
+import { getRollModes } from "../compatibility.js";
+import { usesSystemChatData } from "../compatibility.js";
 import { AnyMutableObject } from "fvtt-types/utils";
 import { Activity, ActivityUseConfiguration, RollDialogConfig, RollMessageConfig, RollProcessConfig } from "../../globals.js";
 import { debugEnabled, warn, i18n, GameSystemConfig } from "../../midi-qol.js";
@@ -34,7 +36,7 @@ let defineMidiSaveActivityClass = <T extends Activity>(ActivityClass: T) => {
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiSaveSheet,
         usage: {
-          chatCard: "modules/midi-qol/templates/activity-card.hbs",
+          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
           actions: {
             rollDamage: MidiSaveActivity.#rollDamage,
             rollSave: MidiSaveActivity.#rollSave, // Having this means needing to track the dnd5e SaveActivity.#rollSave changes
@@ -106,12 +108,12 @@ let defineMidiSaveActivityClass = <T extends Activity>(ActivityClass: T) => {
         if (token instanceof foundry.canvas.placeables.Token) foundry.utils.setProperty(message, "flags.midi-qol.requestId", token.document.uuid);
         else foundry.utils.setProperty(message, "flags.midi-qol.requestId", token?.uuid);
         if (["none", "allShow"].includes(configSettings.autoCheckSaves) || actor?.hasPlayerOwner) message.rollMode = game.settings.get("core", "rollMode");
-        else message.rollMode = CONST.DICE_ROLL_MODES.PRIVATE;
+        else message.rollMode = getRollModes().PRIVATE;
         if (!game.user?.isGM) {
-          if (configSettings.playerRollSaves === "noneDialogPublic") message.rollMode = CONST.DICE_ROLL_MODES.PUBLIC;
-          else if (configSettings.playerRollSaves === "noneDialogPrivate") message.rollMode = CONST.DICE_ROLL_MODES.PRIVATE;
-          else if (configSettings.playerRollSaves === "noneDialogSelf") message.rollMode = CONST.DICE_ROLL_MODES.SELF;
-          else if (configSettings.playerRollSaves === "noneDialogBlind") message.rollMode = CONST.DICE_ROLL_MODES.BLIND;
+          if (configSettings.playerRollSaves === "noneDialogPublic") message.rollMode = getRollModes().PUBLIC;
+          else if (configSettings.playerRollSaves === "noneDialogPrivate") message.rollMode = getRollModes().PRIVATE;
+          else if (configSettings.playerRollSaves === "noneDialogSelf") message.rollMode = getRollModes().SELF;
+          else if (configSettings.playerRollSaves === "noneDialogBlind") message.rollMode = getRollModes().BLIND;
           else message.rollMode = game.settings.get("core", "rollMode");
         }
 

@@ -1,3 +1,5 @@
+import { getRollModes, activityEffectReferences } from "../compatibility.js";
+import { usesSystemChatData } from "../compatibility.js";
 import { debugEnabled, warn, error, busyWait, GameSystemConfig, debug, log, i18n, MODULE_ID, i18nFormat } from "../../midi-qol.js";
 import { unTimedExecuteAsGM } from "../GMAction.js";
 import { Workflow } from "../Workflow.js";
@@ -134,7 +136,7 @@ let defineMidiAttackActivityClass = <T extends Activity>(ActivityClass: T) => {
         title: configSettings.activityNamePrefix ? "midi-qol.ATTACK.Title.one" : ActivityClass.metadata.title,
         dnd5eTitle: ActivityClass.metadata.title,
         usage: {
-          chatCard: "modules/midi-qol/templates/activity-card.hbs",
+          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
           actions: {
             rollAttack: MidiAttackActivity.#rollAttack,
             rollAttackAdvantage: MidiAttackActivity.#rollAttackAdvantage,
@@ -495,7 +497,7 @@ let defineMidiAttackActivityClass = <T extends Activity>(ActivityClass: T) => {
         message ??= {};
         message.create ??= config.midiOptions.chatMessage;
         const rollMode = safeGetGameSetting("core", "rollMode");
-        const showChatAttackCard = game.user?.isGM && configSettings.gmAttackDamageCards && [CONST.DICE_ROLL_MODES.SELF, CONST.DICE_ROLL_MODES.BLIND, CONST.DICE_ROLL_MODES.PRIVATE].includes(rollMode);
+        const showChatAttackCard = game.user?.isGM && configSettings.gmAttackDamageCards && [getRollModes().SELF, getRollModes().BLIND, getRollModes().PRIVATE].includes(rollMode);
         if (showChatAttackCard) {
           // Show a chat card for attack rolls if the players are not going to see the midi card.
           message.create = true;
@@ -601,7 +603,7 @@ let defineMidiAttackActivityClass = <T extends Activity>(ActivityClass: T) => {
                     ...this.messageFlags,
                     messageType: "usage",
                     use: {
-                      effects: this.applicableEffects?.map(e => e.id)
+                      effects: activityEffectReferences(this)
                     }
                   }
                 }
@@ -745,8 +747,8 @@ let defineMidiAttackActivityClass = <T extends Activity>(ActivityClass: T) => {
     get requireAmmunition(): boolean {
       return game.user?.isGM ? configSettings.gmRequireAmmunition : configSettings.playerRequireAmmunition;
     }
-    async _usageChatContext(message) {
-      const context = await super._usageChatContext(message);
+    async _midiUsageChatContext(message) {
+      const context = await super._midiUsageChatContext(message);
 
       context.hasAttack = this.attack; // && !minimalCard && (systemCard || needAttackButton || configSettings.confirmAttackDamage !== "none"),
       return context;

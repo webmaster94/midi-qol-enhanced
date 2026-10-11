@@ -1,3 +1,4 @@
+import { usesSystemChatData } from "../compatibility.js";
 import { Activity, RollDialogConfig, RollMessageConfig, RollProcessConfig } from "../../globals.js";
 import { debugEnabled, GameSystemConfig, i18n, warn } from "../../midi-qol.js";
 import { Workflow } from "../Workflow.js";
@@ -38,7 +39,7 @@ let defineMidiContestedCheckActivityClass = <T extends Activity>(ActivityClass: 
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiCheckSheet,
         usage: {
-          chatCard: "modules/midi-qol/templates/activity-card.hbs",
+          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
           actions: {
             // rollCheck: this.#rollCheck, // ContestedCheckActivity.metadata.usage.actions.rollCheck,
             rollDamage: MidiSaveActivity.metadata.usage.actions.rollDamage
@@ -135,8 +136,8 @@ let defineMidiContestedCheckActivityClass = <T extends Activity>(ActivityClass: 
     _usageChatButtons(message) {
       const buttons: any[] = [];
       if (this.damage?.parts.length) buttons.push({
-        label: i18n("DND5E.Damage"),
-        icon: '<i class="fas fa-burst" inert></i>',
+        ...(usesSystemChatData() ? { action: "rollDamage", label: { value: "DND5E.Damage" }, icon: "fas fa-burst" }
+          : { label: i18n("DND5E.Damage"), icon: '<i class="fas fa-burst" inert></i>' }),
         dataset: {
           action: "rollDamage"
         }

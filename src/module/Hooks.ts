@@ -79,6 +79,14 @@ export let readyHooks = async () => {
   });
 
   Hooks.on("deleteMeasuredTemplate", checkDeleteTemplate);
+  Hooks.on("deleteRegion", checkDeleteTemplate);
+  Hooks.on("updateRegion", (region, changes, options, userId) => {
+    if (userId !== game.user?.id || !foundry.utils.getProperty(region, "flags.dnd5e.activity")) return;
+    const workflow = Array.from(Workflow.workflows.values())
+      .map(entry => entry instanceof WeakRef ? entry.deref() : entry)
+      .find(workflow => workflow?.templateUuids.includes(region.uuid));
+    workflow?.selectAllTemplateTargets();
+  });
 
   // Auto-target tokens when a template is refreshed (moved/reshaped during preview or after placement)
   // Only the user who placed the template should update targeting, otherwise all clients
