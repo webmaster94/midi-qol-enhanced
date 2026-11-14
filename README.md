@@ -6,10 +6,10 @@ Install in Foundry with this manifest:
 
 https://github.com/webmaster94/midi-qol-enhanced/releases/latest/download/module.json
 
-The current release targets Foundry 14.369+ and D&D 6.1.0. Existing GitLab installs keep receiving updates through their original manifest URL. Use the GitHub manifest for new installs. The module ID remains `midi-qol`, preserving existing settings and integrations.
+The current release targets Foundry 14, with verified compatibility set to 14.370, and D&D 6.1.0. Existing GitLab installs keep receiving updates through their original manifest URL. Use the GitHub manifest for new installs. The module ID remains `midi-qol`, preserving existing settings and integrations.
 
 
-![](https://img.shields.io/badge/Foundry-v14.369+-informational)
+![](https://img.shields.io/badge/Foundry-v14-informational)
 ![](https://img.shields.io/badge/Dnd5e-v6.1.0-informational)
 ![](https://img.shields.io/badge/DAE-v14.6.7+-informational)
 ![Latest release](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fgithub.com%2Fwebmaster94%2Fmidi-qol-enhanced%2Freleases%2Flatest%2Fdownload%2Fmodule.json&query=%24.version&label=Latest%20release&prefix=v&color=blue)

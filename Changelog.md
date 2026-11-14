@@ -1,3 +1,6 @@
+### 14.6.12.4 - Foundry compatibility metadata
+* Set Foundry minimum to 14 and verified compatibility to 14.370.
+
 ### 14.6.12.3 - Restore the module display name
 * Restored the Foundry display title to Midi QOL. The module ID remains midi-qol.
 * Published a new module version so installed copies receive the corrected title through the normal update process.
