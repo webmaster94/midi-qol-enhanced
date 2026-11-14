@@ -1,9 +1,6 @@
-import { usesSystemChatData } from "../compatibility.js";
 import { Activity, RollDialogConfig, RollMessageConfig, RollProcessConfig } from "../../globals.js";
-import { debugEnabled, GameSystemConfig, i18n, warn } from "../../midi-qol.js";
-import { Workflow } from "../Workflow.js";
+import { debugEnabled, GameSystemConfig, warn } from "../../midi-qol.js";
 import { replaceDefaultActivities, configSettings } from "../settings.js";
-import { asyncHooksCall } from "../utils.js";
 import { MidiActivityMixin, MidiActivityMixinSheet } from "./MidiActivityMixin.js";
 
 export let MidiForwardActivity: ReturnType<typeof defineMidiForwardActivityClass>;
@@ -23,6 +20,11 @@ export function setupForwardActivity() {
 }
 let defineMidiForwardSheetClass = (baseClass: any) => {
   return class MidiForwardSheet extends MidiActivityMixinSheet(baseClass) {
+    // Forward has no time/targeting - keep dnd5e's narrower activation part, which registers only the partials it uses.
+    static PARTS = {
+      ...super.PARTS,
+      activation: baseClass.PARTS.activation,
+    };
   }
 }
 
@@ -36,14 +38,18 @@ let defineMidiForwardActivityClass = <T extends Activity>(ActivityClass: T) => {
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiForwardSheet,
         usage: {
-          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
+          /*
+           * No `chatCard`. Supplying one keeps the activity on dnd5e's legacy content path — the
+           * system renders the template into `message.content` and `MidiUsageMessageData`'s own
+           * template short-circuits on it, so the card face never runs. Deprecated in dnd5e 6.0 and
+           * removed in 6.2 (`activity/mixin.mjs#legacyUsageContent`) regardless. See AttackActivity.
+           */
         },
       }, { inplace: false, insertKeys: true, insertValues: true });
 
     get possibleOtherActivity() {
       return false;
     }
-    get effects() { return [] };
 
     /** @override */
     async use(usage: RollProcessConfig = {}, dialog: RollDialogConfig = {}, message: RollMessageConfig = {}) {

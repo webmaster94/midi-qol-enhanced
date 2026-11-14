@@ -1,5 +1,5 @@
 import { i18n, MODULE_ID, GameSystemConfig } from "../../midi-qol.js";
-import { serializeOvertimeDetails, parseBool } from "../utils.js";
+import { serializeOvertimeDetails, parseBool, rollModeToMessageMode } from "../utils.js";
 
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
@@ -21,6 +21,7 @@ export class OverTimeEditor extends HandlebarsApplicationMixin(ApplicationV2) {
   declare currentData: Record<string, any>;
   declare originalSerialized: string;
   declare originalPermanent: boolean;
+  declare originalRemaining: { saves: number; fails: number };
 
   constructor(editorOptions: OverTimeEditorOptions, appOptions?: Partial<foundry.applications.api.ApplicationV2.Configuration>) {
     super(appOptions);
@@ -33,6 +34,7 @@ export class OverTimeEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     this.currentData = this.#buildFormData(this.originalValue);
     this.originalSerialized = this.#serializeCurrentData();
     this.originalPermanent = this.currentData.permanent;
+    this.originalRemaining = { saves: this.currentData.savesRemaining, fails: this.currentData.failsRemaining };
   }
 
   static override DEFAULT_OPTIONS = {
@@ -138,7 +140,7 @@ export class OverTimeEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       macro: raw.macro ?? "",
       itemName: raw.itemName ?? "",
       chatFlavor: raw.chatFlavor ?? "",
-      rollMode: raw.rollMode ?? "default",
+      rollMode: (raw.rollMode ? rollModeToMessageMode(raw.rollMode) : undefined) ?? "default",
       fastForwardDamage: parseBool(raw.fastForwardDamage, true),
       fastForwardAttack: parseBool(raw.fastForwardAttack, true),
       autoRollAttack: parseBool(raw.autoRollAttack, true),
@@ -206,6 +208,11 @@ export class OverTimeEditor extends HandlebarsApplicationMixin(ApplicationV2) {
 
     // Read permanent flag from effect (runtime state, not part of spec string)
     data.permanent = !!(this.effect as any)?.flags?.[MODULE_ID]?.overtime?.permanent;
+    // Progress of an applied effect's save/fail counts (runtime state): what is left until the count's action
+    const overtime = (this.effect as any)?.flags?.[MODULE_ID]?.overtime;
+    data.onActor = this.effect?.parent instanceof Actor;
+    data.savesRemaining = overtime?.savesRemaining ?? data.saveCountNum;
+    data.failsRemaining = overtime?.failsRemaining ?? data.failCountNum;
 
     return data;
   }
@@ -255,6 +262,9 @@ export class OverTimeEditor extends HandlebarsApplicationMixin(ApplicationV2) {
     context.failCountConsecutive = this.currentData.failCountConsecutive;
     context.failCountEffectSpec = this.currentData.failCountEffectSpec;
     context.permanent = this.currentData.permanent;
+    context.onActor = this.currentData.onActor;
+    context.savesRemaining = this.currentData.savesRemaining;
+    context.failsRemaining = this.currentData.failsRemaining;
 
     // Dropdown options
     context.turnOptions = {
@@ -302,12 +312,14 @@ export class OverTimeEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       roll: "midi-qol.OverTimeEditor.ActionSaveRoll"
     };
 
+    // v14 message-mode values (was legacy publicroll/gmroll/blindroll/selfroll). Legacy stored values
+    // are normalized to v14 on access (see doOverTimeEffect) so old over-time effects keep working.
     context.rollModeOptions = {
       default: "midi-qol.OverTimeEditor.RollModeDefault",
-      publicroll: "midi-qol.OverTimeEditor.RollModePublic",
-      gmroll: "midi-qol.OverTimeEditor.RollModeGM",
-      blindroll: "midi-qol.OverTimeEditor.RollModeBlind",
-      selfroll: "midi-qol.OverTimeEditor.RollModeSelf"
+      public: "midi-qol.OverTimeEditor.RollModePublic",
+      gm: "midi-qol.OverTimeEditor.RollModeGM",
+      blind: "midi-qol.OverTimeEditor.RollModeBlind",
+      self: "midi-qol.OverTimeEditor.RollModeSelf"
     };
 
     return context;
@@ -400,7 +412,7 @@ export class OverTimeEditor extends HandlebarsApplicationMixin(ApplicationV2) {
       "allowIncapacitated", "killAnim",
       "saveCountEnabled", "saveCountNum", "saveCountMode", "saveCountConsecutive", "saveCountEffectSpec",
       "failCountEnabled", "failCountNum", "failCountMode", "failCountConsecutive", "failCountEffectSpec",
-      "permanent",
+      "permanent", "savesRemaining", "failsRemaining",
     ];
 
     for (const field of directFields) {
@@ -427,6 +439,13 @@ export class OverTimeEditor extends HandlebarsApplicationMixin(ApplicationV2) {
         [`flags.${MODULE_ID}.overtime.permanent`]: this.currentData.permanent || null
       };
       await (this.effect as ActiveEffect.Implementation).update(flagUpdate);
+    }
+
+    if (this.currentData.onActor) {
+      const remaining: Record<string, any> = {};
+      if (Number(this.currentData.savesRemaining) !== this.originalRemaining.saves) remaining[`flags.${MODULE_ID}.overtime.savesRemaining`] = Number(this.currentData.savesRemaining);
+      if (Number(this.currentData.failsRemaining) !== this.originalRemaining.fails) remaining[`flags.${MODULE_ID}.overtime.failsRemaining`] = Number(this.currentData.failsRemaining);
+      if (Object.keys(remaining).length) await (this.effect as ActiveEffect.Implementation).update(remaining);
     }
 
     this.submitted = true;

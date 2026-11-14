@@ -1,14 +1,21 @@
-import { effectChange } from "./module/compatibility.js";
-import { registerSettings, fetchParams, configSettings, checkRule, enableWorkflow, fetchSoundSettings, midiSoundSettingsBackup, readySettingsSetup, collectSettingData, exportSettingsToJSON, importSettingsFromJSON, safeGetGameSetting, shouldDisplaySaveDC, triggeredActivityTargetOptions, triggeredActivityRollAsOptions, resetConfigSettingsToDefaults } from './module/settings.js';
+import { rollFieldLocalizations, rollFieldMappings } from "./module/rollFields.js";
+import "./module/damageAbsorption.js";
+import { registerSettings, fetchParams, configSettings, checkRule, enableWorkflow, fetchSoundSettings, midiSoundSettingsBackup, readySettingsSetup, collectSettingData, exportSettingsToJSON, importSettingsFromJSON, safeGetGameSetting, shouldDisplaySaveDC, triggeredActivityTargetOptions, triggeredActivityRollAsOptions, resetConfigSettingsToDefaults, setTokenDocumentSets } from './module/settings.js';
+import { decodeWorkflowOptions, encodeWorkflowOptions, registerWorkflowOptionsSchema } from "./module/lib/workflowOptionsCodec.js";
 import { preloadTemplates } from './module/preloadTemplates.js';
 import { checkModules, setupModules } from './module/setupModules.js';
 import { itemPatching, visionPatching, actorAbilityRollPatching, readyPatching, initPatching, addDiceTermModifiers, computeAbilityAdvantage, computeSkillAdvantage, computeToolAdvantage, processWoundedStatus, getActorWoundedSemaphore } from './module/patching.js';
 import { MidiDependentsRegistry } from './module/lib/MidiDependentsRegistry.js';
 import { initHooks, readyHooks, setupHooks } from './module/Hooks.js';
+import { setupCATIntegration } from './module/catIntegration.js';
+import { setupRegionMagic } from './module/regionMagic.js';
+import { setupMagicSight, drawnMagicSight } from './module/magicSight.js';
 import { SaferSocket, initGMActionSetup, setupSocket, socketlibSocket, unTimedExecuteAsGM } from './module/GMAction.js';
 import { setupSheetQol } from './module/sheetQOL.js';
-import { TrapWorkflow, DamageOnlyWorkflow, Workflow, DummyWorkflow, DDBGameLogWorkflow, UserWorkflow } from './module/Workflow.js';
-import { addConcentrationDependent, addRollTo, applyTokenDamage, applyTokenDamageMany, canSee, canSense, canSenseModes, checkDistance, checkIncapacitated, checkNearby, chooseEffect, completeItemUse, computeCoverBonus, contestedRoll, createConditionData, throttledUpdate, displayDSNForRoll, doConcentrationCheck, doOverTimeEffect, evalAllConditions, evalCondition, findNearby, findNearbyCount, getCachedDocument, getChanges, getConcentrationEffect, getTokenDocument, getOrCreateTokenForActor, getOrCreateTokenForActorAsSet, getTokenPlayerName, getTokenPlayerNameForUser, getTraitMult, hasCondition, hasUsedBonusAction, hasUsedReaction, isValidTarget, midiRenderAttackRoll, midiRenderBonusDamageRoll, midiRenderDamageRoll, midiRenderOtherDamageRoll, midiRenderRoll, fromActorUuid, playerFor, playerForActor, raceOrType, reactionDialog, removeHiddenCondition, removeInvisibleCondition, removeReactionUsed, setBonusActionUsed, setReactionUsed, tokenForActor, typeOrRace, validRollAbility, actorFromUuid, removeActionUsed, removeBonusActionUsed, getCheckRollModeFor, getSaveRollModeFor, completeActivityUse, checkActivityRange, modifyDamageBy, computeDistance, getDistance, getItemFromEffectOrigin, addDependent, cleanCPRFlanked, updatesCache, createDamageDetail, activityHasEmanationNoTemplate, getVitalityItem, getVitalityValue, getVitalityMax, hasVitalitySystem, resolveItemMacro, resolveActivityMacro, setupMidiFlagTypes, initCoverConstants, ReactionDialog, RollModifyDialog, sizeNumeric } from './module/utils.js';
+import { TrapWorkflow, DamageOnlyWorkflow, Workflow, DummyWorkflow, UserWorkflow } from './module/Workflow.js';
+import { addConcentrationDependent, addRollTo, addRollToAsync, applyTokenDamage, applyTokenDamageMany, canSee, canSense, canSenseModes, checkDistance, checkIncapacitated, checkNearby, chooseEffect, completeItemUse, computeCoverBonus, getCoverBonus, tokenAtPosition, createConditionData, throttledUpdate, displayDSNForRoll, doConcentrationCheck, doOverTimeEffect, evalAllConditions, evalCondition, findNearby, findNearbyCount, getCachedDocument, getChanges, getConcentrationEffect, getTokenDocument, getOrCreateTokenForActor, getOrCreateTokenForActorAsSet, getTokenPlayerName, getTokenPlayerNameForUser, getTraitMult, hasCondition, hasUsedBonusAction, hasUsedReaction, isValidTarget, midiRenderAttackRoll, midiRenderBonusDamageRoll, midiRenderDamageRoll, midiRenderOtherDamageRoll, midiRenderRoll, fromActorUuid, playerFor, playerForActor, raceOrType, reactionDialog, removeHiddenCondition, removeInvisibleCondition, removeReactionUsed, setActionUsed, setBonusActionUsed, setReactionUsed, hasUsedAction, tokenForActor, typeOrRace, validRollAbility, actorFromUuid, removeActionUsed, removeBonusActionUsed, getCheckRollModeFor, getSaveRollModeFor, completeActivityUse, checkActivityRange, unseenTargets, totalCoverTargets, modifyDamageBy, computeDistance, convertDuration, splitOvertimeSpec, isRangeCheckable, activityRanges, getDistance, getItemFromEffectOrigin, addDependent, cleanCPRFlanked, updatesCache, createDamageDetail, activityHasEmanationNoTemplate, getVitalityItem, getVitalityValue, getVitalityMax, hasVitalitySystem, resolveItemMacro, resolveActivityMacro, setupMidiFlagTypes, initCoverConstants, ReactionDialog, RollModifyDialog, sizeNumeric, restoreWorkflowTokenSets, setupMarkerChecks, setupCheckVision, toggleStatus } from './module/utils.js';
+import { addFollowUp } from './module/followUps.js';
+import { highlightTokens } from './module/lib/tokenHighlight.js';
 import { ConfigPanel } from './module/apps/ConfigPanel.js';
 import { RollStats } from './module/RollStats.js';
 import { OnUseMacroOptions } from './module/apps/Item.js';
@@ -17,11 +24,12 @@ import { MidiSounds } from './module/midi-sounds.js';
 import { addUndoChatMessage, getUndoQueue, removeMostRecentWorkflow, showUndoQueue, undoMostRecentWorkflow } from './module/undo.js';
 import { UndoWorkflow, showUndoWorkflowApp } from './module/apps/UndoWorkflow.js';
 import { TroubleShooter } from './module/apps/TroubleShooter.js';
+import { notifyFeatureOverlaps, setupFeatureOverlaps } from './module/featureOverlaps.js';
 import { TargetConfirmationDialog } from './module/apps/TargetConfirmation.js';
 import { TargetConfirmationConfig } from './module/apps/TargetConfirmationConfig.js';
 import { MidiAttackActivity, setupAttackActivity } from './module/activities/AttackActivity.js';
 import { RollModifierTracker } from './module/lib/RollModifierTracker.js';
-import { ChatLogMidi } from './module/ChatClasses/ChatLogMidi.js';
+import { TokenDocumentSet, setupTokenSetMode, tokenSetDocumentMode } from './module/lib/tokenDocumentSet.js';
 import { injectMidiCompletions } from './module/lib/midiCompletions.js';
 import { OverTimeEditor } from './module/apps/OverTimeEditor.js';
 import { ConditionEditor } from './module/apps/ConditionEditor.js';
@@ -34,6 +42,9 @@ import { ModuleReviewDialog } from './module/apps/ModuleReviewDialog.js';
 import { RollStatsDisplay } from './module/apps/RollStatsDisplay.js';
 import { SoundConfigPanel } from './module/apps/SoundConfigPanel.js';
 import { registerHandlebarsHelpers } from './module/lib/HandlebarsHelpers.js';
+import { MidiRegionActivityBehaviorType } from './module/regionBehaviors/MidiRegionActivityBehaviorType.js';
+import { MidiRegionLightBehaviorType } from './module/regionBehaviors/MidiRegionLightBehaviorType.js';
+import { MidiRegionBehaviorConfig } from './module/apps/MidiRegionBehaviorConfig.js';
 
 // Register macro-autocomplete hook handler at module load time so it's
 // ready before macro-autocomplete fires "macro-autocomplete.ready" in its ready hook.
@@ -83,19 +94,16 @@ export let ceInterface: {
   }) => Promise<void>
 } | undefined;
 
-export let BaseChatLogClass;
 export let debugEnabled = 0;
 // 0 = none, warnings = 1, debug = 2, all = 3
 export let debug = (...args: any[]) => { if (debugEnabled > 1) console.log("DEBUG: midi-qol | ", ...args) };
 export let log = (...args: any[]) => console.log("midi-qol | ", ...args);
 export let warn = (...args: any[]) => { if (debugEnabled > 0) console.warn("midi-qol | ", ...args) };
 export let error = (...args: any[]) => console.error("midi-qol | ", ...args);
-export let timelog = (...args: any[]) => warn("midi-qol | ", Date.now(), ...args);
-export let levelsAPI: any;
 // export let allDamageTypes;
 export const MODULE_ID = "midi-qol";
 
-const { StringField } = foundry.data.fields;
+const { StringField, NumberField } = foundry.data.fields;
 
 export let i18n = (key: SelectOptionValue) => {
   const k = typeof key === "object" ? key.label : key;
@@ -104,14 +112,6 @@ export let i18n = (key: SelectOptionValue) => {
 
 export let i18nFormat = (key: string, data = {}) => {
   return game.i18n?.format(key, data) ?? key;
-}
-
-// dnd5e 5.3 nested DND5E.Healing under DND5E.HEAL.HealingButton; older 5.2.x
-// has the flat key. Feature-detect via i18n.has so we work on both.
-export function getHealingLabel(): string {
-  return game.i18n?.has("DND5E.HEAL.HealingButton")
-    ? i18n("DND5E.HEAL.HealingButton")
-    : i18n("DND5E.Healing");
 }
 
 export function getStaticID(id: string): string {
@@ -180,15 +180,16 @@ export let MQDamageRollTypes = ["defaultDamage", "otherDamage", "bonusDamage"];
 /* ------------------------------------ */
 /* Initialize module					*/
 /* ------------------------------------ */
-//@ts-expect-error
-Hooks.once("levelsReady", function () {
-  // @ts-expect-error
-  levelsAPI = CONFIG.Levels.API;
-});
 Hooks.once("init", () => {
   registerHandlebarsHelpers();
+  setupTokenNames();
   setupChatMessageMidi();
   setupDamageCardMessage();
+  setupUsageCardMessage();
+  setupCardNoteMessage();
+  setupContestNote();
+  setupInfluenceNote();
+  setupCardContentGuard();
   //@ts-expect-error
   CONFIG.ChatMessage.documentClass = ChatMessageMidi;
   // @ts-expect-error
@@ -199,35 +200,58 @@ Hooks.once("init", () => {
 // @ts-expect-error it'll get populated incrementally
 globalThis.MidiQOL ??= {};
 Object.assign(globalThis.MidiQOL, {
+  fillRulesText,
   activityHasEmanationNoTemplate,
   addDependent,
   addConcentrationDependent,
   addRollTo,
+  addRollToAsync,
   addUndoChatMessage,
   applyTokenDamage,
   applyTokenDamageMany,
   actorFromUuid,
   canSee,
+  drawnMagicSight,
   canSense,
   canSenseModes,
   checkActivityRange,
+  unseenTargets,
+  totalCoverTargets,
+  isRangeCheckable,
+  activityRanges,
   checkDistance,
   checkIncapacitated,
   checkNearby,
   chooseEffect,
   completeItemUse,
   completeActivityUse,
+  addFollowUp,
   computeAbilityAdvantage,
   computeCoverBonus,
+  getCoverBonus,
+  highlightTokens,
+  tokenAtPosition,
   computeDistance,
+  convertDuration,
+  splitOvertimeSpec,
   computeSkillAdvantage,
   computeToolAdvantage,
+  playerWaits: { begin: beginPlayerWait, track: trackPlayerWait, settle: settlePlayerWait, claim: claimPlayerWait, known: knownPlayerWaits },
+  addCardNote,
+  removeCardNote,
+  registerCardNoteRenderer,
+  cardNoteMessageData,
+  renderLinkedMessage,
+  visibleRollTotal,
+  tokenName,
+  tokenNameMarkup,
   contestedRoll,
   createConditionData,
   createDamageDetail,
+  decodeWorkflowOptions,
+  encodeWorkflowOptions,
   createEffects,
   DamageOnlyWorkflow,
-  DDBGameLogWorkflow,
   debug,
   displayDSNForRoll,
   doConcentrationCheck,
@@ -254,6 +278,7 @@ Object.assign(globalThis.MidiQOL, {
   getVitalityMax,
   getVitalityValue,
   hasCondition,
+  hasUsedAction,
   hasUsedBonusAction,
   hasUsedReaction,
   hasVitalitySystem,
@@ -266,6 +291,8 @@ Object.assign(globalThis.MidiQOL, {
   midiRenderBonusDamageRoll,
   midiRenderOtherDamageRoll,
   MidiSounds,
+  MidiRegionActivityBehaviorType,
+  MidiRegionLightBehaviorType,
   modifyDamageBy,
   moveToken,
   moveTokenAwayFromPoint,
@@ -285,8 +312,10 @@ Object.assign(globalThis.MidiQOL, {
   removeReactionUsed,
   resolveItemMacro,
   resolveActivityMacro,
+  requiresTargetConfirmation,
   resolveTargetConfirmation,
   RollModifierTracker,
+  setActionUsed,
   setBonusActionUsed,
   setReactionUsed,
   sizeNumeric,
@@ -294,7 +323,11 @@ Object.assign(globalThis.MidiQOL, {
   showUndoWorkflowApp,
   teleportToken,
   testfunc,
+  toggleStatus,
   tokenForActor,
+  TokenDocumentSet,
+  setTokenDocumentSets,
+  tokenDocumentSets: tokenSetDocumentMode,
   TrapWorkflow,
   typeOrRace,
   undoMostRecentWorkflow,
@@ -304,9 +337,8 @@ Object.assign(globalThis.MidiQOL, {
   warn,
   Workflow,
   workflowClass: Workflow,
-  Workflows: { "Workflow": Workflow, "DamageOnlyWorkflow": DamageOnlyWorkflow, "TrapWorkflow": TrapWorkflow, "DummyWorkflow": DummyWorkflow, "DDBGameLogWorkflow": DDBGameLogWorkflow },
+  Workflows: { "Workflow": Workflow, "DamageOnlyWorkflow": DamageOnlyWorkflow, "TrapWorkflow": TrapWorkflow, "DummyWorkflow": DummyWorkflow },
   ChatClasses: {
-    ChatLogMidi,
     ChatMessageMidi,
     DamageApplicationElementMidi
   },
@@ -368,6 +400,7 @@ function setupActivities() {
   setupSummonActivity();
   globalThis.MidiQOL.activityTypes["summon"] = { documentClass: MidiSummonActivity };
   setupTransformActivity();
+  setupTeleportActivity();
   globalThis.MidiQOL.activityTypes["transform"] = { documentClass: MidiTransformActivity };
   setupUtilityActivity();
   globalThis.MidiQOL.activityTypes["utility"] = { documentClass: MidiUtilityActivity };
@@ -383,17 +416,30 @@ Hooks.once('init', async function () {
   log('Initializing midi-qol');
   window.customElements.define("midi-damage-application", DamageApplicationElementMidi as unknown as CustomElementConstructor);
   setupActivities();
+  setupCATIntegration();
+  setupPlayerWaits();
+  setupPlayerWaitsUI();
+  setupDialogCountdowns();
+  setupRegionMagic();
+  setupMagicSight();
 
-  // Only install ChatLogMidi if chatlog-prune module is not active
-  if (game.settings.get("midi-qol", "pruneChatLog") && !game.modules.get("chatlog-prune")?.active) {
-    foundry.utils.logCompatibilityWarning(
-      "midi-qol | Built-in chat log pruning is deprecated. Please install and activate the 'chatlog-prune' module instead.",
-      { since: "13.0.37", until: "13.1.0" }
-    );
-    BaseChatLogClass = CONFIG.ui.chat;
-    //@ts-expect-error - lots of incorrect missing elements from the class
-    CONFIG.ui.chat = ChatLogMidi;
-  }
+  // Register custom RegionBehaviorType for region activities (emanation auras)
+  CONFIG.RegionBehavior.dataModels[`${MODULE_ID}.regionActivity`] = MidiRegionActivityBehaviorType as any;
+  CONFIG.RegionBehavior.typeLabels![`${MODULE_ID}.regionActivity`] = `BEHAVIOR.TYPES.${MODULE_ID}.regionActivity.label`;
+  CONFIG.RegionBehavior.typeIcons[`${MODULE_ID}.regionActivity`] = "fa-solid fa-hat-wizard";
+
+  // Register custom sheet for regionActivity behavior config (renders the rules ArrayField)
+  foundry.applications.apps.DocumentSheetConfig.registerSheet(RegionBehavior, MODULE_ID, MidiRegionBehaviorConfig as any, {
+    types: [`${MODULE_ID}.regionActivity`],
+    makeDefault: true,
+    label: "Midi QOL Region Activity"
+  });
+
+  // Register custom RegionBehaviorType for region lights
+  CONFIG.RegionBehavior.dataModels[`${MODULE_ID}.regionLight`] = MidiRegionLightBehaviorType as any;
+  CONFIG.RegionBehavior.typeLabels![`${MODULE_ID}.regionLight`] = `BEHAVIOR.TYPES.${MODULE_ID}.regionLight.label`;
+  CONFIG.RegionBehavior.typeIcons[`${MODULE_ID}.regionLight`] = "fa-solid fa-lightbulb";
+  MidiRegionLightBehaviorType.registerHooks();
 
   // @ts-expect-error no dnd5e-types
   systemConcentrationId = CONFIG.specialStatusEffects.CONCENTRATING;
@@ -430,6 +476,7 @@ Hooks.once('init', async function () {
 
   // Register custom module settings
   registerSettings();
+  setupTokenSetMode(!!game.settings.get("midi-qol", "tokenDocumentSets"));
   fetchParams();
   fetchSoundSettings();
   // This seems to cause problems for localisation for the items compendium (at least for french)
@@ -456,91 +503,98 @@ Hooks.once('init', async function () {
 });
 //@ts-expect-error
 Hooks.on("dae.modifySpecials", (specKey, specials, _characterSpec) => {
-  specials[`flags.${MODULE_ID}.onUseMacroName`] = [new StringField(), 0];
+  specials[`flags.${MODULE_ID}.onUseMacroName`] = [new StringField(), "custom"];
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.onUseMacroName`);
-  specials[`flags.${MODULE_ID}.optional.NAME.macroToCall`] = [new StringField(), 0];
+  specials[`flags.${MODULE_ID}.optional.NAME.macroToCall`] = [new StringField(), "custom"];
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.optional.NAME.macroToCall`);
   for (let type of ["dm", "da", "di", "dv", "dr"]) {
-    // specials[`system.traits.${type}.midi.all`] = [new StringField(), -1];
+    // specials[`system.traits.${type}.midi.all`] = [new StringField(), ""];
     // daeFieldBrowserFields.push(`system.traits.${type}.midi.all`);
-    specials[`system.traits.${type}.midi.magical`] = [new StringField(), -1];
+    specials[`system.traits.${type}.midi.magical`] = [new StringField(), ""];
     daeFieldBrowserFields.push(`system.traits.${type}.midi.magical`);
-    specials[`system.traits.${type}.midi.non-magical`] = [new StringField(), -1];
+    specials[`system.traits.${type}.midi.non-magical`] = [new StringField(), ""];
     daeFieldBrowserFields.push(`system.traits.${type}.midi.non-magical`);
-    specials[`system.traits.${type}.midi.non-magical-physical`] = [new StringField(), -1];
+    specials[`system.traits.${type}.midi.non-magical-physical`] = [new StringField(), ""];
     daeFieldBrowserFields.push(`system.traits.${type}.midi.non-magical-physical`);
-    specials[`system.traits.${type}.midi.non-silver-physical`] = [new StringField(), -1];
+    specials[`system.traits.${type}.midi.non-silver-physical`] = [new StringField(), ""];
     daeFieldBrowserFields.push(`system.traits.${type}.midi.non-silver-physical`);
-    specials[`system.traits.${type}.midi.non-adamant-physical`] = [new StringField(), -1];
+    specials[`system.traits.${type}.midi.non-adamant-physical`] = [new StringField(), ""];
     daeFieldBrowserFields.push(`system.traits.${type}.midi.non-adamant-physical`);
-    specials[`system.traits.${type}.midi.non-physical`] = [new StringField(), -1];
+    specials[`system.traits.${type}.midi.non-physical`] = [new StringField(), ""];
     daeFieldBrowserFields.push(`system.traits.${type}.midi.non-physical`);
-    specials[`system.traits.${type}.midi.physical`] = [new StringField(), -1];
+    specials[`system.traits.${type}.midi.physical`] = [new StringField(), ""];
     daeFieldBrowserFields.push(`system.traits.${type}.midi.physical`);
-    specials[`system.traits.${type}.midi.spell`] = [new StringField(), -1];
+    specials[`system.traits.${type}.midi.spell`] = [new StringField(), ""];
     daeFieldBrowserFields.push(`system.traits.${type}.midi.spell`);
-    specials[`system.traits.${type}.midi.non-spell`] = [new StringField(), -1];
+    specials[`system.traits.${type}.midi.non-spell`] = [new StringField(), ""];
     daeFieldBrowserFields.push(`system.traits.${type}.midi.non-spell`);
     if (!["dm", "da"].includes(type)) allAttackTypes.forEach(attackType => {
-      specials[`system.traits.${type}.midi.${attackType}`] = [new StringField(), -1];
+      specials[`system.traits.${type}.midi.${attackType}`] = [new StringField(), ""];
       daeFieldBrowserFields.push(`system.traits.${type}.midi.${attackType}`);
     });
   }
 
   if (GameSystemConfig.damageTypes) {
-    specials[`system.traits.dm.midi.all`] = [new StringField(), -1];
+    specials[`system.traits.dm.midi.all`] = [new StringField(), ""];
     daeFieldBrowserFields.push(`system.traits.dm.midi.all`);
     Object.keys(GameSystemConfig.damageTypes).forEach(dType => {
-      specials[`system.traits.dm.amount.${dType}`] = [new StringField(), -1]
-      daeFieldBrowserFields.push(`system.traits.dm.${dType}`);
+      specials[`system.traits.dm.amount.${dType}`] = [new StringField(), ""]
+      daeFieldBrowserFields.push(`system.traits.dm.amount.${dType}`);
     });
-    Object.keys(GameSystemConfig.itemActionTypes).forEach(aType => {
-      specials[`system.traits.dm.midi.${aType}`] = [new StringField(), -1];
+    // A healing activity's damage is healing: use system.traits.dm.amount.healing
+    Object.keys(GameSystemConfig.itemActionTypes).filter(aType => aType !== "heal").forEach(aType => {
+      specials[`system.traits.dm.midi.${aType}`] = [new StringField(), ""];
       daeFieldBrowserFields.push(`system.traits.dm.midi.${aType}`);
     });
     Object.keys(GameSystemConfig.healingTypes).forEach(dType => {
-      specials[`system.traits.dm.amount.${dType}`] = [new StringField(), -1];
-      daeFieldBrowserFields.push(`system.traits.dm.midi.${dType}`);
+      specials[`system.traits.dm.amount.${dType}`] = [new StringField(), ""];
+      daeFieldBrowserFields.push(`system.traits.dm.amount.${dType}`);
     });
-    specials[`system.traits.da.midi.all`] = [new StringField(), -1];
+    specials[`system.traits.da.midi.all`] = [new StringField(), ""];
     daeFieldBrowserFields.push(`system.traits.da.midi.all`);
     Object.keys(GameSystemConfig.damageTypes).forEach(dType => {
-      specials[`system.traits.da.${dType}`] = [new StringField(), -1];
+      specials[`system.traits.da.${dType}`] = [new StringField(), ""];
       daeFieldBrowserFields.push(`system.traits.da.${dType}`);
     });
     Object.keys(GameSystemConfig.itemActionTypes).forEach(aType => {
-      specials[`system.traits.da.midi.${aType}`] = [new StringField(), -1];
+      specials[`system.traits.da.midi.${aType}`] = [new StringField(), ""];
       daeFieldBrowserFields.push(`system.traits.da.midi.${aType}`);
     });
     Object.keys(GameSystemConfig.healingTypes).forEach(dType => {
-      specials[`system.traits.da.${dType}`] = [new StringField(), -1];
-      daeFieldBrowserFields[`system.traits.da.${dType}`] = [new StringField(), -1];
+      specials[`system.traits.da.${dType}`] = [new StringField(), ""];
+      daeFieldBrowserFields[`system.traits.da.${dType}`] = [new StringField(), ""];
     });
   }
 
-  // specials[`system.traits.dm.midi.final`] = [new StringField(), -1];
-  specials[`system.traits.idi.value`] = [new StringField(), -1];
+  // specials[`system.traits.dm.midi.final`] = [new StringField(), ""];
+  specials[`system.traits.idi.value`] = [new StringField(), ""];
   daeFieldBrowserFields.push(`system.traits.idi.value`);
-  specials[`system.traits.idr.value`] = [new StringField(), -1];
+  specials[`system.traits.idr.value`] = [new StringField(), ""];
   daeFieldBrowserFields.push(`system.traits.idr.value`);
-  specials[`system.traits.idv.value`] = [new StringField(), -1];
+  specials[`system.traits.idv.value`] = [new StringField(), ""];
   daeFieldBrowserFields.push(`system.traits.idv.value`);
-  specials[`system.traits.ida.value`] = [new StringField(), -1];
+  specials[`system.traits.ida.value`] = [new StringField(), ""];
   daeFieldBrowserFields.push(`system.traits.ida.value`);
-  specials[`system.traits.idm.value`] = [new StringField(), -1];
+  specials[`system.traits.idm.value`] = [new StringField(), ""];
   daeFieldBrowserFields.push(`system.traits.idm.value`);
+
+  // Token-targeted vision height overrides (0-100% of token height)
+  specials[`token.flags.${MODULE_ID}.visionSourceHeight`] = [new NumberField(), "override"];
+  daeFieldBrowserFields.push(`token.flags.${MODULE_ID}.visionSourceHeight`);
+  specials[`token.flags.${MODULE_ID}.visionTargetHeight`] = [new NumberField(), "override"];
+  daeFieldBrowserFields.push(`token.flags.${MODULE_ID}.visionTargetHeight`);
 });
 
 //@ts-expect-error
 Hooks.on("dae.modifyBaseValues", (specKey: string, baseValues, _characterSpec) => {
-  baseValues[`flags.${MODULE_ID}.ActivityOverTime`] = [new StringField({ initial: "" }), -1];
+  baseValues[`flags.${MODULE_ID}.ActivityOverTime`] = [new StringField({ initial: "" }), ""];
 });
 //@ts-expect-error
 Hooks.on("dae.addFieldMappings", (fieldMappings) => {
+  // DAE asks during its own init, before midi's: the mappings come from CONFIG only, never midi's settings
   GameSystemConfig = CONFIG.DND5E;
   let allAttackTypes = ["rwak", "mwak", "rsak", "msak"];
-  registerSettings();
-  fetchParams();
+  fieldMappings["system.traits.da.all"] = { key: "system.traits.da.value", value: "ALL", type: "add" };
   for (let key of Object.keys(GameSystemConfig.damageTypes ?? {})) {
     fieldMappings[`flags.${MODULE_ID}.DR.${key}`] = `system.traits.dm.amount.${key}`;
   }
@@ -562,7 +616,8 @@ Hooks.on("dae.addFieldMappings", (fieldMappings) => {
   fieldMappings[`flags.${MODULE_ID}.DR.spell`] = `system.traits.dm.midi.spell`;
 
   // fieldMappings[`flags.${MODULE_ID}.DR.final`] = `system.traits.dm.midi.final`;
-  fieldMappings[`flags.${MODULE_ID}.concentrationSaveBonus`] = "system.attributes.concentration.bonuses.save";
+  fieldMappings[`flags.${MODULE_ID}.concentrationSaveBonus`] = "system.attributes.concentration.roll.bonus";
+  fieldMappings[`flags.${MODULE_ID}.deathSaveBonus`] = "system.attributes.death.roll.bonus";
   fieldMappings[`flags.${MODULE_ID}.fail.critical.all`] = `flags.${MODULE_ID}.grants.noCritical.all`;
   for (let attackType of allAttackTypes) {
     fieldMappings[`flags.${MODULE_ID}.fail.critical.${attackType}`] = `flags.${MODULE_ID}.grants.noCritical.${attackType}`;
@@ -578,8 +633,9 @@ Hooks.on("dae.addFieldMappings", (fieldMappings) => {
   }
   fieldMappings[`flags.${MODULE_ID}.max.ability.save.concentration`] = `system.attributes.concentration.roll.max`;
   fieldMappings[`flags.${MODULE_ID}.min.ability.save.concentration`] = `system.attributes.concentration.roll.min`;
-  fieldMappings[`flags.${MODULE_ID}.concentrationSaveBonus`] = `system.attributes.concentration.bonuses.save`;
+  Object.assign(fieldMappings, rollFieldMappings(Object.keys(GameSystemConfig.abilities), Object.keys(GameSystemConfig.skills ?? {}), Object.keys(GameSystemConfig.tools ?? {})));
   fieldMappings[`flags.${MODULE_ID}.sharpShooter`] = `flags.dnd5e.sharpShooter`;
+  fieldMappings[`flags.${MODULE_ID}.optional.*.ac`] = `flags.${MODULE_ID}.optional.*.acOnAttack`;
   fieldMappings[`flags.${MODULE_ID}.grants.fail.advantage.attack.all`] = `flags.${MODULE_ID}.grants.noAdvantage.attack.all`;
   fieldMappings[`flags.${MODULE_ID}.grants.fail.disadvantage.attack.all`] = `flags.${MODULE_ID}.grants.noDisadvantage.attack.all`;
 
@@ -587,7 +643,11 @@ Hooks.on("dae.addFieldMappings", (fieldMappings) => {
 
 });
 
+/** DAE's special durations with midi's, for choosing them outside DAE's effect sheet (activity statuses). */
+export let specialDurationChoices: Record<string, string> = {};
+
 Hooks.on("dae.addSpecialDurations", daeSpecialDurations => {
+  specialDurationChoices = daeSpecialDurations;
   daeSpecialDurations["1Action"] = i18n("dae.1Action");
   daeSpecialDurations["Bonus Action"] = i18n("dae.Bonus Action");
   daeSpecialDurations["Reaction"] = i18n("dae.Reaction");
@@ -595,6 +655,7 @@ Hooks.on("dae.addSpecialDurations", daeSpecialDurations => {
   daeSpecialDurations["1Spell"] = i18n("dae.1Spell");
   daeSpecialDurations["1Attack"] = i18nFormat("dae.1Attack", { type: `${i18n("dae.spell")}/${i18n("dae.weapon")} ${i18n("dae.attack")}` });
   daeSpecialDurations["1Hit"] = i18nFormat("dae.1Hit", { type: `${i18n("dae.spell")}/${i18n("dae.weapon")}` });
+  daeSpecialDurations["1Miss"] = i18nFormat("dae.1Miss", { type: `${i18n("dae.spell")}/${i18n("dae.weapon")}` });
   daeSpecialDurations["1Critical"] = i18n("dae.1Critical");
   daeSpecialDurations["1Fumble"] = i18n("dae.1Fumble");
   //    daeSpecialDurations["1Hit"] = i18n("dae.1Hit");
@@ -603,6 +664,9 @@ Hooks.on("dae.addSpecialDurations", daeSpecialDurations => {
   attackTypes.forEach(at => {
     daeSpecialDurations[`1Attack:${at}`] = `${GameSystemConfig.itemActionTypes[at]}: ${i18nFormat("dae.1Attack", { type: GameSystemConfig.itemActionTypes[at] })}`;
     daeSpecialDurations[`1Hit:${at}`] = `${GameSystemConfig.itemActionTypes[at]}: ${i18nFormat("dae.1Hit", { type: GameSystemConfig.itemActionTypes[at] })}`;
+    daeSpecialDurations[`1Miss:${at}`] = `${GameSystemConfig.itemActionTypes[at]}: ${i18nFormat("dae.1Miss", { type: GameSystemConfig.itemActionTypes[at] })}`;
+    daeSpecialDurations[`isAttacked:${at}`] = `${GameSystemConfig.itemActionTypes[at]}: ${i18n("dae.isAttacked")}`;
+    daeSpecialDurations[`isHit:${at}`] = `${GameSystemConfig.itemActionTypes[at]}: ${i18n("dae.isHit")}`;
   })
   daeSpecialDurations["DamageDealt"] = i18n("dae.DamageDealt");
   daeSpecialDurations["isAttacked"] = i18n("dae.isAttacked");
@@ -611,20 +675,21 @@ Hooks.on("dae.addSpecialDurations", daeSpecialDurations => {
   daeSpecialDurations["zeroHP"] = i18n("dae.ZeroHP");
   daeSpecialDurations["isHit"] = i18n("dae.isHit");
   daeSpecialDurations["isHitCritical"] = i18n("dae.isHitCritical");
+  daeSpecialDurations["isMissed"] = i18n("dae.isMissed");
   daeSpecialDurations["isSave"] = `${i18n("dae.isRollBase")} ${i18n("dae.isSaveDetail")}`;
   daeSpecialDurations["isSaveSuccess"] = `${i18n("dae.isRollBase")} ${i18n("dae.isSaveDetail")}: ${i18n("dae.success")}`;
   daeSpecialDurations["isSaveFailure"] = `${i18n("dae.isRollBase")} ${i18n("dae.isSaveDetail")}: ${i18n("dae.failure")}`;
   daeSpecialDurations["isConcentrationSave"] = i18n("dae.isConcentrationSave");
-  daeSpecialDurations["isConcentrationSaveFail"] = `${i18n("dae.isConcentrationSave")}: ${i18n("dae.failure")}`;
+  daeSpecialDurations["isConcentrationSaveFailure"] = `${i18n("dae.isConcentrationSave")}: ${i18n("dae.failure")}`;
   daeSpecialDurations["isConcentrationSaveSuccess"] = `${i18n("dae.isConcentrationSave")}: ${i18n("dae.success")}`;
   daeSpecialDurations["isCheck"] = `${i18n("dae.isRollBase")} ${i18n("dae.isCheckDetail")}`;
   daeSpecialDurations["isSkill"] = `${i18n("dae.isRollBase")} ${i18n("dae.isSkillDetail")}`;
   daeSpecialDurations["isInitiative"] = `${i18n("dae.isRollBase")} ${i18n("dae.isInitiativeDetail")}`;
 
   daeSpecialDurations["isMoved"] = i18n("dae.isMoved");
-  daeSpecialDurations["longRest"] = i18n("DND5E.LongRest");
-  daeSpecialDurations["shortRest"] = i18n("DND5E.ShortRest");
-  daeSpecialDurations["newDay"] = `${i18n("DND5E.NewDay")}`;
+  daeSpecialDurations["longRest"] = i18n("DND5E.REST.Long.Label");
+  daeSpecialDurations["shortRest"] = i18n("DND5E.REST.Short.Label");
+  daeSpecialDurations["newDay"] = `${i18n("DND5E.REST.NewDay.Label")}`;
   Object.keys(GameSystemConfig.abilities).forEach(abl => {
     let ablString = GameSystemConfig.abilities[abl].label;
     daeSpecialDurations[`isSave.${abl}`] = `${i18n("dae.isRollBase")} ${ablString} ${i18n("dae.isSaveDetail")}`;
@@ -655,6 +720,11 @@ Hooks.on("dae.setFieldData", fieldData => {
 Hooks.once('setup', function () {
   // Do anything after initialization but before ready
   setupModules();
+  setupFeatureOverlaps();
+  setupMarkerChecks();
+  setupCheckVision();
+  // Custom D&D 5e's Conditions config replaces CONFIG.statusEffects with this list, which would drop midi's statuses.
+  Hooks.on("customDnd5e.setStatusEffectsConfig", statusEffects => addMidiStatusEffects(statusEffects));
   setupSocket();
   fetchParams();
   fetchSoundSettings();
@@ -662,7 +732,8 @@ Hooks.once('setup', function () {
   visionPatching();
   initGMActionSetup();
   setupHooks();
-  MidiQOL.MQdefaultDamageType = i18n("midi-qol.defaultDamageType");
+  // An untyped damage roll in a use with nothing typed to take a type from: midi's No Type (applied, no resistance)
+  MidiQOL.MQdefaultDamageType = "none";
   MQItemMacroLabel = i18n("midi-qol.ItemMacroText") ?? "ItemMacro";
   MQActivityMacroLabel = i18n("midi-qol.ActivityMacroText") ?? "ActivityMacro";
   setupSheetQol();
@@ -673,6 +744,11 @@ Hooks.once('setup', function () {
 Hooks.once("dae.setupComplete", () => {
   applyPendingLocalizations();
 });
+
+/*
+ * At ready, not init: the `usage` slot is contended — CPR and CAT may claim it too — and the model
+ * subclasses whatever is registered at that moment, so it must go last rather than first.
+ */
 
 Hooks.once("ready", () => {
   // can't hook off simple cover ready as it fires too early to be able to call api.setLibraryMode
@@ -721,7 +797,6 @@ function addConfigOptions() {
   } else if (config.traits.da) {
     config.traits.da.configKey = "damageTypes"
   }
-  const dnd5eReaction = `DND5E.Reaction`;
   // config.abilityActivationTypes["reactionpreattack"] = `${i18n(dnd5eReaction)} ${i18n("midi-qol.reactionPreAttack")}`;
   // config.abilityActivationTypes["reactiondamage"] = `${i18n(dnd5eReaction)} ${i18n("midi-qol.reactionDamaged")}`;
   // config.abilityActivationTypes["reactionmanual"] = `${i18n(dnd5eReaction)} ${i18n("midi-qol.reactionManual")}`;
@@ -768,7 +843,6 @@ Hooks.once('ready', function () {
   // allDamageTypes.none.label = i18n("DND5E.None");
   // allDamageTypes[""] = allDamageTypes.none
   // allDamageTypes = foundry.utils.mergeObject(allDamageTypes, foundry.utils.mergeObject(GameSystemConfig.damageTypes, GameSystemConfig.healingTypes, { inplace: false }));
-  registerSettings();
   actorAbilityRollPatching();
   setupMidiStatusEffects();
 
@@ -799,6 +873,8 @@ Hooks.once('ready', function () {
     "isSaveFailure": "Target failed a saving throw",
     "preTargetDamageApplication": "Target is about to be damaged by an item",
     "postTargetEffectApplication": "Target has an effect applied by a rolled item",
+    "preTeleport": "Before a Teleport (can cancel or change who moves)",
+    "postTeleport": "After a Teleport",
     "isDamaged": "Target is damaged by an attack",
     "all": "All"
   }
@@ -870,10 +946,20 @@ Hooks.once('ready', function () {
       else console.warn(message);
     }
   }
+  notifyFeatureOverlaps();
 });
 
 import { setupChatMessageMidi, ChatMessageMidi } from './module/ChatClasses/ChatMessageMidi.js';
 import { setupDamageCardMessage } from './module/ChatClasses/DamageCardMessage.js';
+import { setupUsageCardMessage } from './module/ChatClasses/UsageCardMessage.js';
+import { setupPlayerWaits, beginPlayerWait, trackPlayerWait, settlePlayerWait, claimPlayerWait, knownPlayerWaits } from "./module/lib/playerWaits.js";
+import { setupPlayerWaitsUI } from "./module/lib/playerWaitsUI.js";
+import { setupDialogCountdowns } from "./module/lib/dialogCountdown.js";
+import { addCardNote, cardNoteMessageData, registerCardNoteRenderer, removeCardNote, renderLinkedMessage, setupCardContentGuard, visibleRollTotal } from './module/lib/cardNotes.js';
+import { contestedRoll, setupContestNote } from './module/lib/contestedRoll.js';
+import { setupInfluenceNote } from './module/lib/influenceNote.js';
+import { setupTokenNames, tokenName, tokenNameMarkup } from './module/lib/tokenNames.js';
+import { setupCardNoteMessage } from './module/ChatClasses/CardNoteMessage.js';
 import { MidiSaveActivity, setupSaveActivity } from './module/activities/SaveActivity.js';
 import { MidiUtilityActivity, setupUtilityActivity } from './module/activities/UtilityActivity.js';
 import { MidiSummonActivity, setupSummonActivity } from './module/activities/SummonActivity.js';
@@ -881,14 +967,16 @@ import { MidiDamageActivity, setupDamageActivity } from './module/activities/Dam
 import { MidiCastActivity, setupCastActivity } from './module/activities/CastActivity.js';
 import { MidiCheckActivity, setupCheckActivity } from './module/activities/CheckActivity.js';
 import { MidiHealActivity, setupHealActivity } from './module/activities/HealActivity.js';
-import { computeTargetsFromTemplates, resolveTargetConfirmation, selectTargetsFromTemplates, showItemInfo } from './module/activities/activityHelpers.js';
+import { computeTargetsFromTemplates, requiresTargetConfirmation, resolveTargetConfirmation, selectTargetsFromTemplates, showItemInfo } from './module/activities/activityHelpers.js';
 import { MidiActivityMixin, setupMidiActivityMixin } from './module/activities/MidiActivityMixin.js';
 import { MidiForwardActivity, setupForwardActivity } from './module/activities/ForwardActivity.js';
 import { MidiEnchantActivity, setupEnchantActivity } from './module/activities/EnchantActivity.js';
 import { MidiTransformActivity, setupTransformActivity } from './module/activities/TransformActivity.js';
+import { setupTeleportActivity } from './module/activities/TeleportActivity.js';
 import { MidiCombat5e } from './module/MidiCombat5e.js';
 import { MoveTokenOptions, TeleportTokenDestination, TokenOrDocument, SelectOptionValue } from './globals.js';
 import { DamageApplicationElementMidi } from './module/ChatClasses/DamageApplicationElementMidi.js';
+import { fillRulesText } from "./module/lib/rulesText.js";
 
 // Add any additional hooks if necessary
 // Phase 2: setup hook — properties that depend on CONFIG, settings, i18n, or game state
@@ -906,7 +994,10 @@ function setupMidiQOLApi() {
     collectSettingData,
     computeTargetsFromTemplates,
     configSettings: () => { return configSettings },
-    debouncedUpdate: throttledUpdate,
+    debouncedUpdate: (document: ChatMessage.Implementation, updates: ChatMessage.UpdateData) => {
+      foundry.utils.logCompatibilityWarning("midi-qol | MidiQOL.debouncedUpdate is deprecated and will be removed in 14.8.0: use ChatMessage#update.", { since: "14.6.9", until: "14.8.0", once: true });
+      return throttledUpdate(document, updates);
+    },
     enableWorkflow,
     exportSettingsToJSON,
     fetchParams,
@@ -927,6 +1018,8 @@ function setupMidiQOLApi() {
       }),
     },
     MQOnUseOptions,
+    registerWorkflowOptionsSchema,
+    restoreWorkflowTokenSets,
     resetConfigSettingsToDefaults,
     safeGetGameSetting,
     selectTargetsFromTemplates,
@@ -969,8 +1062,20 @@ function setupMidiQOLApi() {
     checkActivityRange,
     checkRule,
     computeCoverBonus,
+    getCoverBonus,
+    highlightTokens,
+    tokenAtPosition,
     computeDistance,
     getDistance,
+    playerWaits: { begin: beginPlayerWait, track: trackPlayerWait, settle: settlePlayerWait, claim: claimPlayerWait, known: knownPlayerWaits },
+    addCardNote,
+    removeCardNote,
+    registerCardNoteRenderer,
+    cardNoteMessageData,
+    renderLinkedMessage,
+    visibleRollTotal,
+    tokenName,
+    tokenNameMarkup,
     contestedRoll,
     displayDSNForRoll,
     doConcentrationCheck,
@@ -979,6 +1084,7 @@ function setupMidiQOLApi() {
     findNearbyCount,
     getTraitMult,
     hasCondition,
+    hasUsedAction,
     hasUsedBonusAction,
     hasUsedReaction,
     humanoid,
@@ -986,6 +1092,7 @@ function setupMidiQOLApi() {
     raceOrType,
     typeOrRace,
     safeGetGameSetting,
+    setActionUsed,
     setBonusActionUsed,
     setReactionUsed,
   }
@@ -997,7 +1104,7 @@ export function testfunc(...args: any[]) {
   console.warn("MidiQOL testfunc called ", ...args)
 }
 
-export async function moveToken(tokenRef: TokenOrDocument | string, newCenter: { x: number, y: number, elevation?: number }, options?: MoveTokenOptions | boolean, legacyOptions?: MoveTokenOptions) {
+export async function moveToken(tokenRef: TokenOrDocument | string, newCenter: { x: number, y: number, elevation?: number, level?: string }, options?: MoveTokenOptions | boolean, legacyOptions?: MoveTokenOptions) {
   // Backward compatibility: moveToken(token, center, animate: boolean, options?)
   let resolvedOptions: MoveTokenOptions | undefined;
   if (typeof options === "boolean") {
@@ -1089,6 +1196,7 @@ function registerFlagLocalization(flagPath: string, templateKey: string, label: 
 function applyPendingLocalizations() {
   const lm = globalThis.DAE?.localizationMap;
   if (!lm || !game.i18n) return;
+  Object.assign(lm, rollFieldLocalizations());
   for (const {flagPath, templateKey, label} of pendingLocalizations) {
     const resolvedLabel = typeof label === "function" ? label() : label;
     lm[flagPath] = {
@@ -1144,7 +1252,6 @@ function setupMidiFlags() {
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.bloodsense`);
   untyped(`flags.${MODULE_ID}.`);
   untyped(`flags.${MODULE_ID}.concentrationSaveBonus`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.concentrationSaveBonus`);
   booleanFormula(`flags.${MODULE_ID}.potentCantrip`);
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.potentCantrip`);
   booleanFormula(`flags.${MODULE_ID}.sculptSpells`);
@@ -1153,12 +1260,6 @@ function setupMidiFlags() {
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.carefulSpells`);
   // magicResistance.all and magicVulnerability.all generated by abilities loop
   // range.all, long.all, rangeOverride.attack.all generated by attack types loop
-  booleanFormula(`flags.${MODULE_ID}.magicResistance.save.all`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.magicResistance.save.all`);
-  booleanFormula(`flags.${MODULE_ID}.magicResistance.check.all`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.magicResistance.check.all`);
-  booleanFormula(`flags.${MODULE_ID}.magicResistance.skill.all`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.magicResistance.skill.all`);
   const extendedAttackTypeLabels: Record<string, string> = { check: "Ability Check", skill: "Skill Check", tool: "Tool Check", all: "All" };
   let attackTypes = allAttackTypes.concat(["save", "check", "skill", "tool", "all"])
   attackTypes.forEach(at => {
@@ -1187,10 +1288,6 @@ function setupMidiFlags() {
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.noAdvantage.attack.${at}`);
     booleanFormula(`flags.${MODULE_ID}.noDisadvantage.attack.${at}`);
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.noDisadvantage.attack.${at}`);
-    booleanFormula(`flags.${MODULE_ID}.fail.attack.${at}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.fail.attack.${at}`);
-    booleanFormula(`flags.${MODULE_ID}.success.attack.${at}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.success.attack.${at}`);
     booleanFormula(`flags.${MODULE_ID}.critical.${at}`);
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.critical.${at}`);
     booleanFormula(`flags.${MODULE_ID}.noCritical.${at}`);
@@ -1218,8 +1315,6 @@ function setupMidiFlags() {
     booleanFormula(`flags.${MODULE_ID}.grants.attack.fail.${at}`);
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.grants.attack.fail.${at}`);
     if (at !== "heal") untyped(`flags.${MODULE_ID}.DR.${at}`);
-    booleanFormula(`flags.${MODULE_ID}.advantage.damage.${at}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.advantage.damage.${at}`);
     untyped(`flags.${MODULE_ID}.max.damage.${at}`);
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.max.damage.${at}`);
     untyped(`flags.${MODULE_ID}.min.damage.${at}`);
@@ -1245,8 +1340,6 @@ function setupMidiFlags() {
     registerFlagLocalization(`flags.${MODULE_ID}.disadvantage.attack.${at}`, "disadvantage.attack", label);
     registerFlagLocalization(`flags.${MODULE_ID}.noAdvantage.attack.${at}`, "noAdvantage.attack", label);
     registerFlagLocalization(`flags.${MODULE_ID}.noDisadvantage.attack.${at}`, "noDisadvantage.attack", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.fail.attack.${at}`, "fail.attack", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.success.attack.${at}`, "success.attack", label);
     registerFlagLocalization(`flags.${MODULE_ID}.critical.${at}`, "critical", label);
     registerFlagLocalization(`flags.${MODULE_ID}.noCritical.${at}`, "noCritical", label);
     registerFlagLocalization(`flags.${MODULE_ID}.noFumble.${at}`, "noFumble", label);
@@ -1261,7 +1354,6 @@ function setupMidiFlags() {
     registerFlagLocalization(`flags.${MODULE_ID}.grants.attack.success.${at}`, "grants.attack.success", label);
     registerFlagLocalization(`flags.${MODULE_ID}.grants.attack.fail.${at}`, "grants.attack.fail", label);
     if (at !== "heal") registerFlagLocalization(`flags.${MODULE_ID}.DR.${at}`, "DR.attackType", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.advantage.damage.${at}`, "advantage.damage", label);
     registerFlagLocalization(`flags.${MODULE_ID}.max.damage.${at}`, "max.damage", label);
     registerFlagLocalization(`flags.${MODULE_ID}.min.damage.${at}`, "min.damage", label);
     registerFlagLocalization(`flags.${MODULE_ID}.grants.max.damage.${at}`, "grants.max.damage", label);
@@ -1282,10 +1374,6 @@ function setupMidiFlags() {
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.fail.ability.all`);
   booleanFormula(`flags.${MODULE_ID}.success.ability.all`);
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.success.ability.all`);
-  untyped(`flags.${MODULE_ID}.max.ability.save.concentration`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.max.ability.save.concentration`);
-  untyped(`flags.${MODULE_ID}.min.ability.save.concentration`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.min.ability.save.concentration`);
   booleanFormula(`flags.${MODULE_ID}.sharpShooter`);
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.sharpShooter`);
 
@@ -1349,26 +1437,10 @@ function setupMidiFlags() {
     // daeFieldBrowserFields.push(`flags.${MODULE_ID}.advantage.attack.${abl}`);
     // bs(`flags.${MODULE_ID}.disadvantage.attack.${abl}`);
     // daeFieldBrowserFields.push(`flags.${MODULE_ID}.disadvantage.attack.${abl}`);
-    booleanFormula(`flags.${MODULE_ID}.fail.ability.check.${abl}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.fail.ability.check.${abl}`);
-    booleanFormula(`flags.${MODULE_ID}.fail.ability.save.${abl}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.fail.ability.save.${abl}`);
-    booleanFormula(`flags.${MODULE_ID}.success.ability.check.${abl}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.success.ability.check.${abl}`);
-    booleanFormula(`flags.${MODULE_ID}.success.ability.save.${abl}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.success.ability.save.${abl}`);
     booleanFormula(`flags.${MODULE_ID}.superSaver.${abl}`);
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.superSaver.${abl}`);
     booleanFormula(`flags.${MODULE_ID}.semiSuperSaver.${abl}`);
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.semiSuperSaver.${abl}`);
-    untyped(`flags.${MODULE_ID}.max.ability.save.${abl}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.max.ability.save.${abl}`);
-    untyped(`flags.${MODULE_ID}.min.ability.save.${abl}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.min.ability.save.${abl}`);
-    untyped(`flags.${MODULE_ID}.max.ability.check.${abl}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.max.ability.check.${abl}`);
-    untyped(`flags.${MODULE_ID}.min.ability.check.${abl}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.min.ability.check.${abl}`);
     untyped(`flags.${MODULE_ID}.optional.NAME.save.${abl}`);
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.optional.NAME.save.${abl}`);
     untyped(`flags.${MODULE_ID}.optional.NAME.save.fail.${abl}`);
@@ -1422,16 +1494,8 @@ function setupMidiFlags() {
     registerFlagLocalization(`flags.${MODULE_ID}.noAdvantage.save.${abl}`, "noAdvantage.save", label);
     registerFlagLocalization(`flags.${MODULE_ID}.noDisadvantage.check.${abl}`, "noDisadvantage.check", label);
     registerFlagLocalization(`flags.${MODULE_ID}.noDisadvantage.save.${abl}`, "noDisadvantage.save", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.fail.ability.check.${abl}`, "fail.ability.check", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.fail.ability.save.${abl}`, "fail.ability.save", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.success.ability.check.${abl}`, "success.ability.check", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.success.ability.save.${abl}`, "success.ability.save", label);
     registerFlagLocalization(`flags.${MODULE_ID}.superSaver.${abl}`, "superSaver", label);
     registerFlagLocalization(`flags.${MODULE_ID}.semiSuperSaver.${abl}`, "semiSuperSaver", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.max.ability.save.${abl}`, "max.ability.save", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.min.ability.save.${abl}`, "min.ability.save", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.max.ability.check.${abl}`, "max.ability.check", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.min.ability.check.${abl}`, "min.ability.check", label);
     registerFlagLocalization(`flags.${MODULE_ID}.optional.NAME.save.${abl}`, "optional.NAME.save", label);
     registerFlagLocalization(`flags.${MODULE_ID}.optional.NAME.save.fail.${abl}`, "optional.NAME.save.fail", label);
     registerFlagLocalization(`flags.${MODULE_ID}.optional.NAME.check.${abl}`, "optional.NAME.check", label);
@@ -1517,12 +1581,7 @@ function setupMidiFlags() {
     registerFlagLocalization(`flags.${MODULE_ID}.grants.noDisadvantage.attack.school.${school}`, "grants.noDisadvantage.attack.school", label);
   })
 
-  // advantage/disadvantage/fail/success.skill.all generated by skills loop with "all" key
-  // max/min.skill.all kept here since per-skill max/min is replaced by core
-  untyped(`flags.${MODULE_ID}.max.skill.all`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.max.skill.all`);
-  untyped(`flags.${MODULE_ID}.min.skill.all`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.min.skill.all`);
+  // advantage/disadvantage.skill.all generated by skills loop with "all" key; fail/success/min/max are dnd5e roll fields
   Object.keys(GameSystemConfig.skills).concat(["all"]).forEach(skill => {
     booleanFormula(`flags.${MODULE_ID}.advantage.skill.${skill}`);
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.advantage.skill.${skill}`);
@@ -1532,10 +1591,6 @@ function setupMidiFlags() {
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.noAdvantage.skill.${skill}`);
     booleanFormula(`flags.${MODULE_ID}.noDisadvantage.skill.${skill}`);
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.noDisadvantage.skill.${skill}`);
-    booleanFormula(`flags.${MODULE_ID}.fail.skill.${skill}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.fail.skill.${skill}`);
-    booleanFormula(`flags.${MODULE_ID}.success.skill.${skill}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.success.skill.${skill}`);
     // bs(`flags.${MODULE_ID}.max.skill.${skill}`); replaced by core
     // bs(`flags.${MODULE_ID}.min.skill.${skill}`); replaced by core
     untyped(`flags.${MODULE_ID}.optional.NAME.skill.${skill}`);
@@ -1554,8 +1609,6 @@ function setupMidiFlags() {
     registerFlagLocalization(`flags.${MODULE_ID}.disadvantage.skill.${skill}`, "disadvantage.skill", label);
     registerFlagLocalization(`flags.${MODULE_ID}.noAdvantage.skill.${skill}`, "noAdvantage.skill", label);
     registerFlagLocalization(`flags.${MODULE_ID}.noDisadvantage.skill.${skill}`, "noDisadvantage.skill", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.fail.skill.${skill}`, "fail.skill", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.success.skill.${skill}`, "success.skill", label);
     registerFlagLocalization(`flags.${MODULE_ID}.optional.NAME.skill.${skill}`, "optional.NAME.skill", label);
     registerFlagLocalization(`flags.${MODULE_ID}.grants.advantage.skill.${skill}`, "grants.advantage.skill", label);
     registerFlagLocalization(`flags.${MODULE_ID}.grants.disadvantage.skill.${skill}`, "grants.disadvantage.skill", label);
@@ -1571,11 +1624,8 @@ function setupMidiFlags() {
   booleanFormula(`flags.${MODULE_ID}.noDisadvantage.deathSave`);
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.noDisadvantage.deathSave`);
   untyped(`flags.${MODULE_ID}.deathSaveBonus`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.deathSaveBonus`);
-  booleanFormula(`flags.${MODULE_ID}.fail.deathSave`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.fail.deathSave`);
-  booleanFormula(`flags.${MODULE_ID}.success.deathSave`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.success.deathSave`);
+  booleanFormula(`flags.${MODULE_ID}.noDeathSaveFailureFromDamage`);
+  daeFieldBrowserFields.push(`flags.${MODULE_ID}.noDeathSaveFailureFromDamage`);
   // All tool .all entries generated by tools loop with "all" key
   Object.keys(GameSystemConfig.tools).concat(["all"]).forEach(tool => {
     booleanFormula(`flags.${MODULE_ID}.advantage.tool.${tool}`);
@@ -1586,14 +1636,6 @@ function setupMidiFlags() {
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.noAdvantage.tool.${tool}`);
     booleanFormula(`flags.${MODULE_ID}.noDisadvantage.tool.${tool}`);
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.noDisadvantage.tool.${tool}`);
-    booleanFormula(`flags.${MODULE_ID}.fail.tool.${tool}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.fail.tool.${tool}`);
-    booleanFormula(`flags.${MODULE_ID}.success.tool.${tool}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.success.tool.${tool}`);
-    untyped(`flags.${MODULE_ID}.max.tool.${tool}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.max.tool.${tool}`);
-    untyped(`flags.${MODULE_ID}.min.tool.${tool}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.min.tool.${tool}`);
     // Per-tool grants flags
     booleanFormula(`flags.${MODULE_ID}.grants.advantage.tool.${tool}`);
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.grants.advantage.tool.${tool}`);
@@ -1608,10 +1650,6 @@ function setupMidiFlags() {
     registerFlagLocalization(`flags.${MODULE_ID}.disadvantage.tool.${tool}`, "disadvantage.tool", label);
     registerFlagLocalization(`flags.${MODULE_ID}.noAdvantage.tool.${tool}`, "noAdvantage.tool", label);
     registerFlagLocalization(`flags.${MODULE_ID}.noDisadvantage.tool.${tool}`, "noDisadvantage.tool", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.fail.tool.${tool}`, "fail.tool", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.success.tool.${tool}`, "success.tool", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.max.tool.${tool}`, "max.tool", label);
-    registerFlagLocalization(`flags.${MODULE_ID}.min.tool.${tool}`, "min.tool", label);
     registerFlagLocalization(`flags.${MODULE_ID}.grants.advantage.tool.${tool}`, "grants.advantage.tool", label);
     registerFlagLocalization(`flags.${MODULE_ID}.grants.disadvantage.tool.${tool}`, "grants.disadvantage.tool", label);
     registerFlagLocalization(`flags.${MODULE_ID}.grants.noAdvantage.tool.${tool}`, "grants.noAdvantage.tool", label);
@@ -1622,8 +1660,8 @@ function setupMidiFlags() {
     booleanFormula(`flags.${MODULE_ID}.fail.spell.${comp.toLowerCase()}`);
     daeFieldBrowserFields.push(`flags.${MODULE_ID}.fail.spell.${comp.toLowerCase()}`);
   });
+  // Deprecated: DAE maps it to system.traits.dm.midi.all; not offered
   untyped(`flags.${MODULE_ID}.DR.all`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.DR.all`);
 
   untyped(`flags.${MODULE_ID}.DR.non-magical`);
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.DR.non-magical`);
@@ -1642,21 +1680,18 @@ function setupMidiFlags() {
   untyped(`flags.${MODULE_ID}.damage.reroll-kl`);
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.damage.reroll-kl`);
 
+  // Deprecated: DAE maps them to dnd5e's system.traits.dm.amount.{type}; not offered
   Object.keys(GameSystemConfig.damageTypes).forEach(key => {
     untyped(`flags.${MODULE_ID}.DR.${key}`);
-    daeFieldBrowserFields.push(`flags.${MODULE_ID}.DR.${key}`);
-    const label = () => GameSystemConfig.damageTypes[key]?.label ?? key;
-    registerFlagLocalization(`flags.${MODULE_ID}.DR.${key}`, "DR.damageType", label);
   });
 
+  // Deprecated: DAE maps them to dnd5e's system.traits.dm.amount.healing / .temphp; not offered
   untyped(`flags.${MODULE_ID}.DR.healing`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.DR.healing`);
   untyped(`flags.${MODULE_ID}.DR.temphp`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.DR.temphp`);
 
   // optional.NAME.attack/damage/check/save/skill.all generated by attack types/abilities/skills loops
   untyped(`flags.${MODULE_ID}.optional.NAME.displayBonusRolls`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.optional.NAME.displayChatCard`);
+  daeFieldBrowserFields.push(`flags.${MODULE_ID}.optional.NAME.displayBonusRolls`);
   untyped(`flags.${MODULE_ID}.optional.NAME.label`);
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.optional.NAME.label`);
   untyped(`flags.${MODULE_ID}.optional.NAME.skill.fail.all`);
@@ -1665,8 +1700,10 @@ function setupMidiFlags() {
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.optional.NAME.count`);
   untyped(`flags.${MODULE_ID}.optional.NAME.countAlt`);
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.optional.NAME.countAlt`);
-  untyped(`flags.${MODULE_ID}.optional.NAME.ac`);
-  daeFieldBrowserFields.push(`flags.${MODULE_ID}.optional.NAME.ac`);
+  untyped(`flags.${MODULE_ID}.optional.NAME.acOnAttack`);
+  daeFieldBrowserFields.push(`flags.${MODULE_ID}.optional.NAME.acOnAttack`);
+  untyped(`flags.${MODULE_ID}.optional.NAME.acOnHit`);
+  daeFieldBrowserFields.push(`flags.${MODULE_ID}.optional.NAME.acOnHit`);
   untyped(`flags.${MODULE_ID}.optional.NAME.criticalDamage`);
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.optional.NAME.criticalDamage`);
   untyped(`flags.${MODULE_ID}.optional.NAME.activation`);
@@ -1685,14 +1722,12 @@ function setupMidiFlags() {
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.fail.disadvantage.heavy`);
   booleanFormula(`flags.${MODULE_ID}.canFlank`);
   daeFieldBrowserFields.push(`flags.${MODULE_ID}.canFlank`);
-  /*
-  bs(`flags.${MODULE_ID}.grants.advantage.attack.all`);
-  bs(`flags.${MODULE_ID}.grants.disadvantage.attack.all`);
-  bs(``);
 
-  bs(``);
-  bs(``);
-  */
+  // Token-targeted vision height overrides (0-100% of token height)
+  untyped(`token.flags.${MODULE_ID}.visionSourceHeight`);
+  daeFieldBrowserFields.push(`token.flags.${MODULE_ID}.visionSourceHeight`);
+  untyped(`token.flags.${MODULE_ID}.visionTargetHeight`);
+  daeFieldBrowserFields.push(`token.flags.${MODULE_ID}.visionTargetHeight`);
 }
 
 function setupMidiFlagEditors(DAEapi: any) {
@@ -1789,7 +1824,6 @@ const MQMacros = [
 
 // TODO: Examine what's needed here
 export async function createMidiMacros() {
-  const midiVersion = "11.0.9"
   if (game.user?.isGM) {
     for (let macroSpec of MQMacros) {
       try {
@@ -1831,84 +1865,108 @@ export async function createMidiMacros() {
   }
 }
 
-export function setupMidiStatusEffects() {
+/** midi's statuses that also carry another status: the self-ending Invisible carries invisible. */
+export const MIDI_IMPLYING_STATUSES: Record<string, string> = { invisibleBrief: "invisible" };
+
+/** midi's statuses, added to `statusEffects` where missing. */
+export function addMidiStatusEffects(statusEffects: typeof CONFIG.statusEffects = CONFIG.statusEffects) {
   // @ts-expect-error no dnd5e-types
   systemConcentrationId = CONFIG.specialStatusEffects.CONCENTRATING;
-  if (!CONFIG.statusEffects.find(e => e.id === systemConcentrationId)) {
+  if (!statusEffects.find(e => e.id === systemConcentrationId)) {
     // @ts-expect-error not expecting special
-    CONFIG.statusEffects.push({ id: systemConcentrationId, name: i18n("EFFECT.DND5E.StatusConcentrating"), img: "systems/dnd5e/icons/svg/statuses/concentrating.svg", special: "CONCENTRATING" });
+    statusEffects.push({ id: systemConcentrationId, name: i18n("EFFECT.DND5E.StatusConcentrating"), img: "systems/dnd5e/icons/svg/statuses/concentrating.svg", special: "CONCENTRATING" });
   }
+  if (configSettings.enforceBonusActions !== "none" && !statusEffects.find(e => e._id === getStaticID("bonusaction"))) {
+    statusEffects.push({
+      id: "bonusaction",
+      _id: getStaticID("bonusaction"),
+      name: i18n("midi-qol.bonusActionUsed"),
+      system: {
+        changes: [
+          { key: "flags.midi-qol.actions.bonus", type: "custom", value: "true" },
+          { key: "flags.midi-qol.actions.bonusActionsUsed", type: "add", value: "1", priority: 20 }
+        ]
+      },
+      img: "modules/midi-qol/icons/bonus-action.svg",
+      // @ts-expect-error fvtt-types v14 duration
+      duration: { expiry: "targetStart" },
+      flags: { dae: { specialDuration: ["combatEnd", "shortRest"] } }
+    });
+  }
+  if (configSettings.enforceReactions !== "none" && !statusEffects.find(e => e._id === getStaticID("reaction"))) {
+    statusEffects.push({
+      id: "reaction",
+      _id: getStaticID("reaction"),
+      name: i18n("midi-qol.reactionUsed"),
+      system: {
+        changes: [
+          { key: "flags.midi-qol.actions.reaction", type: "custom", value: "true" },
+          { key: "flags.midi-qol.actions.reactionsUsed", type: "add", value: "1", priority: 20 }
+        ]
+      },
+      img: "modules/midi-qol/icons/reaction.svg",
+      // @ts-expect-error fvtt-types v14 duration
+      duration: { expiry: "targetStart" },
+      flags: { dae: { specialDuration: ["combatEnd", "shortRest"] } }
+    });
+  }
+  // Invisible that ends itself, as the Invisibility spell does; dnd5e's Invisible (set from the HUD) lasts until removed.
+  // DAE's dependent conditions add a plain Invisible for the status it implies: that one carries the token icon.
+  if (!statusEffects.find(e => e._id === getStaticID("invisibleBrief"))) {
+    statusEffects.push({
+      id: "invisibleBrief",
+      _id: getStaticID("invisibleBrief"),
+      name: i18n("midi-qol.InvisibleBrief"),
+      statuses: ["invisible"],
+      img: "systems/dnd5e/icons/svg/statuses/invisible.svg",
+      // showIcon 0: CONST.ACTIVE_EFFECT_SHOW_ICON.NEVER (Foundry 14, not in fvtt-types 13)
+      ...(safeGetGameSetting("dae", "DependentConditions") ? { showIcon: 0 } : {}),
+      flags: { dae: { specialDuration: ["1Attack", "1Spell", "DamageDealt"] } }
+    });
+  }
+  if (!statusEffects.find(e => e._id === getStaticID("flanking"))) {
+    statusEffects.push({
+      id: "flanking",
+      _id: getStaticID("flanking"),
+      name: i18n("midi-qol.Flanking"),
+      system: { changes: getFlankingStatusChanges() },
+      img: "icons/svg/sword.svg",
+      // @ts-expect-error fvtt-types v14 duration
+      duration: { expiry: "combatEnd" }
+    });
+  }
+  if (!statusEffects.find(e => e._id === getStaticID("flanked"))) {
+    statusEffects.push({
+      id: "flanked",
+      _id: getStaticID("flanked"),
+      name: i18n("midi-qol.Flanked"),
+      system: { changes: getFlankedStatusChanges() },
+      img: "modules/midi-qol/icons/encirclement.svg",
+      // @ts-expect-error fvtt-types v14 duration
+      duration: { expiry: "combatEnd" }
+    });
+  }
+}
+
+export function setupMidiStatusEffects() {
+  addMidiStatusEffects();
   // Initialise these effects so that we don't need to make a raft of code async only to fetch these
   if (configSettings.enforceBonusActions !== "none") {
-    if (!CONFIG.statusEffects.find(e => e._id === getStaticID("bonusaction"))) {
-      CONFIG.statusEffects.push({
-        id: "bonusaction",
-        _id: getStaticID("bonusaction"),
-        name: i18n("midi-qol.bonusActionUsed"),
-        changes: [
-          effectChange("custom", "flags.midi-qol.actions.bonus", "true"),
-          effectChange("add", "flags.midi-qol.actions.bonusActionsUsed", "1", 20)
-        ],
-        img: "modules/midi-qol/icons/bonus-action.svg",
-
-        flags: { dae: { specialDuration: ["turnStart", "combatEnd", "shortRest"] } }
-      });
-    }
     ActiveEffect.implementation.fromStatusEffect("bonusaction").then(effect => {
       midiBonusActionEffect = effect
       globalThis.MidiQOL.midiBonusActionEffect = effect;
     });
   }
-
   if (configSettings.enforceReactions !== "none") {
-    if (!CONFIG.statusEffects.find(e => e._id === getStaticID("reaction"))) {
-      CONFIG.statusEffects.push({
-        id: "reaction",
-        _id: getStaticID("reaction"),
-        name: i18n("midi-qol.reactionUsed"),
-        changes: [
-          effectChange("custom", "flags.midi-qol.actions.reaction", "true"),
-          effectChange("add", "flags.midi-qol.actions.reactionsUsed", "1", 20)
-        ],
-        img: "modules/midi-qol/icons/reaction.svg",
-        // effectData: { transfer: false },
-        flags: { dae: { specialDuration: ["turnStart", "combatEnd", "shortRest"] } }
-      });
-    }
     ActiveEffect.implementation.fromStatusEffect("reaction").then(effect => {
       midiReactionEffect = effect;
       globalThis.MidiQOL.midiReactionEffect = effect;
     });
   }
-  if (!CONFIG.statusEffects.find(e => e._id === getStaticID("flanking"))) {
-    CONFIG.statusEffects.push({
-      id: "flanking",
-      _id: getStaticID("flanking"),
-      name: i18n("midi-qol.Flanking"),
-      changes: getFlankingStatusChanges(),
-      img: "icons/svg/sword.svg",
-      // effectData: { transfer: false },
-      flags: { dae: { specialDuration: ["combatEnd"] } }
-    });
-  }
-
   ActiveEffect.implementation.fromStatusEffect("flanking").then(effect => {
     midiFlankingEffect = effect;
     globalThis.MidiQOL.midiFlankingEffect = effect;
   });
-
-  if (!CONFIG.statusEffects.find(e => e._id === getStaticID("flanked"))) {
-    CONFIG.statusEffects.push({
-      id: "flanked",
-      _id: getStaticID("flanked"),
-      name: i18n("midi-qol.Flanked"),
-      changes: getFlankedStatusChanges(),
-      img: "modules/midi-qol/icons/encirclement.svg",
-      // effectData: { transfer: false },
-      flags: { dae: { specialDuration: ["combatEnd"] } }
-    });
-  };
-
   ActiveEffect.implementation.fromStatusEffect("flanked").then(effect => {
     midiFlankedEffect = effect;
     globalThis.MidiQOL.midiFlankedEffect = effect;
@@ -1919,8 +1977,8 @@ function getFlankingStatusChanges(): object[] {
   const bonus = configSettings.optionalRules?.flankingBonus ?? "advantage";
   if (bonus === "advantage") {
     return [
-      effectChange("custom", "flags.midi-qol.advantage.attack.mwak", "true"),
-      effectChange("custom", "flags.midi-qol.advantage.attack.msak", "true")
+      { key: "flags.midi-qol.advantage.attack.mwak", type: "custom", value: "true" },
+      { key: "flags.midi-qol.advantage.attack.msak", type: "custom", value: "true" }
     ];
   }
   // Fixed bonus: flanking status is visual-only; bonus computed per-target in recordFlankingBonuses
@@ -1931,19 +1989,29 @@ function getFlankedStatusChanges(): object[] {
   const bonus = configSettings.optionalRules?.flankingBonus ?? "advantage";
   if (bonus === "advantage") {
     return [
-      effectChange("custom", "flags.midi-qol.grants.advantage.attack.mwak", "true"),
-      effectChange("custom", "flags.midi-qol.grants.advantage.attack.msak", "true")
+      { key: "flags.midi-qol.grants.advantage.attack.mwak", type: "custom", value: "true" },
+      { key: "flags.midi-qol.grants.advantage.attack.msak", type: "custom", value: "true" }
     ];
   }
   // Fixed bonus: flanked status is visual-only; bonus computed per-target in recordFlankingBonuses
   return [];
 }
 
+let lastFlankingSettings: string | undefined;
+
 export function updateFlankingStatusEffects() {
   const flanking = CONFIG.statusEffects.find(e => e.id === "flanking") as any;
   const flanked = CONFIG.statusEffects.find(e => e.id === "flanked") as any;
-  if (flanking) flanking.changes = getFlankingStatusChanges();
-  if (flanked) flanked.changes = getFlankedStatusChanges();
+  if (flanking) flanking.system = { changes: getFlankingStatusChanges() };
+  if (flanked) flanked.system = { changes: getFlankedStatusChanges() };
+
+  // Statuses already on tokens keep the changes they were created with (an advantage-mode Flanked status would go on
+  // granting advantage under a fixed bonus): when the flanking settings change, the GM takes them off; advantage mode
+  // puts them back, from the new definition, on the next melee attack.
+  const settingsKey = `${configSettings.optionalRules?.checkFlanking}|${configSettings.optionalRules?.flankingBonus}`;
+  if (lastFlankingSettings !== undefined && settingsKey !== lastFlankingSettings && game.ready && game.user === game.users?.activeGM)
+    void removeFlankingStatuses();
+  lastFlankingSettings = settingsKey;
 
   // Rebuild cached effect instances (only if statuses have been registered)
   if (flanking) {
@@ -1957,5 +2025,29 @@ export function updateFlankingStatusEffects() {
       midiFlankedEffect = effect;
       globalThis.MidiQOL.midiFlankedEffect = effect;
     });
+  }
+}
+
+let removingFlankingStatuses: Promise<void> = Promise.resolve();
+
+// One removal at a time: settings changed again while statuses are coming off would delete them twice
+function removeFlankingStatuses(): Promise<void> {
+  removingFlankingStatuses = removingFlankingStatuses.then(removeFlankingStatusesNow, removeFlankingStatusesNow);
+  return removingFlankingStatuses;
+}
+
+async function removeFlankingStatusesNow() {
+  // A linked actor has a token on several scenes: take each actor's statuses off once
+  const actors = new Map<string, Actor.Implementation>();
+  for (const scene of game.scenes ?? []) {
+    for (const tokenDocument of scene.tokens) {
+      const actor = tokenDocument.actor;
+      if (actor && (actor.statuses.has("flanking") || actor.statuses.has("flanked"))) actors.set(actor.uuid, actor);
+    }
+  }
+  for (const actor of actors.values()) {
+    for (const statusId of ["flanking", "flanked"]) {
+      if (actor.statuses.has(statusId)) await toggleStatus(actor, statusId, { active: false });
+    }
   }
 }

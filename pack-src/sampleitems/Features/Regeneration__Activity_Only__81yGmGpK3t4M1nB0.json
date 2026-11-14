@@ -6,7 +6,6 @@
   "flags": {
     "core": {},
     "midi-qol": {
-      "onUseMacroName": "",
       "effectActivation": false,
       "rollAttackPerTarget": "default",
       "itemCondition": "",
@@ -16,8 +15,7 @@
       "AoETargetType": "any",
       "AoETargetTypeIncludeSelf": true,
       "autoTarget": "default",
-      "removeAttackDamageButtons": "default",
-      "-=onUseMacroName": null
+      "removeAttackDamageButtons": "default"
     },
     "magicitems": {
       "enabled": false,
@@ -80,16 +78,13 @@
       "section": "",
       "actionSection": ""
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "rules": "modern",
-        "version": "13.0.58"
-      },
-      "-=macros": null
-    },
     "crux": {
       "trayVisibility": "default"
+    },
+    "cat": {
+      "automation": {
+        "version": "14.6.9"
+      }
     }
   },
   "system": {
@@ -98,9 +93,9 @@
       "chat": ""
     },
     "source": {
-      "custom": "Midi 12.4.40",
+      "custom": "midi-qol sample",
       "revision": 1,
-      "rules": "2014",
+      "rules": "2024",
       "book": "",
       "page": "",
       "license": ""
@@ -224,7 +219,7 @@
         "name": ""
       }
     },
-    "identifier": "regeneration-11426",
+    "identifier": "regeneration-activity-only",
     "enchant": {},
     "prerequisites": {
       "level": null,

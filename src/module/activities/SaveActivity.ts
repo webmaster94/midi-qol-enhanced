@@ -1,11 +1,9 @@
-import { getRollModes } from "../compatibility.js";
-import { usesSystemChatData } from "../compatibility.js";
 import { AnyMutableObject } from "fvtt-types/utils";
 import { Activity, ActivityUseConfiguration, RollDialogConfig, RollMessageConfig, RollProcessConfig } from "../../globals.js";
 import { debugEnabled, warn, i18n, GameSystemConfig } from "../../midi-qol.js";
 import { Workflow } from "../Workflow.js";
-import { replaceDefaultActivities, configSettings } from "../settings.js";
-import { isAutoFastForward } from "../utils.js";
+import { replaceDefaultActivities, configSettings, safeGetGameSetting } from "../settings.js";
+import { getTokenDocument, isAutoFastForward } from "../utils.js";
 import { MidiActivityMixin, MidiActivityMixinSheet } from "./MidiActivityMixin.js";
 import { getSceneTargets } from "./activityHelpers.js";
 
@@ -36,7 +34,12 @@ let defineMidiSaveActivityClass = <T extends Activity>(ActivityClass: T) => {
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiSaveSheet,
         usage: {
-          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
+          /*
+           * No `chatCard`. Supplying one keeps the activity on dnd5e's legacy content path — the
+           * system renders the template into `message.content` and `MidiUsageMessageData`'s own
+           * template short-circuits on it, so the card face never runs. Deprecated in dnd5e 6.0 and
+           * removed in 6.2 (`activity/mixin.mjs#legacyUsageContent`) regardless. See AttackActivity.
+           */
           actions: {
             rollDamage: MidiSaveActivity.#rollDamage,
             rollSave: MidiSaveActivity.#rollSave, // Having this means needing to track the dnd5e SaveActivity.#rollSave changes
@@ -46,18 +49,15 @@ let defineMidiSaveActivityClass = <T extends Activity>(ActivityClass: T) => {
       }, { inplace: false, overwrite: true, insertKeys: true, insertValues: true });
 
     static defineSchema() {
-      const { StringField, ArrayField, BooleanField, SchemaField, ObjectField } = foundry.data.fields;
+      const { StringField, ArrayField, BooleanField, SchemaField } = foundry.data.fields;
 
       //@ts-expect-error
       const dataModels = game.system.dataModels;
-      const { ActivationField: ActivationField, CreatureTypeField, CurrencyTemplate, DamageData,
-        DamageField, DurationField, MovementField, RangeField, RollConfigField, SensesField,
-        SourceField, TargetField, UsesField } = dataModels.shared
+      const { DamageField } = dataModels.shared
       const FormulaField = dataModels.fields.FormulaField;
 
       return {
         ...super.defineSchema(),
-        otherActivityId: new StringField({ name: "otherActivity", initial: "none" }),
         otherActivityAsParentType: new BooleanField({
           name: "otherActivityAsParentType",
           initial: true,
@@ -80,41 +80,51 @@ let defineMidiSaveActivityClass = <T extends Activity>(ActivityClass: T) => {
           parts: new ArrayField(new DamageField()),
         }),
         friendlySave: new StringField({ initial: "default", name: "friendlySave" }),
-        // WIP
-        // saveDisplay: new StringField({initial: "default"})
       }
     }
 
     static #rollDamage(this: Activity, event: PointerEvent, target: HTMLElement, message: ChatMessage.Implementation) {
-      const workflow = Workflow.getWorkflow(message?.uuid);
-      if (workflow) workflow.activity = this;
-      return this.rollDamage({ event, workflow }, {}, {});
+      const workflow = Workflow.forDamageButton(message);
+      if (workflow === false) return;
+      const activity = workflow && !workflow.readOnly ? workflow.activityFor(this) : this;
+      return activity.rollDamage({ event, workflow }, {}, {});
     }
 
     static async #rollSave(this: Activity, event: PointerEvent, target: HTMLElement, message: ChatMessage.Implementation) {
-      const workflow = Workflow.getWorkflow(message?.uuid);
-      if (workflow) workflow.activity = this;
+      const workflow = Workflow.findWorkflow(message?.uuid);
+      const activity = workflow ? workflow.activityFor(this) : this;
       // return ActivityClass.#rollSave.bind(this)(event, target, message);
       // Can't call ActivityClass.#rollSave.bind(this)(event, target, message) as it's private
-      const targets: Array<foundry.canvas.placeables.Token.Implementation | Actor.Implementation> = getSceneTargets();
+      // As dnd5e 6: the card's targets (honouring its targeted/selected toggle) and the clicked button's data from
+      // the card, which is all a grouped (dropdown) button carries.
+      const targets: Array<foundry.canvas.placeables.Token.Implementation | TokenDocument.Implementation | Actor.Implementation> =
+        // @ts-expect-error no dnd5e-types
+        [...(message?.system?.evaluatedTargets ?? getSceneTargets())];
       if (!targets.length && game.user?.character) targets.push(game.user?.character);
       if (!targets.length) ui.notifications?.warn("DND5E.ActionWarningNoToken", { localize: true });
-      const dc = parseInt(target.dataset.dc ?? "0");
+      // @ts-expect-error no dnd5e-types
+      const button: Record<string, string | number | undefined> = message?.system?.getButton?.(target)?.dataset ?? target.dataset;
+      const dc = (button.dc === undefined || button.dc === "") ? NaN : Number(button.dc);
       for (const token of targets) {
         const actor = token instanceof Actor ? token : token.actor;
-        const speaker = ChatMessage.getSpeaker({ actor, scene: canvas.scene, token: token instanceof Token ? token.document : null });
+        const tokenDocument = token instanceof foundry.canvas.placeables.Token ? token.document : token instanceof TokenDocument ? token : null;
+        const speaker = ChatMessage.getSpeaker({ actor, scene: canvas.scene, token: tokenDocument });
         const message: AnyMutableObject = { data: { speaker } };
         // if (!actor?.hasPlayerOwner && workflow) message.create = false - this breaks save checking from chat card
         if (token instanceof foundry.canvas.placeables.Token) foundry.utils.setProperty(message, "flags.midi-qol.requestId", token.document.uuid);
         else foundry.utils.setProperty(message, "flags.midi-qol.requestId", token?.uuid);
-        if (["none", "allShow"].includes(configSettings.autoCheckSaves) || actor?.hasPlayerOwner) message.rollMode = game.settings.get("core", "rollMode");
-        else message.rollMode = getRollModes().PRIVATE;
+        // Its row on the card, whoever the save message's speaker is (an actor with no token, another of its tokens)
+        const targetUuid = tokenDocument?.uuid ?? getTokenDocument(actor)?.uuid;
+        if (targetUuid) foundry.utils.setProperty(message, "data.flags.midi-qol.targetUuid", targetUuid);
+        // v14 message-mode strings (CONFIG.ChatMessage.modes keys) so the value matches the roll dialog's options
+        if (["none", "allShow"].includes(configSettings.autoCheckSaves) || actor?.hasPlayerOwner) message.rollMode = safeGetGameSetting("core", "messageMode");
+        else message.rollMode = "gm";
         if (!game.user?.isGM) {
-          if (configSettings.playerRollSaves === "noneDialogPublic") message.rollMode = getRollModes().PUBLIC;
-          else if (configSettings.playerRollSaves === "noneDialogPrivate") message.rollMode = getRollModes().PRIVATE;
-          else if (configSettings.playerRollSaves === "noneDialogSelf") message.rollMode = getRollModes().SELF;
-          else if (configSettings.playerRollSaves === "noneDialogBlind") message.rollMode = getRollModes().BLIND;
-          else message.rollMode = game.settings.get("core", "rollMode");
+          if (configSettings.playerRollSaves === "noneDialogPublic") message.rollMode = "public";
+          else if (configSettings.playerRollSaves === "noneDialogPrivate") message.rollMode = "gm";
+          else if (configSettings.playerRollSaves === "noneDialogSelf") message.rollMode = "self";
+          else if (configSettings.playerRollSaves === "noneDialogBlind") message.rollMode = "blind";
+          else message.rollMode = safeGetGameSetting("core", "messageMode");
         }
 
 
@@ -123,9 +133,9 @@ let defineMidiSaveActivityClass = <T extends Activity>(ActivityClass: T) => {
           event,
           workflow,
           //@ts-expect-error this has been bound to an activity
-          ability: target.dataset.ability ?? this.save.ability.first(),
+          ability: button.ability ?? activity.save.ability.first(),
           //@ts-expect-error this has been bound to an activity
-          target: configSettings.autoCheckSaves === "whisper" ? undefined : (Number.isFinite(dc) ? dc : this.save.dc.value)
+          target: configSettings.autoCheckSaves === "whisper" ? undefined : (Number.isFinite(dc) ? dc : activity.save.dc.value)
         }, {}, message);
       }
     }
@@ -137,11 +147,6 @@ let defineMidiSaveActivityClass = <T extends Activity>(ActivityClass: T) => {
     get possibleOtherActivity() {
       return true;
     }
-
-    get canUseOtherActivity() {
-      return true;
-    }
-
     async _triggerSubsequentActions(config, results) {
     }
     
@@ -155,11 +160,6 @@ let defineMidiSaveActivityClass = <T extends Activity>(ActivityClass: T) => {
       return rollConfig;
     }
     async rollDamage(config: RollProcessConfig = {}, dialog: RollDialogConfig = {}, message: RollMessageConfig = {}) {
-      message = foundry.utils.mergeObject({
-        "data.flags.dnd5e.roll": {
-          damageOnSave: this.damage?.onSave
-        }
-      }, message);
       config.midiOptions ??= {};
       config.midiOptions.fastForwardDamage ??= isAutoFastForward("damage");
       return super.rollDamage(config, dialog, message);

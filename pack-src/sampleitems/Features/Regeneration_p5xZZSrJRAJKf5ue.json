@@ -5,24 +5,8 @@
   "effects": [
     {
       "_id": "LBpB0JVv3bMLRt6L",
-      "changes": [
-        {
-          "key": "flags.midi-qol.OverTime",
-          "mode": 5,
-          "value": "turn=start,\ndamageRoll=10,\ndamageType=healing,\ncondition=@attributes.hp.value > 0 && @attributes.hp.value < @attributes.hp.max,\nrollMode=gmroll",
-          "priority": 20
-        }
-      ],
       "disabled": false,
-      "duration": {
-        "startTime": null,
-        "seconds": null,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
-      },
+      "duration": {},
       "origin": "Compendium.midi-qol.midiqol-sample-items.Item.yhfoAjugVP69EdDZ",
       "transfer": true,
       "flags": {
@@ -35,8 +19,7 @@
           "selfTargetAlways": false,
           "durationExpression": "",
           "disableIncapacitated": false,
-          "dontApply": false,
-          "showIcon": false
+          "dontApply": false
         },
         "dnd5e-helpers": {
           "rest-effect": "Ignore"
@@ -59,7 +42,6 @@
         },
         "core": {}
       },
-      "tint": "#ffffff",
       "name": "Regeneration",
       "description": "",
       "statuses": [],
@@ -76,9 +58,19 @@
       },
       "img": "icons/skills/wounds/anatomy-organ-heart-red.webp",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": [
+          {
+            "key": "flags.midi-qol.OverTime",
+            "value": "turn=start,\ndamageRoll=10,\ndamageType=healing,\ncondition=@attributes.hp.value > 0 && @attributes.hp.value < @attributes.hp.max,\nrollMode=gmroll",
+            "priority": 20,
+            "type": "override"
+          }
+        ]
+      },
       "sort": 0,
-      "_key": "!items.effects!p5xZZSrJRAJKf5ue.LBpB0JVv3bMLRt6L"
+      "_key": "!items.effects!p5xZZSrJRAJKf5ue.LBpB0JVv3bMLRt6L",
+      "showIcon": 0
     }
   ],
   "flags": {
@@ -153,10 +145,9 @@
     "crux": {
       "trayVisibility": "default"
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.58"
+    "cat": {
+      "automation": {
+        "version": "14.6.0"
       }
     }
   },
@@ -185,7 +176,7 @@
     "requirements": "",
     "properties": [],
     "activities": {},
-    "identifier": "regeneration-11426",
+    "identifier": "regeneration",
     "enchant": {},
     "prerequisites": {
       "level": null,

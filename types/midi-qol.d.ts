@@ -35,14 +35,12 @@ export declare let ceInterface: {
         origin?: string | null;
     }) => Promise<void>;
 } | undefined;
-export declare let BaseChatLogClass: any;
 export declare let debugEnabled: number;
 export declare let debug: (...args: any[]) => void;
 export declare let log: (...args: any[]) => void;
 export declare let warn: (...args: any[]) => void;
 export declare let error: (...args: any[]) => void;
 export declare let timelog: (...args: any[]) => void;
-export declare let levelsAPI: any;
 export declare const MODULE_ID = "midi-qol";
 export declare let i18n: (key: string) => string;
 export declare let i18nFormat: (key: string, data?: {}) => string;

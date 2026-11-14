@@ -7,25 +7,12 @@
       "name": "Blessed",
       "origin": "Item.o3BiQo12if2yjgff",
       "duration": {
-        "rounds": 1,
-        "startTime": null,
-        "seconds": null,
-        "combat": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+        "value": 1,
+        "units": "rounds"
       },
       "transfer": false,
       "disabled": false,
       "_id": "Q0havLsLloUiTB8e",
-      "changes": [
-        {
-          "key": "StatusEffect",
-          "mode": 0,
-          "value": "bleeding",
-          "priority": 20
-        }
-      ],
       "description": "",
       "statuses": [],
       "flags": {
@@ -35,7 +22,6 @@
           "selfTargetAlways": false,
           "dontApply": false,
           "stackable": "none",
-          "showIcon": true,
           "durationExpression": "",
           "macroRepeat": "none",
           "specialDuration": [],
@@ -43,7 +29,6 @@
           "disableCondition": ""
         }
       },
-      "tint": "#ffffff",
       "_stats": {
         "compendiumSource": null,
         "duplicateSource": null,
@@ -57,33 +42,30 @@
       },
       "img": "icons/magic/control/buff-flight-wings-blue.webp",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": [
+          {
+            "key": "StatusEffect",
+            "value": "bleeding",
+            "priority": 20,
+            "type": "custom"
+          }
+        ]
+      },
       "sort": 0,
-      "_key": "!items.effects!o3BiQo12if2yjgff.Q0havLsLloUiTB8e"
+      "_key": "!items.effects!o3BiQo12if2yjgff.Q0havLsLloUiTB8e",
+      "showIcon": 2
     },
     {
       "name": "Ethereal",
       "origin": "Item.o3BiQo12if2yjgff",
       "duration": {
-        "rounds": 1,
-        "startTime": null,
-        "seconds": null,
-        "combat": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+        "value": 1,
+        "units": "rounds"
       },
       "transfer": false,
       "disabled": false,
       "_id": "l0zLtfBsYQBtiBPN",
-      "changes": [
-        {
-          "key": "StatusEffect",
-          "mode": 0,
-          "value": "ethereal",
-          "priority": 20
-        }
-      ],
       "description": "",
       "statuses": [],
       "flags": {
@@ -93,7 +75,6 @@
           "selfTargetAlways": false,
           "dontApply": true,
           "stackable": "none",
-          "showIcon": false,
           "durationExpression": "",
           "macroRepeat": "none",
           "specialDuration": [],
@@ -101,7 +82,6 @@
           "disableCondition": ""
         }
       },
-      "tint": "#ffffff",
       "_stats": {
         "compendiumSource": null,
         "duplicateSource": null,
@@ -115,33 +95,30 @@
       },
       "img": "icons/magic/control/buff-flight-wings-blue.webp",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": [
+          {
+            "key": "StatusEffect",
+            "value": "ethereal",
+            "priority": 20,
+            "type": "custom"
+          }
+        ]
+      },
       "sort": 0,
-      "_key": "!items.effects!o3BiQo12if2yjgff.l0zLtfBsYQBtiBPN"
+      "_key": "!items.effects!o3BiQo12if2yjgff.l0zLtfBsYQBtiBPN",
+      "showIcon": 0
     },
     {
       "name": "Invisible",
       "origin": "Item.o3BiQo12if2yjgff",
       "duration": {
-        "rounds": 1,
-        "startTime": null,
-        "seconds": null,
-        "combat": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+        "value": 1,
+        "units": "rounds"
       },
       "transfer": false,
       "disabled": false,
       "_id": "BKllJaSYjW5sZOjV",
-      "changes": [
-        {
-          "key": "StatusEffect",
-          "mode": 0,
-          "value": "invisible",
-          "priority": 20
-        }
-      ],
       "description": "",
       "statuses": [],
       "flags": {
@@ -151,7 +128,6 @@
           "selfTargetAlways": false,
           "dontApply": true,
           "stackable": "none",
-          "showIcon": false,
           "durationExpression": "",
           "macroRepeat": "none",
           "specialDuration": [],
@@ -159,7 +135,6 @@
           "disableCondition": ""
         }
       },
-      "tint": "#ffffff",
       "_stats": {
         "compendiumSource": null,
         "duplicateSource": null,
@@ -173,9 +148,19 @@
       },
       "img": "icons/magic/control/buff-flight-wings-blue.webp",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": [
+          {
+            "key": "StatusEffect",
+            "value": "invisible",
+            "priority": 20,
+            "type": "custom"
+          }
+        ]
+      },
       "sort": 0,
-      "_key": "!items.effects!o3BiQo12if2yjgff.BKllJaSYjW5sZOjV"
+      "_key": "!items.effects!o3BiQo12if2yjgff.BKllJaSYjW5sZOjV",
+      "showIcon": 0
     }
   ],
   "flags": {
@@ -211,21 +196,20 @@
         "effect": []
       }
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.51"
+    "cat": {
+      "automation": {
+        "version": "14.6.9"
       }
     }
   },
   "system": {
     "description": {
-      "value": "<p>A demo item showing how multiple activities on a single item can let the caster choose which effect to apply, without needing a macro. Each activity applies a different status effect (Blessed, Ethereal, or Invisible) for 1 round.</p>\n<p><strong>midi-qol</strong>: No macros required. Three utility activities each apply a different effect. In dnd5e v4 this is easily handled by multiple activities on the item.</p>",
+      "value": "<p>A demo item showing how multiple activities on a single item can let the caster choose which effect to apply, without needing a macro. Each activity applies a different status effect (Blessed, Ethereal, or Invisible) for 1 round.</p><div class=\"cat-description\"><p><strong>midi-qol</strong>: No macros required. Three utility activities each apply a different effect. In dnd5e v4 this is easily handled by multiple activities on the item.</p></div>",
       "chat": "<p>A demo item showing how multiple activities on a single item can let the caster choose which effect to apply, without needing a macro. Each activity applies a different status effect (Blessed, Ethereal, or Invisible) for 1 round.</p>"
     },
     "source": {
       "custom": "midi-qol sample",
-      "rules": "2014",
+      "rules": "2024",
       "book": "",
       "page": "",
       "license": ""

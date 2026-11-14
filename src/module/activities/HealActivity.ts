@@ -1,7 +1,5 @@
-import { usesSystemChatData } from "../compatibility.js";
-import { AnyMutableObject } from "fvtt-types/utils";
 import { Activity, RollDialogConfig, RollMessageConfig, RollProcessConfig } from "../../globals.js";
-import { debugEnabled, GameSystemConfig, i18n, warn } from "../../midi-qol.js";
+import { debugEnabled, GameSystemConfig, warn } from "../../midi-qol.js";
 import { Workflow } from "../Workflow.js";
 import { replaceDefaultActivities, configSettings } from "../settings.js";
 import { isAutoFastForward } from "../utils.js";
@@ -33,7 +31,12 @@ let defineMidiHealActivityClass = <T extends Activity>(ActivityClass: T) => {
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiHealSheet,
         usage: {
-          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
+          /*
+           * No `chatCard`. Supplying one keeps the activity on dnd5e's legacy content path — the
+           * system renders the template into `message.content` and `MidiUsageMessageData`'s own
+           * template short-circuits on it, so the card face never runs. Deprecated in dnd5e 6.0 and
+           * removed in 6.2 (`activity/mixin.mjs#legacyUsageContent`) regardless. See AttackActivity.
+           */
           actions: {
             rollHealing: MidiHealActivity.#rollHealing
           }
@@ -41,14 +44,12 @@ let defineMidiHealActivityClass = <T extends Activity>(ActivityClass: T) => {
       }, { inplace: false, insertKeys: true, insertValues: true })
 
     static #rollHealing(this: Activity, event: PointerEvent, target: HTMLElement, message: ChatMessage.Implementation) {
-      const workflow = Workflow.getWorkflow(message?.uuid);
-      if (workflow) workflow.activity = this;
-      return this.rollDamage({event, workflow}, {}, {});
+      const workflow = Workflow.forDamageButton(message);
+      if (workflow === false) return;
+      const activity = workflow && !workflow.readOnly ? workflow.activityFor(this) : this;
+      return activity.rollDamage({event, workflow}, {}, {});
     }
     get possibleOtherActivity() { 
-      return true;
-    }
-    get canUseOtherActivity() {
       return true;
     }
     
@@ -76,15 +77,5 @@ let defineMidiHealActivityClass = <T extends Activity>(ActivityClass: T) => {
 }
 
 export function defineMidiHealSheetClass(baseClass: any) {
-  return class MidiHealSheet extends MidiActivityMixinSheet(baseClass) {
-    static PARTS = {
-      ...super.PARTS,
-      effect: {
-        template: "modules/midi-qol/templates/activity/heal-effect.hbs",
-        templates: [
-          ...super.PARTS.effect.templates
-        ]
-      }
-    };
-  }
+  return class MidiHealSheet extends MidiActivityMixinSheet(baseClass) {};
 }

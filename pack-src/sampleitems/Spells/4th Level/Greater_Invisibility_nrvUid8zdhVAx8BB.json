@@ -17,23 +17,15 @@
           "enableCondition": "",
           "disableCondition": "",
           "disableIncapacitated": false,
-          "dontApply": false,
-          "showIcon": true
+          "dontApply": false
         }
       },
-      "changes": [],
       "disabled": false,
       "duration": {
-        "startTime": null,
-        "seconds": 60,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+        "value": 60,
+        "units": "seconds"
       },
       "origin": null,
-      "tint": "#ffffff",
       "transfer": false,
       "name": "Invisible",
       "description": "",
@@ -53,9 +45,12 @@
       },
       "img": "systems/dnd5e/icons/svg/statuses/invisible.svg",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": []
+      },
       "sort": 0,
-      "_key": "!items.effects!nrvUid8zdhVAx8BB.grInvisibleEff00"
+      "_key": "!items.effects!nrvUid8zdhVAx8BB.grInvisibleEff00",
+      "showIcon": 2
     }
   ],
   "flags": {
@@ -95,16 +90,15 @@
         "effect": []
       }
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.51"
+    "cat": {
+      "automation": {
+        "version": "14.6.5"
       }
     }
   },
   "system": {
     "description": {
-      "value": "<p>A creature you touch has the Invisible condition until the spell ends.</p><p>midi-qol: Utility activity applies Invisible status for the full duration. Unlike regular Invisibility, the effect does NOT end when the target attacks or casts a spell.</p>",
+      "value": "<p>A creature you touch has the Invisible condition until the spell ends.</p><div class=\"cat-description\"><p>midi-qol: Utility activity applies Invisible status for the full duration. Unlike regular Invisibility, the effect does NOT end when the target attacks or casts a spell.</p></div>",
       "chat": "<p>A creature you touch has the Invisible condition until the spell ends.</p>"
     },
     "source": {

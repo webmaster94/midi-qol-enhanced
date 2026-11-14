@@ -5,29 +5,21 @@
   "effects": [
     {
       "_id": "dvnWrdDeafened00",
-      "changes": [],
       "disabled": false,
       "duration": {
-        "startTime": null,
-        "seconds": 60,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+        "value": 60,
+        "units": "seconds"
       },
       "transfer": false,
       "flags": {
         "dae": {
-          "stackable": false,
+          "stackable": "none",
           "macroRepeat": "none",
           "specialDuration": [],
           "transfer": false,
-          "dontApply": false,
-          "showIcon": true
+          "dontApply": false
         }
       },
-      "tint": "#ffffff",
       "name": "Divine Word (Deafened)",
       "description": "<p>Deafened by Divine Word for 1 minute (41-50 HP when struck).</p>",
       "statuses": [
@@ -46,35 +38,30 @@
       },
       "img": "icons/magic/holy/projectiles-blades-salvo-yellow.webp",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": []
+      },
       "sort": 0,
-      "_key": "!items.effects!DivineWord000000.dvnWrdDeafened00"
+      "_key": "!items.effects!DivineWord000000.dvnWrdDeafened00",
+      "showIcon": 2
     },
     {
       "_id": "dvnWrdBlndDeaf00",
-      "changes": [],
       "disabled": false,
       "duration": {
-        "startTime": null,
-        "seconds": 600,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+        "value": 600,
+        "units": "seconds"
       },
       "transfer": false,
       "flags": {
         "dae": {
-          "stackable": false,
+          "stackable": "none",
           "macroRepeat": "none",
           "specialDuration": [],
           "transfer": false,
-          "dontApply": false,
-          "showIcon": true
+          "dontApply": false
         }
       },
-      "tint": "#ffffff",
       "name": "Divine Word (Blinded & Deafened)",
       "description": "<p>Blinded and Deafened by Divine Word for 10 minutes (31-40 HP when struck).</p>",
       "statuses": [
@@ -94,35 +81,30 @@
       },
       "img": "icons/magic/holy/projectiles-blades-salvo-yellow.webp",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": []
+      },
       "sort": 0,
-      "_key": "!items.effects!DivineWord000000.dvnWrdBlndDeaf00"
+      "_key": "!items.effects!DivineWord000000.dvnWrdBlndDeaf00",
+      "showIcon": 2
     },
     {
       "_id": "dvnWrdAllThree00",
-      "changes": [],
       "disabled": false,
       "duration": {
-        "startTime": null,
-        "seconds": 3600,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+        "value": 3600,
+        "units": "seconds"
       },
       "transfer": false,
       "flags": {
         "dae": {
-          "stackable": false,
+          "stackable": "none",
           "macroRepeat": "none",
           "specialDuration": [],
           "transfer": false,
-          "dontApply": false,
-          "showIcon": true
+          "dontApply": false
         }
       },
-      "tint": "#ffffff",
       "name": "Divine Word (Blinded, Deafened & Stunned)",
       "description": "<p>Blinded, Deafened, and Stunned by Divine Word for 1 hour (21-30 HP when struck).</p>",
       "statuses": [
@@ -143,9 +125,12 @@
       },
       "img": "icons/magic/holy/projectiles-blades-salvo-yellow.webp",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": []
+      },
       "sort": 0,
-      "_key": "!items.effects!DivineWord000000.dvnWrdAllThree00"
+      "_key": "!items.effects!DivineWord000000.dvnWrdAllThree00",
+      "showIcon": 2
     }
   ],
   "flags": {
@@ -208,16 +193,15 @@
         "activity": []
       }
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.51"
+    "cat": {
+      "automation": {
+        "version": "14.6.5"
       }
     }
   },
   "system": {
     "description": {
-      "value": "<p>You utter a word imbued with power from the Upper Planes. Each creature of your choice in range makes a Charisma saving throw. On a failed save, a target that has 50 Hit Points or fewer suffers an effect based on its current Hit Points:</p>\n<table><thead><tr><td>Hit Points</td><td>Effect</td></tr></thead><tbody><tr><td>0-20</td><td>The target dies.</td></tr><tr><td>21-30</td><td>Blinded, Deafened, and Stunned for 1 hour.</td></tr><tr><td>31-40</td><td>Blinded and Deafened for 10 minutes.</td></tr><tr><td>41-50</td><td>Deafened for 1 minute.</td></tr></tbody></table>\n<p>Regardless of HP, a Celestial, Elemental, Fey, or Fiend that fails is forced back to its plane of origin.</p>\n<p><strong>midi-qol</strong>: Automates the CHA save. On failure, an ItemMacro checks each target's HP and applies the appropriate condition effects. Targets over 50 HP are unaffected. Extraplanar creature banishment is notified but not mechanically enforced. The kill effect sets HP to 0.</p>",
+      "value": "<p>You utter a word imbued with power from the Upper Planes. Each creature of your choice in range makes a Charisma saving throw. On a failed save, a target that has 50 Hit Points or fewer suffers an effect based on its current Hit Points:</p>\n<table><thead><tr><td>Hit Points</td><td>Effect</td></tr></thead><tbody><tr><td>0-20</td><td>The target dies.</td></tr><tr><td>21-30</td><td>Blinded, Deafened, and Stunned for 1 hour.</td></tr><tr><td>31-40</td><td>Blinded and Deafened for 10 minutes.</td></tr><tr><td>41-50</td><td>Deafened for 1 minute.</td></tr></tbody></table>\n<p>Regardless of HP, a Celestial, Elemental, Fey, or Fiend that fails is forced back to its plane of origin.</p><div class=\"cat-description\"><p><strong>midi-qol</strong>: Automates the CHA save. On failure, an ItemMacro checks each target's HP and applies the appropriate condition effects. Targets over 50 HP are unaffected. Extraplanar creature banishment is notified but not mechanically enforced. The kill effect sets HP to 0.</p></div>",
       "chat": "<p>You utter a word imbued with power from the Upper Planes. Each creature of your choice in range makes a Charisma saving throw. On a failed save, a target that has 50 Hit Points or fewer suffers an effect based on its current Hit Points:</p>\n<table><thead><tr><td>Hit Points</td><td>Effect</td></tr></thead><tbody><tr><td>0-20</td><td>The target dies.</td></tr><tr><td>21-30</td><td>Blinded, Deafened, and Stunned for 1 hour.</td></tr><tr><td>31-40</td><td>Blinded and Deafened for 10 minutes.</td></tr><tr><td>41-50</td><td>Deafened for 1 minute.</td></tr></tbody></table>\n<p>Regardless of HP, a Celestial, Elemental, Fey, or Fiend that fails is forced back to its plane of origin.</p>"
     },
     "source": {

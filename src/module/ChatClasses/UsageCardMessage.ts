@@ -1,0 +1,584 @@
+/**
+ * midi's usage card as dnd5e's usage message sub-type: dnd5e renders the card face, midi adds hits, saves,
+ * advantage presentation and the damage tray. Design notes: dnd5e-v6-checklist, M13.
+ */
+
+import { error } from "../../midi-qol.js";
+import { Activity, ChatMessageRenderOptions, Dnd5eChatMessage } from "../../globals.js";
+import { checkRule, configSettings, safeGetGameSetting } from "../settings.js";
+import { getRemoveAllButtons, getRemoveAttackButtons, getRemoveDamageButtons, midiRenderAttackRoll,
+  midiRenderDamageRolls, midiRenderOtherDamageRolls, midiRenderBonusDamageRolls, midiRenderFormulaRoll, renderRollAttributionIcon, renderSaveRollHTML,
+  getAdvantageModeTitle, getTokenName, renderAttributionTooltip, tokenPortrait, activityHasAreaTarget } from "../utils.js";
+import { saveDisplayMode } from "../lib/saveVisibility.js";
+import { MODULE_ID, MQDamageRollTypes } from "../../midi-qol.js";
+import { Workflow } from "../Workflow.js";
+import { followUpButtons } from "../followUps.js";
+import { NOTE_MESSAGE_TYPE, noteCard, notesOf } from "./CardNoteMessage.js";
+import { attributionMap, cardMidi, rollTypeOf, rollsOfType, cardStateSchema, recordFor, recordList, type CardRecord, type CardRecords } from "../lib/cardState.js";
+
+/** Renderer per roll-backed section; damage renderers aggregate the section's rolls into one block. */
+const SECTION_ROLL_RENDERERS: Record<string, (rolls: Roll[]) => Promise<string> | string> = {
+  attack: rolls => midiRenderAttackRoll(rolls[0]),
+  defaultDamage: midiRenderDamageRolls,
+  otherDamage: midiRenderOtherDamageRolls,
+  bonusDamage: midiRenderBonusDamageRolls,
+  utility: rolls => midiRenderFormulaRoll(rolls[0])
+};
+
+/** Roll types midi tags damage rolls with; the presence of one means damage has been rolled. */
+
+/**
+ * Which of the card's buttons this user should see. Policy comes from the settings at render (GM and player
+ * settings differ), progress mostly from `message.rolls`. Used for midi's buttons and dnd5e's.
+ */
+export function midiButtonVisibility(message: Dnd5eChatMessage | undefined, activity?: Activity) {
+  const midi = cardMidi(message);
+  const progress = midi.progress ?? {};
+  const rolls = message?.rolls ?? [];
+  const attackRolled = rolls.some(r => rollTypeOf(r) === "attack");
+  const damageRolled = rollsOfType(rolls, MQDamageRollTypes).length > 0;
+
+  // Confirmation holds the buttons only while pending; `progress.confirmed` alone does not mean the card is finished.
+  const confirmEnabled = !!midi.confirmAttackDamage;
+  const confirmPending = confirmEnabled && !progress.confirmed;
+  // midi's card actions dispatch through the activity: once its item is gone none of them can run.
+  const done = !!progress.allRemoved || !activity?.item || !!message?.getFlag(MODULE_ID, "undone");
+  const removeAll = done || getRemoveAllButtons(activity);
+  // Attacks handed to one use per target: those cards attack, damage and apply effects.
+  const split = !!progress.attacksSplit;
+
+  // Rolled (or the workflow finished without the roll) and the policy removes its control; also governs dnd5e's
+  // buttons where midi draws none.
+  const finished = !!progress.finished;
+  const attackSpent = (attackRolled || finished) && !confirmPending && (removeAll || getRemoveAttackButtons(activity));
+  const damageSpent = (damageRolled || finished) && !confirmPending && (removeAll || getRemoveDamageButtons(activity));
+
+  return {
+    attack: !done && !split && !!midi.hasAttack && !attackSpent,
+    damage: !done && !split && !!midi.hasDamage && !damageSpent,
+    attackSpent: done || attackSpent,
+    damageSpent: done || damageSpent,
+    // An activity with no attack roll still confirms, with one button instead of hit/miss.
+    confirm: !done && !split && confirmPending,
+    confirmHitMiss: !done && !split && confirmPending && !!midi.hasAttack,
+    cancel: !done && !split && confirmPending && !!configSettings.undoWorkflow,
+    effects: !done && !split && !!midi.hasEffects
+      && !(progress.effectsApplied && configSettings.autoItemEffects === "applyRemove"),
+    allRemoved: done,
+    savesResolved: !!progress.savesResolved,
+    teleported: !!progress.teleported,
+    // Every template the use places is on the card (cards before 14.6.9 recorded it in progress)
+    templatesPlaced: !!progress.templatesPlaced || (activityHasAreaTarget(activity)
+      && (midi.state?.templateUuids?.length ?? 0) >= (Number(activity?.target?.template?.count) || 1))
+  };
+}
+
+/** Registered at init, beside the damage-card model. */
+export let MidiUsageMessageData: any;
+
+export const USAGE_MESSAGE_TYPE = "usage";
+
+/** The card's roll sections; the template places each by name, in step with `templates/chat/usage-card.hbs`. */
+export const SECTION_NAMES = [
+  "attack", "hits", "damage", "otherDamage", "bonusDamage", "utility", "saves"
+] as const;
+
+export type SectionName = typeof SECTION_NAMES[number];
+
+const COVER_ICONS: Record<string, string> = {
+  half: "systems/dnd5e/icons/svg/statuses/cover-half.svg",
+  threeQuarters: "systems/dnd5e/icons/svg/statuses/cover-three-quarters.svg",
+  total: "systems/dnd5e/icons/svg/statuses/cover-total.svg"
+};
+
+/** The token a save message was rolled for from the card's button (SaveActivity), whoever its speaker is */
+function saveMessageTarget(message: ChatMessage.Implementation): string | undefined {
+  return (message.getFlag(MODULE_ID, "targetUuid") as string | undefined) || undefined;
+}
+
+/**
+ * A token's save (or check) roll for a usage card: one kept on the card (another module's, or one midi changed), else
+ * the card's latest linked save or check message for the token; the one with midi's result when midi recorded one.
+ */
+export function cardSaveRoll(card: ChatMessage.Implementation | null | undefined, tokenUuid: string): Roll | undefined {
+  if (!card) return undefined;
+  const kept = (card.rolls ?? []).find(roll => rollTypeOf(roll) === "save"
+    && foundry.utils.getProperty(roll, `options.${MODULE_ID}.targetUuid`) === tokenUuid);
+  if (kept) return kept as Roll;
+  // Scene.<sceneId>.Token.<tokenId>: a duplicated scene keeps its token ids
+  const [sceneId, , tokenId] = tokenUuid.split(".").slice(-3);
+  const record = recordFor(cardMidi(card).records, tokenUuid);
+  const associated = (type: string) => (card as Dnd5eChatMessage).getAssociatedRolls?.(type) ?? [];
+  const linked = [...associated("save"), ...associated("check")]
+    .filter(message => saveMessageTarget(message) === tokenUuid || (!saveMessageTarget(message) && message.speaker?.token === tokenId
+      && (!message.speaker.scene || message.speaker.scene === sceneId)))
+    .sort((a, b) => (a.timestamp ?? 0) - (b.timestamp ?? 0));
+  const message = typeof record?.saveTotal === "number"
+    ? linked.filter(m => m.rolls?.[0]?.total === record.saveTotal).at(-1) : linked.at(-1);
+  return message?.rolls?.[0] as Roll | undefined;
+}
+
+/** A row of the saves section (saves.html): a token, and its result if it has one */
+async function saveRow(uuid: string, result?: { roll?: Roll, total?: number | null, saved: boolean, dc?: number, record?: CardRecord }) {
+  const document = fromUuidSync(uuid) as TokenDocument.Implementation | null;
+  if (!(document instanceof TokenDocument)) return undefined;
+  const npc = !document.actor?.hasPlayerOwner;
+  const row: Record<string, unknown> = {
+    target: { id: document.id, document: { uuid } },
+    gmName: getTokenName(document),
+    img: await tokenPortrait(document),
+    targetClass: npc ? "midi-qol-npc-target" : "midi-qol-player-target",
+    saveTotalClass: npc ? "midi-qol-npc-save-total" : "",
+    saveToolTipClass: npc ? "midi-qol-npc-save-tooltip" : "",
+    saveSymbol: "", saveClass: "", rollTotal: "", rollHTML: ""
+  };
+  const total = result?.total;
+  if (!result || total === undefined || total === null) return row;
+  const { roll, saved, dc, record } = result;
+  row.rollTotal = isFinite(total) ? String(total) : "∞";
+  row.rollHTML = roll ? await renderSaveRollHTML(roll) : "";
+  if (dc !== undefined) {
+    row.saveSymbol = `${npc ? "midi-qol-npc-save-symbol" : ""} midi-qol-save-symbol ${saved ? "fa-check" : "fa-xmark"}`;
+    row.saveClass = saved ? "success" : "failure";
+    const detail = roll?.result && roll.result !== String(total) && isFinite(total) ? ` = ${roll.result}` : "";
+    row.saveTooltip = `${isFinite(total) ? total : "∞"}${detail} vs DC ${dc}`;
+  }
+  if (record) {
+    const attribution = attributionMap(record.saveAttribution);
+    row.attributionTooltip = foundry.utils.escapeHTML(await renderAttributionTooltip(attribution, getAdvantageModeTitle(record.saveMode)));
+    row.hasAttribution = !foundry.utils.isEmpty(attribution);
+    row.coverLabel = record.saveCover ? COVER_ICONS[record.saveCover] : undefined;
+  }
+  return row;
+}
+
+/** The template a card section is drawn with when it stores none (a roll section stored without a label gets one too) */
+export const SECTION_TEMPLATES = {
+  hits: "modules/midi-qol/templates/hits.html",
+  saves: "modules/midi-qol/templates/saves.html"
+} as const satisfies Partial<Record<string, string>>;
+
+/** A card section: a roll type drawn from `message.rolls`, a template with data, or markup (older cards) */
+export type MidiCardSection = { label?: string, rollType?: string, template?: string, data?: Record<string, unknown>, html?: string };
+
+export function setupUsageCardMessage() {
+  // Must run at init, subclassing the current occupant so another module's model is kept. Untyped: fvtt-types
+  // does not describe the system's models.
+  const base: any = CONFIG.ChatMessage.dataModels?.[USAGE_MESSAGE_TYPE]
+    ?? globalThis.dnd5e?.dataModels?.chatMessage?.UsageMessageData;
+  if (!base) {
+    error("dnd5e exposes no usage chat message model to extend: midi cannot draw its usage cards");
+    return;
+  }
+
+  const { ArrayField, BooleanField, ForeignDocumentField, NumberField, ObjectField, SchemaField, StringField } = foundry.data.fields;
+
+  MidiUsageMessageData = class extends base {
+    declare parent: ChatMessage.Implementation;
+    declare midi: Record<string, any>;
+
+    /** dnd5e's usage card with midi's data (system.midi) and per-target detail */
+    static defineSchema() {
+      const schema = super.defineSchema();
+      // midi's per-target detail on dnd5e's own targets list: older cards, and a card a damage-only workflow shows
+      // (cardTargetDetail). Unset unless written, so dnd5e's own descriptors compare equal and aren't rewritten.
+      const targets = schema.targets as { element?: { fields?: Record<string, unknown> } } | undefined;
+      if (targets?.element?.fields) {
+        const unset = { required: false, initial: undefined };
+        Object.assign(targets.element.fields, {
+          uncannyDodge: new BooleanField(unset),
+          uncannyDodgeIcon: new StringField({ ...unset, blank: true }),
+          saved: new BooleanField(unset),
+          superSaver: new BooleanField(unset),
+          semiSuperSaver: new BooleanField(unset),
+          saveMults: new ObjectField(unset)
+        });
+      }
+      return {
+        ...schema,
+        // The card of the workflow this use was started from (Workflow.executingCardFor); deleted with it.
+        origin: new ForeignDocumentField(foundry.documents.BaseChatMessage),
+        midi: new SchemaField({
+          // Stored only when set (MidiActivityMixin._createUsageMessage): absent is false
+          ...Object.fromEntries(["hasAttack", "hasDamage", "hasEffects", "condensed", "mergeCardMulti",
+            "confirmAttackDamage", "hideItemDetails"].map(key => [key, new BooleanField({ required: false, initial: undefined })])),
+          // Absent is true
+          displayProperties: new BooleanField({ required: false, initial: undefined }),
+          dmgBtnText: new StringField({ required: false, blank: true }),
+          // Set while the workflow waits for a manual attack roll: the advantage state it will use.
+          attackBtnText: new StringField({ required: false, blank: true }),
+
+          // Activities offered as buttons after the attack hit (followUps.ts).
+          followUps: new ArrayField(new SchemaField({
+            activityUuid: new StringField({ required: true, blank: false }),
+            label: new StringField({ required: false, blank: true }),
+            targetUuids: new ArrayField(new StringField()),
+            critical: new BooleanField({ initial: false }),
+            used: new BooleanField({ initial: false })
+          }), { required: false }),
+
+          // Shown as a `[n]` button prefix after the first roll.
+          attackRollCount: new NumberField({ required: false, nullable: true, integer: true, initial: undefined }),
+          damageRollCount: new NumberField({ required: false, nullable: true, integer: true, initial: undefined }),
+
+          // Only events that leave no other trace; the rest is derived (see midiButtonVisibility).
+          progress: new SchemaField({
+            allRemoved: new BooleanField({ required: false, initial: undefined }),
+            // The use's attacks were handed to one use per target; their cards carry the rolls.
+            attacksSplit: new BooleanField({ required: false, initial: undefined }),
+            confirmed: new BooleanField({ required: false, initial: undefined }),
+            effectsApplied: new BooleanField({ required: false, initial: undefined }),
+            // The workflow ran to completion: no roll can advance it now (e.g. every target missed)
+            finished: new BooleanField({ required: false, initial: undefined }),
+            savesResolved: new BooleanField({ required: false, initial: undefined }),
+            teleported: new BooleanField({ required: false, initial: undefined }),
+            templatesPlaced: new BooleanField({ required: false, initial: undefined })
+          }, { required: false }),
+
+          // The card's roll sections, written as the workflow produces them.
+          sections: new SchemaField(Object.fromEntries(SECTION_NAMES.map(name => [name,
+            new SchemaField({
+              label: new StringField({ required: false, blank: true }),
+              // Rendered from the rolls of this type in `message.rolls`.
+              rollType: new StringField({ required: false, blank: true }),
+              // Or rendered per viewer from a template and its data; `html` is for older cards.
+              template: new StringField({ required: false, blank: true }),
+              data: new ObjectField({ required: false }),
+              html: new StringField({ required: false, blank: true })
+            }, { required: false, nullable: true })
+          ])), { required: false }),
+
+          // The workflow's state: resumed from here after a reload (lib/cardState.ts)
+          ...cardStateSchema()
+        }, { required: false })
+      };
+    }
+
+    static metadata = Object.freeze(foundry.utils.mergeObject(base.metadata, {
+      template: "modules/midi-qol/templates/chat/usage-card.hbs"
+    }, { inplace: false }));
+
+    // The button state worked out for dnd5e's buttons, reused for midi's in the same render
+    #visibility: ReturnType<typeof midiButtonVisibility> | undefined;
+
+    /** dnd5e skips `shouldHideChatButton` for buttons visible to all, so midi's removal is applied here. */
+    _prepareButtons() {
+      const buttons = super._prepareButtons() as { action: string, visibility: string, hidden: boolean }[];
+      const parent = this.parent as Dnd5eChatMessage;
+      const visible = this.#visibility = midiButtonVisibility(parent, parent.getAssociatedActivity?.());
+      return buttons.map(button => {
+        if (button.hidden || button.visibility !== "all") return button;
+        const spent = visible.allRemoved || (visible.savesResolved && ["rollSave", "rollCheck"].includes(button.action))
+          || (visible.teleported && button.action === "planTeleport");
+        return spent ? { ...button, hidden: true } : button;
+      });
+    }
+
+    /** dnd5e's context plus midi's keys; a message with `content` (older cards) renders it verbatim. */
+    async _prepareContext(options: ChatMessageRenderOptions): Promise<Record<string, any>> {
+      this.#visibility = undefined;
+      const context = await super._prepareContext(options);
+      if (context?.content) return context;
+
+      // A teleport that moves the controlled tokens opens its targets list on them (dnd5e's Selected view).
+      const activity = (this.parent as Dnd5eChatMessage).getAssociatedActivity?.();
+      // @ts-expect-error no dnd5e-types
+      const targetState = this.parent._targetState;
+      const teleportMovers = (activity as { midiTeleport?: { movers?: string } } | undefined)?.midiTeleport?.movers;
+      if (activity?.type === "teleport" && teleportMovers === "default" && targetState && !targetState.mode) targetState.mode = "selected";
+
+      // midi's display settings act on parts dnd5e's card face renders unconditionally.
+      if (this.midi?.hideItemDetails) delete context.description;
+      if (this.midi && this.midi.displayProperties === false) {
+        if (context.rows) delete context.rows.properties;
+        // Materials is a supplement, labelled with the unlocalised key.
+        if (context.supplements) {
+          context.supplements = context.supplements.filter((sup: any) => sup?.label !== "DND5E.Materials");
+        }
+      }
+
+      // midi applies the effects itself and offers no button for them, so there is nothing for a tray to do.
+      if (["applyNoButton", "applyRemove"].includes(configSettings.autoItemEffects)) context.effects = [];
+
+      // Notes, and messages a note owns, are drawn by the notes.
+      context.summaries = (context.summaries ?? []).filter((summary: any) => !drawnSeparately(game.messages?.get(summary.id)));
+      // With dnd5e's summaries off the saves show in the log, so no rows are drawn
+      const saveRows = safeGetGameSetting("dnd5e", "chatCardSummary") === false ? [] : await this.#saveRows();
+      const sections = await this.#renderSections(this.#applySaveSummaries(context, saveRows), saveRows);
+      const { condensed, mergeCardMulti, attackRollCount, attackBtnText, dmgBtnText } = this.midi ?? {};
+      context.midi = {
+        condensed, mergeCardMulti, attackRollCount, attackBtnText, dmgBtnText,
+        sections,
+        buttons: this.#visibility ?? midiButtonVisibility(this.parent, activity),
+        // The damage roll about to be made; Handlebars has no arithmetic helper.
+        nextDamageRollCount: (this.midi?.damageRollCount ?? 0) + 1,
+        followUps: followUpButtons(this.parent),
+        damageApplicationTypes: this.#damageApplicationTypes(),
+        notes: await this.#renderNotes()
+      };
+      return context;
+    }
+
+    /** The notes this viewer may see, rendered, by anchor and position. */
+    async #renderNotes(): Promise<Record<string, Record<string, string[]>>> {
+      const out: Record<string, Record<string, string[]>> = {};
+      const place = (anchor: string, position: string, html: string) => ((out[anchor] ??= {})[position] ??= []).push(html);
+      const notes = notesOf(this.parent).filter(note => note.visible)
+        .sort((a, b) => (((a.system as { sort?: number }).sort ?? 0) - ((b.system as { sort?: number }).sort ?? 0)) || ((a.timestamp ?? 0) - (b.timestamp ?? 0)));
+      for (const note of notes) {
+        const system = note.system as { anchor?: string, position?: string, render?: (options: object) => Promise<string> };
+        try {
+          place(system.anchor ?? "bottom", system.position ?? "append", await system.render?.({ summary: true }) ?? "");
+        } catch (err) {
+          error(`card note ${note.id} could not be rendered`, err);
+        }
+      }
+      return out;
+    }
+
+    /**
+     * dnd5e 6 folds the card's save and check messages into it as summaries for viewers with "Summarize chat cards"
+     * on. On a midi card that summary is midi's saves section (style "midi": dnd5e's summaries of the saves and checks it
+     * has a result row for are dropped, others kept) or dnd5e's per-roll summaries, with midi's section keeping only saves that have none:
+     * other modules' saves reach midi without a linked message.
+     * With the setting off neither is drawn and the messages show in the log. Returns the save targets to omit.
+     */
+    #applySaveSummaries(context: Record<string, any>, saveRows: any[]): Set<string> | "all" {
+      if (!this.midi) return new Set();
+      if (safeGetGameSetting("dnd5e", "chatCardSummary") === false) {
+        context.summaries = [];
+        return "all";
+      }
+      if (configSettings.saveSummaryStyle !== "dnd5e") {
+        // midi's section stands in for the summaries of the saves and checks it shows a result for (a save rolled from the
+        // card's button among them, #saveRows); any other summary is dnd5e's to show.
+        const shown = new Set(saveRows
+          .filter((save: any) => save?.saveClass || (save?.rollTotal != null && save.rollTotal !== ""))
+          .map((save: any) => save?.target?.document?.uuid).filter(Boolean));
+        context.summaries = (context.summaries ?? []).filter((summary: any) =>
+          !(["save", "check"].includes(game.messages?.get(summary.id)?.type ?? "") && shown.has(summary.token?.uuid)));
+        return new Set();
+      }
+      return new Set((context.summaries ?? []).map((summary: any) => summary.token?.uuid).filter(Boolean));
+    }
+
+    /**
+     * The saves section's rows: midi's targets from the records, each with its result and roll, a roll kept on the card
+     * (another module's, or one midi changed) or else the card's linked save or check message for the token. With
+     * Auto Check Saves off a save rolled from the card's button gives its token's row, or a row for a creature that
+     * wasn't a target (Save summary style: midi). Older cards stored their rows.
+     */
+    async #saveRows(): Promise<any[]> {
+      const data = this.midi?.sections?.saves?.data;
+      if (!data) return [];
+      const parent = this.parent as Dnd5eChatMessage;
+      const dc: number | undefined = Number.isFinite(data.dc) ? data.dc : undefined;
+      if (Array.isArray(data.saves)) return Promise.all(data.saves.map(async (save: any) =>
+        ({ ...save, rollHTML: save.rollHTML || await renderSaveRollHTML(cardSaveRoll(parent, save?.target?.document?.uuid ?? "")) })));
+      const fromButtons = saveDisplayMode() === "none" && configSettings.saveSummaryStyle !== "dnd5e";
+      // A save rolled from the card's button, judged against its own DC as dnd5e does
+      const buttonRow = (uuid: string) => {
+        const roll = cardSaveRoll(parent, uuid) as (Roll & { isCritical?: boolean, isFumble?: boolean, options: { target?: number } }) | undefined;
+        if (!roll) return saveRow(uuid);
+        const total = roll.total ?? 0;
+        const rollDC = Number.isFinite(roll.options.target) ? roll.options.target : dc;
+        let saved = rollDC !== undefined && total >= rollDC;
+        if (rollDC !== undefined && checkRule("criticalSaves")) saved = (!!roll.isCritical || total >= rollDC) && !roll.isFumble;
+        return saveRow(uuid, { roll, total, saved, dc: rollDC });
+      };
+      const records = recordList(this.midi?.records).filter(record => record.targets);
+      const rows: unknown[] = [];
+      for (const record of records) {
+        if (record.saveTotal !== undefined || record.saveCoverAuto) {
+          rows.push(await saveRow(record.uuid, { roll: cardSaveRoll(parent, record.uuid), total: record.saveCoverAuto ? Infinity : record.saveTotal,
+            saved: !!record.saved, dc, record }));
+        } else rows.push(await (fromButtons ? buttonRow(record.uuid) : saveRow(record.uuid)));
+      }
+      // Creatures that weren't targets, saving from the card's button
+      if (fromButtons) {
+        const listed = new Set(records.map(record => record.uuid));
+        const others = new Set((parent.getAssociatedRolls?.() ?? []).filter(m => ["save", "check"].includes(m.type as string) && (saveMessageTarget(m) || m.speaker?.token))
+          .map(m => saveMessageTarget(m) ?? game.scenes?.get(m.speaker.scene ?? "")?.tokens.get(m.speaker.token ?? "")?.uuid).filter(uuid => uuid && !listed.has(uuid)) as string[]);
+        for (const uuid of others) rows.push(await buttonRow(uuid));
+      }
+      return rows.filter(Boolean);
+    }
+
+    /** The sections for rendering: roll-backed ones from `message.rolls`, template ones per viewer, `html` as stored. */
+    async #renderSections(omitSaves: Set<string> | "all", saveRows: any[]): Promise<Record<string, unknown>> {
+      const stored: Record<string, any> = this.midi?.sections ?? {};
+      const out: Record<string, unknown> = {};
+      for (const name of SECTION_NAMES) {
+        let section = stored[name];
+        // Targets added to an attack card after its roll (e.g. by another module's buttons) get a hits list to show in.
+        if (name === "hits" && !section && stored.attack && this.#recordedTargets().length)
+          section = { label: "", template: SECTION_TEMPLATES.hits, data: { hits: [] } };
+        // Rows drawn from the records; older cards (and a card shown by a workflow that does not own it) stored them
+        if (name === "hits" && section && !Array.isArray(section.data?.hits)) section = { ...section, data: { ...(section.data ?? {}), hits: await this.#hitRows() } };
+        if (name === "saves" && section?.data) {
+          // The heading (DC, damage on save) stays when dnd5e's summaries replace the rows; it has no DC of its own.
+          section = (omitSaves === "all" || !saveRows.length) ? null : { ...section, data: { ...section.data,
+            saves: saveRows.filter((save: any) => !omitSaves.has(save?.target?.document?.uuid ?? "")) } };
+        }
+        if (!section) { out[name] = null; continue; }
+        if (!section.template && SECTION_TEMPLATES[name]) section = { ...section, template: SECTION_TEMPLATES[name] };
+        if (section.label === undefined && section.rollType) section = { ...section, label: this.#sectionLabel(section.rollType) };
+        if (section.template) {
+          out[name] = {
+            ...section,
+            html: await foundry.applications.handlebars.renderTemplate(section.template, {
+              ...(section.data ?? {}),
+              // Against everything midi evaluated, not just the rows left once dnd5e's summaries replace some.
+              unevaluated: this.#unevaluatedTargets(name, name === "saves" ? { saves: saveRows } : section.data),
+              // Resolved per viewer, not per roller.
+              oneCard: true,
+              collapsibleTargets: configSettings.collapsibleTargets,
+              isGM: game.user?.isGM
+            })
+          };
+          continue;
+        }
+        if (!section.rollType) { out[name] = section; continue; }
+        const renderer = SECTION_ROLL_RENDERERS[section.rollType];
+        const rolls = rollsOfType(this.parent.rolls, section.rollType);
+        // No rolls to render from — a card mid-workflow, or one whose rolls were pruned.
+        if (!renderer || !rolls.length) { out[name] = { ...section, html: section.html ?? "" }; continue; }
+        const html = await renderer(rolls as Roll[]);
+        // The attribution icon goes on the label
+        const label = `${section.label ?? ""}${await renderRollAttributionIcon(rolls[0])}`;
+        out[name] = { ...section, label, html };
+      }
+      return out;
+    }
+
+    /** A roll section's heading, worked out for the viewer from the activity and the rolls (older cards stored it) */
+    #sectionLabel(rollType: string): string {
+      const activity = (this.parent as Dnd5eChatMessage).getAssociatedActivity?.() as Activity | undefined;
+      const rolls = rollsOfType(this.parent.rolls, rollType);
+      const localize = (key: string) => game.i18n?.localize(key) ?? key;
+      switch (rollType) {
+        case "attack": {
+          // @ts-expect-error CONFIG.Dice.D20Roll not typed
+          const ADV_MODE: { DISADVANTAGE: number, ADVANTAGE: number } = CONFIG.Dice.D20Roll.ADV_MODE;
+          // With fake dice a second d20 is always rolled: naming the mode would give it away
+          const mode = configSettings.addFakeDice ? undefined : foundry.utils.getProperty(rolls[0] ?? {}, "options.advantageMode");
+          return localize(mode === ADV_MODE.ADVANTAGE ? "DND5E.Advantage" : mode === ADV_MODE.DISADVANTAGE ? "DND5E.Disadvantage" : "DND5E.Attack");
+        }
+        case "defaultDamage": return localize(activity?.type === "heal" ? "midi-qol.BaseHealingFlavor" : "midi-qol.BaseDamageFlavor");
+        case "otherDamage": {
+          const other = activity?.otherActivity;
+          if (other?.type === "heal") return localize("midi-qol.OtherHealingFlavor");
+          return other?.midiProperties?.displayActivityName ? localize(other.name ?? "") : localize("midi-qol.OtherDamageFlavor");
+        }
+        case "bonusDamage": return `(${rolls.map(r => foundry.utils.getProperty(r, "options.flavor") ?? foundry.utils.getProperty(r, "options.type"))})`;
+        case "utility": return activity?.roll?.name || localize("DND5E.UTILITY.Title");
+        default: return "";
+      }
+    }
+
+    /** The hits rows, from the records: each attacked token's result, and its AC and modifiers at the attack */
+    async #hitRows(): Promise<Record<string, unknown>[]> {
+      const rows: Record<string, unknown>[] = [];
+      for (const record of recordList(this.midi?.records)) {
+        if (typeof record.hitClass !== "string") continue;
+        const document = fromUuidSync(record.uuid);
+        if (!(document instanceof TokenDocument)) continue;
+        const npc = !document.actor?.hasPlayerOwner;
+        rows.push({
+          actorUuid: record.uuid, target: { id: document.id }, hitClass: record.hitClass, hitSymbol: record.hitSymbol ?? "",
+          img: await tokenPortrait(document), gmName: getTokenName(document), targetClass: npc ? "midi-qol-npc-target" : "midi-qol-player-target",
+          showAC: !!record.hitShowAC, acClass: npc ? "midi-qol-npc-ac" : "", acDisplay: record.acDisplay ?? "",
+          acTooltip: record.acTooltip ?? undefined, acIcons: record.acIcons ?? []
+        });
+      }
+      return rows;
+    }
+
+    #recordedTargets(): { name?: string, img?: string, token?: string }[] {
+      return ((this as unknown as { targets?: { name?: string, img?: string, token?: string }[] }).targets ?? []);
+    }
+
+    /**
+     * Recorded targets with no entry in midi's hits or saves list: added to the card after the roll, so never checked
+     * by the workflow. Shown with a marker rather than a result.
+     */
+    #unevaluatedTargets(name: string, data: Record<string, any> | undefined): { id: string, uuid: string, name: string, img: string }[] {
+      const entries: any[] = name === "hits" ? (data?.hits ?? []) : name === "saves" ? (data?.saves ?? []) : [];
+      if (!["hits", "saves"].includes(name)) return [];
+      const known = new Set(entries.map(entry => entry?.target?.id).filter(Boolean));
+      return this.#recordedTargets()
+        .map(t => ({ id: t.token?.split(".").pop() ?? "", uuid: t.token ?? "", name: t.name ?? "", img: t.img ?? "" }))
+        .filter(t => t.id && !known.has(t.id));
+    }
+
+    /**
+     * Damage roll types that get their own tray (each has its own save multiplier); empty if this viewer gets none.
+     * Who gets a tray is dnd5e's decision, made as its own damage cards make it: the GM, or players where
+     * `allowPlayerDamageTray` is on, and nobody on a card whose content is hidden from them.
+     */
+    #damageApplicationTypes(): string[] {
+      const allowed = !!game.user?.isGM || !!safeGetGameSetting("dnd5e", "allowPlayerDamageTray");
+      if (!allowed || !this.parent.isContentVisible) return [];
+      const present = new Set((this.parent.rolls ?? []).map(r => rollTypeOf(r)));
+      return MQDamageRollTypes.filter(type => present.has(type));
+    }
+  };
+
+  CONFIG.ChatMessage.dataModels[USAGE_MESSAGE_TYPE] = MidiUsageMessageData;
+  Hooks.on("createChatMessage", linkToExecutingWorkflow);
+  // Notifications render with canClose, which dnd5e treats as a popout and so doesn't hide a message a card summarises:
+  // a message hidden in the log (a save or check on its card, a card note, a note's checks) would pop up on its own.
+  Hooks.once("setup", () => globalThis.libWrapper.register(MODULE_ID, "foundry.applications.sidebar.tabs.ChatLog.prototype.notify",
+    function (this: unknown, wrapped: (...args: unknown[]) => unknown, message: ChatMessage.Implementation, options: { existing?: HTMLElement } = {}, ...rest: unknown[]) {
+      const logged = options.existing ?? ui.chat?.element?.querySelector<HTMLElement>(`.message[data-message-id="${message?.id}"]`);
+      if (logged?.hidden) return;
+      return wrapped(message, options, ...rest);
+    }, "MIXED"));
+  Hooks.on("createChatMessage", redrawForNoteMessage);
+  Hooks.on("updateChatMessage", redrawForNoteMessage);
+  Hooks.on("deleteChatMessage", redrawForNoteMessage);
+
+  // A card whose item is deleted loses its buttons, but only when rendered again; redraw the ones on screen.
+  Hooks.on("deleteItem", (item: Item.Implementation) => {
+    for (const element of Array.from(ui.chat?.element?.querySelectorAll<HTMLElement>(".message[data-message-id]") ?? [])) {
+      const message = game.messages?.get(element.dataset.messageId ?? "");
+      if (!message || !(message.system instanceof MidiUsageMessageData)) continue;
+      // @ts-expect-error no dnd5e-types
+      if (message.system.item?.uuid === item.uuid) ui.chat!.updateMessage(message);
+    }
+  });
+}
+
+/** A usage card drawn from its data, not from stored markup. */
+export function rendersFromModel(message: ChatMessage.Implementation): boolean {
+  return !!MidiUsageMessageData && message.system instanceof MidiUsageMessageData && !message._source.content;
+}
+
+/** Messages linked to a card that the card draws in their own place, not among dnd5e's summaries: its notes. */
+function drawnSeparately(message: ChatMessage.Implementation | undefined): boolean {
+  return message?.type === NOTE_MESSAGE_TYPE;
+}
+
+/**
+ * dnd5e redraws a message's parent when one of its messages is created, deleted or changes: for a note's message that is
+ * the note, which is hidden, so its card is redrawn here. A reroll changes a message's rolls, which dnd5e ignores.
+ */
+function redrawForNoteMessage(message: ChatMessage.Implementation) {
+  const note = game.messages?.get((message._source.system as { origin?: string } | undefined)?.origin ?? "");
+  const card = note?.type === NOTE_MESSAGE_TYPE ? noteCard(note) : undefined;
+  if (card && ui.chat?.element?.querySelector(`.message[data-message-id="${card.id}"]`)) ui.chat.updateMessage(card);
+}
+
+/**
+ * A use started from inside a workflow can run on another client (CAT's `completeItemUse` runs it on the actor's owner),
+ * where the workflow doesn't exist, so the card arrives unlinked. The client running that workflow links it.
+ */
+function linkToExecutingWorkflow(message: ChatMessage.Implementation, _options: object, userId: string) {
+  if (userId === game.user?.id || !MidiUsageMessageData || !(message.system instanceof MidiUsageMessageData)) return;
+  if ((message._source.system as { origin?: string | null } | undefined)?.origin) return;
+  const actor = ChatMessage.getSpeakerActor(message.speaker);
+  const parent = actor ? Workflow.executingCardFor(actor) : undefined;
+  if (!parent || parent.id === message.id || !message.canUserModify(game.user!, "update")) return;
+  const path: string = "system.origin";
+  message.update({ [path]: parent.id });
+}

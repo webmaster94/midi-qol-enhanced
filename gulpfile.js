@@ -34,7 +34,7 @@ function reloadPackage(cb) {
 }
 
 function DEV_DIST() {
-  return path.join(PACKAGE.devDir, PACKAGE.name) + "/";
+  return path.join(process.env.MIDI_QOL_DEV_DIR || PACKAGE.devDir, PACKAGE.name) + "/";
 }
 
 String.prototype.replaceAll = function (pattern, replace) {
@@ -94,10 +94,7 @@ function typeCheck() {
   return () => {
     const tsProject = ts.createProject("tsconfig.json", { noEmit: true });
     return gulp.src(SOURCE + GLOB)
-      .pipe(tsProject(ts.reporter.defaultReporter()))
-      .on("error", (error) => {
-        console.error("TypeScript type check failed");
-      });
+      .pipe(tsProject(ts.reporter.defaultReporter()));
   };
 }
 
@@ -285,12 +282,22 @@ function cleanPackFolderNames(packSrcDir) {
  * Extract packs: packs/ -> pack-src/ (LevelDB to JSON)
  */
 exports.extractPacks = gulp.series(
-  pdel(["pack-src/sampleitems"]),
+  pdel(["pack-src/sampleitems", "pack-src/activeeffects"]),
   async () => {
     if (!foundryvttCli) foundryvttCli = await import("@foundryvtt/foundryvtt-cli");
     await foundryvttCli.extractPack("packs/sampleitems", "pack-src/sampleitems", { folders: true });
     cleanPackFolderNames("pack-src/sampleitems");
     plog("Extracted packs/sampleitems to pack-src/sampleitems");
+    if (fs.existsSync("packs/activeeffects")) {
+      await foundryvttCli.extractPack("packs/activeeffects", "pack-src/activeeffects", { folders: true });
+      cleanPackFolderNames("pack-src/activeeffects");
+      plog("Extracted packs/activeeffects to pack-src/activeeffects");
+    }
+    if (fs.existsSync("packs/summons")) {
+      await foundryvttCli.extractPack("packs/summons", "pack-src/summons", { folders: true });
+      cleanPackFolderNames("pack-src/summons");
+      plog("Extracted packs/summons to pack-src/summons");
+    }
   }
 );
 
@@ -311,17 +318,31 @@ function generateFoundryId() {
  * Also handles embedded documents (effects, activities)
  * Recursively scans subdirectories for nested folder structures.
  */
-async function ensurePackIds(packSrcDir) {
+/**
+ * pack-src files that differ from the last release (the newest tag of midi's major.minor reachable from HEAD), or are
+ * new. Undefined, with a warning, when git can't tell: then only missing versions are set.
+ */
+function changedSinceRelease(packSrcDir) {
+  const { execFileSync } = require("child_process");
+  const git = (...args) => execFileSync("git", args, { encoding: "utf8" }).split("\n").filter(Boolean);
+  const [major, minor] = PACKAGE.version.split(".");
+  try {
+    const [release] = git("describe", "--tags", "--abbrev=0", "--match", `v${major}.${minor}.*`);
+    // Paths relative to the working directory, as ensurePackIds compares them.
+    const files = [...git("diff", "--name-only", "--relative", release, "--", packSrcDir), ...git("ls-files", "--others", "--exclude-standard", "--", packSrcDir)];
+    plog(`CAT versions: ${files.length} file(s) in ${packSrcDir} changed since ${release}`);
+    return new Set(files);
+  } catch (err) {
+    console.warn(`CAT versions: no release to compare ${packSrcDir} with (${err.message.split("\n")[0]}); only missing versions are set`);
+  }
+}
+
+async function ensurePackIds(packSrcDir, { documentType = "Item" } = {}) {
   let modified = 0;
   const midiVersion = PACKAGE.version;
-  const compendiumSource = "midi-qol.midiqol-sample-items";
+  const keyPrefix = { Item: "items", ActiveEffect: "effects", Actor: "actors" }[documentType];
 
-  // Get the last compile time from marker file
-  const lastCompileMarker = path.join(packSrcDir, ".last-compile");
-  let lastCompileTime = 0;
-  if (fs.existsSync(lastCompileMarker)) {
-    lastCompileTime = fs.statSync(lastCompileMarker).mtimeMs;
-  }
+  const changedFiles = changedSinceRelease(packSrcDir);
 
   function processDirectory(dir, folderId) {
     // Check if this directory has a _Folder.json to determine its folder ID
@@ -349,7 +370,7 @@ async function ensurePackIds(packSrcDir) {
         }
 
         // Generate or fix _key if missing/wrong
-        const expectedKey = `!items!${item._id}`;
+        const expectedKey = `!${keyPrefix}!${item._id}`;
         if (!item._key || item._key !== expectedKey) {
           item._key = expectedKey;
           changed = true;
@@ -371,7 +392,7 @@ async function ensurePackIds(packSrcDir) {
               effect._id = generateFoundryId();
               changed = true;
             }
-            const effectKey = `!items.effects!${item._id}.${effect._id}`;
+            const effectKey = `!${keyPrefix}.effects!${item._id}.${effect._id}`;
             if (!effect._key || effect._key !== effectKey) {
               effect._key = effectKey;
               changed = true;
@@ -391,25 +412,16 @@ async function ensurePackIds(packSrcDir) {
           }
         }
 
-        // Stamp chris-premades info for CPR medkit compatibility
-        // Only bump version if file was modified since last compile, or if info is missing
-        const fileMtime = fs.statSync(fullPath).mtimeMs;
-        const cprInfo = item.flags?.["chris-premades"]?.info;
-        const fileModifiedSinceCompile = fileMtime > lastCompileTime;
-        const cprInfoMissing = !cprInfo || !cprInfo.version || !cprInfo.source;
-        if (cprInfoMissing || fileModifiedSinceCompile) {
-          if (!item.flags) item.flags = {};
-          if (!item.flags["chris-premades"]) item.flags["chris-premades"] = {};
-          if (!item.flags["chris-premades"].info) item.flags["chris-premades"].info = {};
-          const info = item.flags["chris-premades"].info;
-          if (info.source !== compendiumSource || info.version !== midiVersion) {
-            const reason = cprInfoMissing ? "missing CPR info" : "file modified since last compile";
-            console.log(`CPR version updated for ${entry.name}: ${info.version || "none"} -> v${midiVersion} (${reason})`);
-            info.source = compendiumSource;
-            info.version = midiVersion;
+        // CAT's automation version: set when missing, midi's version when the file changed since the last release
+        // (bumped when package.json is). Only items marked as automations (flags.cat.automation); demos and legacy
+        // copies carry none.
+        const automation = item.flags?.cat?.automation;
+        if (automation && typeof automation === "object") {
+          const changedSinceRelease = changedFiles?.has(path.relative(process.cwd(), fullPath)) ?? false;
+          if ((!automation.version || changedSinceRelease) && automation.version !== midiVersion) {
+            console.log(`CAT version updated for ${entry.name}: ${automation.version || "none"} -> ${midiVersion}`);
+            automation.version = midiVersion;
             changed = true;
-          } else if (fileModifiedSinceCompile) {
-            console.log(`CPR version unchanged for ${entry.name}: v${midiVersion} (file modified but version already current)`);
           }
         }
 
@@ -433,7 +445,7 @@ async function ensurePackIds(packSrcDir) {
         name: path.basename(dir),
         sorting: "a",
         folder: parentFolderId || null,
-        type: "Item",
+        type: documentType,
         _id: folderId,
         _key: `!folders!${folderId}`
       };
@@ -488,19 +500,56 @@ async function ensurePackIds(packSrcDir) {
   }
 }
 
+const NOTES_BLOCK = '<div class="cat-description">';
+const AUTOMATION_NOTES_MACRO = { source: "midi-qol", rules: "all", identifier: "automation-notes" };
+
+/** The notes block (the description's final cat-description div) as plain text for CAT's medkit. */
+function notesText(description) {
+  const start = description.lastIndexOf(NOTES_BLOCK);
+  if (start < 0) return undefined;
+  const text = description.slice(start + NOTES_BLOCK.length).replace(/<\/div>\s*$/, "")
+    .replace(/<\/p>/g, " ").replace(/<[^>]*>/g, "")
+    .replace(/@\w+\[[^\]]*\]\{([^}]*)\}/g, "$1")
+    .replace(/&nbsp;/g, " ").replace(/&quot;/g, '"').replace(/&#0?39;|&apos;/g, "'")
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+  return text.replace(/\s+/g, " ").trim() || undefined;
+}
+
+/**
+ * Compiled pack only (pack-src unchanged, so versions aren't bumped): an automation lists the automation-notes macro,
+ * which re-adds its notes block when CAT's medkit applies it over an item's own description, and carries the block
+ * as plain-text notes for the medkit.
+ */
+function addCatAutomationData(doc) {
+  const automation = doc.flags?.cat?.automation;
+  if (!doc._key?.startsWith("!items!") || !automation || typeof automation !== "object") return;
+  const description = doc.system?.description?.value ?? "";
+  const blockStart = description.lastIndexOf(NOTES_BLOCK);
+  if (/midi-qol:|requires Coven/.test(blockStart < 0 ? description : description.slice(0, blockStart)))
+    console.warn(`${doc.name}: midi-qol notes outside the cat-description block`);
+  const notes = notesText(description);
+  if (notes) automation.notes = notes;
+  const itemMacros = (doc.flags.cat.macros ??= {}).item ??= [];
+  if (!itemMacros.some(m => m.source === AUTOMATION_NOTES_MACRO.source && m.identifier === AUTOMATION_NOTES_MACRO.identifier))
+    itemMacros.push({ ...AUTOMATION_NOTES_MACRO });
+}
+
 /**
  * Compile packs: pack-src/ -> packs/ (JSON to LevelDB)
  */
 exports.compilePacks = gulp.series(
-  pdel(["packs/sampleitems"]),
+  pdel(["packs/sampleitems", "packs/activeeffects", "packs/summons"]),
   async () => {
-    await ensurePackIds("pack-src/sampleitems");
     if (!foundryvttCli) foundryvttCli = await import("@foundryvtt/foundryvtt-cli");
-    await foundryvttCli.compilePack("pack-src/sampleitems", "packs/sampleitems", { recursive: true });
-    // Touch the last-compile marker so we can detect modified files on next compile
-    const marker = path.join("pack-src/sampleitems", ".last-compile");
-    fs.writeFileSync(marker, new Date().toISOString());
+
+    await ensurePackIds("pack-src/sampleitems");
+    await foundryvttCli.compilePack("pack-src/sampleitems", "packs/sampleitems", { recursive: true, transformEntry: addCatAutomationData });
     plog("Compiled pack-src/sampleitems to packs/sampleitems");
+
+    await ensurePackIds("pack-src/activeeffects", { documentType: "ActiveEffect" });
+    await foundryvttCli.compilePack("pack-src/activeeffects", "packs/activeeffects", { recursive: true });
+    plog("Compiled pack-src/activeeffects to packs/activeeffects");
+
   },
   pdel([DEV_DIST() + PACK + GLOB], { force: true }),
   outputPackFiles(DEV_DIST()),
@@ -513,7 +562,7 @@ function createPackSrcSymlink(output = null) {
   return (cb) => {
     const target = (output || DIST) + "pack-src";
     if (!fs.existsSync(target)) {
-      fs.symlinkSync(path.resolve("pack-src"), path.resolve(target), process.platform === "win32" ? "junction" : "dir");
+      fs.symlinkSync("../pack-src", target);
     }
     cb();
   };

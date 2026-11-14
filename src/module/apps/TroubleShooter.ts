@@ -1,10 +1,25 @@
-import { i18n, systemConcentrationId, error } from "../../midi-qol.js";
+import { chooseJsonFile } from "../lib/fileDialogs.js";
+import { i18n, i18nFormat, systemConcentrationId } from "../../midi-qol.js";
 import { ModuleReviewDialog } from "./ModuleReviewDialog.js";
 import { autoApplyDamageOptions, autoCEEffectsOptions, autoCheckHitOptions, autoCheckSavesOptions, autoEffectsOptions, autoTargetOptions, CheckedAuthorsList, checkedModuleList, checkMechanic, collectModuleData, collectSettingData, configSettings, coverCalculationOptions, enableWorkflow, exportSettingsToJSON, fetchParams, importSettingsFromJSON, rangeTargetOptions, safeGetGameSetting } from "../settings.js";
 import { USEFUL_MODULE_VERSIONS, getModuleVersion, installedModules } from "../setupModules.js";
+import { featureOverlapProblems } from "../featureOverlaps.js";
+import { fillAllRulesText, itemsLackingRulesText } from "../lib/rulesText.js";
 const { ApplicationV2, DialogV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
 const minimumMidiVersion = "11.0.7";
+
+/** midi's chat message types (dnd5e's usage card carries midi's data model) */
+const MIDI_MESSAGE_TYPES = ["usage", "midi-qol.damage", "midi-qol.note"];
+
+/** The world's chat messages of midi's types that fail their data model */
+function invalidMidiMessages(): ChatMessage.Implementation[] {
+  const messages = game.messages;
+  if (!messages) return [];
+  return [...messages.invalidDocumentIds]
+    .map(id => messages.getInvalid(id, { strict: false }) as ChatMessage.Implementation | undefined)
+    .filter((message): message is ChatMessage.Implementation => !!message && MIDI_MESSAGE_TYPES.includes(message._source.type as string));
+}
 
 export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
   public static errors: { timestamp: number, timeString: string, error: any, message: string | undefined }[] = [];
@@ -110,69 +125,40 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
   }
   public static logErrors() {
   }
-  async _updateObject(event, formData) {
-  };
 
   public static exportTroubleShooterData() {
     const data = TroubleShooter.collectTroubleShooterData();
     const filename = "fvtt-midi-qol-troubleshooter.json"
     foundry.utils.saveDataToFile(JSON.stringify(data, null, 2), "text/json", filename);
   }
-  public static async importTroubleShooterDataFromJSONDialog() {
-    const content = await foundry.applications.handlebars.renderTemplate("templates/apps/import-data.hbs",
-      { hint1: "Choose a Trouble Shooter JSON file to import" });
-    let dialog = new Promise((resolve, reject) => {
-      new DialogV2({
-        window: { title: `Import Trouble Shooter Data` },
-        classes: ["midi-qol-import-troubleshooter"],
-        content: content,
-        position: {
-          width: 400,
-          height: "auto"
-        },
-        buttons: [
-          {
-            action: "import",
-            icon: "fa-solid fa-file-import",
-            label: 'Import',
-            default: true,
-            callback: event => {
-              const form = (event.currentTarget as HTMLElement | null)?.querySelector("form");
-              if (!form?.data.files.length) return ui.notifications?.error("You did not upload a data file!");
-              foundry.utils.readTextFromFile(form.data.files[0]).then(json => {
-                const jsonData = JSON.parse(json);
-                if (foundry.utils.isNewerVersion(minimumMidiVersion, jsonData.midiVersion ?? "0.0.0")) {
-                  ui.notifications?.error("Trouble Shooter Data is too old to use");
-                  resolve(false);
-                  return;
-                }
-                jsonData.isLocal = false;
-                jsonData.fileName = form.data.files[0].name;
-                TroubleShooter.data = jsonData;
-                for (let error of TroubleShooter.data.errors) {
-                  error.timeString = `${new Date(error.timestamp).toLocaleDateString()} - ${new Date(error.timestamp).toLocaleTimeString()}`;
-
-                }
-                // Midi Settings Summary fields now all need to be a string. Older versions had booleans etc there so force them to string
-                const midiSummary = TroubleShooter.data.summary.midiSettings;
-                Object.keys(midiSummary).forEach(key => {
-                  if (typeof midiSummary[key] !== "string") midiSummary[key] = `${midiSummary[key]}`;
-                });
-                resolve(true);
-              });
-            }
-          },
-          {
-            action: "no",
-            icon: "fa-solid fa-xmark",
-            label: 'Cancel',
-            callback: event => resolve(false)
-          }
-        ],
-      }).render({force: true});
+  public static async importTroubleShooterDataFromJSONDialog(): Promise<boolean> {
+    const file = await chooseJsonFile(i18n("midi-qol.Import.TroubleShooterTitle"), i18n("midi-qol.Import.TroubleShooterHint"));
+    if (!file) return false;
+    let jsonData;
+    try {
+      jsonData = JSON.parse(file.text);
+    } catch (err) {
+      ui.notifications?.error(i18n("midi-qol.Import.BadFile"));
+      return false;
+    }
+    if (foundry.utils.isNewerVersion(minimumMidiVersion, jsonData.midiVersion ?? "0.0.0")) {
+      ui.notifications?.error(i18n("midi-qol.Import.TooOld"));
+      return false;
+    }
+    jsonData.isLocal = false;
+    jsonData.fileName = file.name;
+    TroubleShooter.data = jsonData;
+    for (let error of TroubleShooter.data.errors) {
+      error.timeString = `${new Date(error.timestamp).toLocaleDateString()} - ${new Date(error.timestamp).toLocaleTimeString()}`;
+    }
+    // Midi Settings Summary fields now all need to be a string. Older versions had booleans etc there so force them to string
+    const midiSummary = TroubleShooter.data.summary.midiSettings;
+    Object.keys(midiSummary).forEach(key => {
+      if (typeof midiSummary[key] !== "string") midiSummary[key] = `${midiSummary[key]}`;
     });
-    return await dialog;
+    return true;
   }
+
   public static getDetailedSettings(moduleId: string): any {
     const returnValue = {};
     let settings = Array.from(game.settings.settings ?? []).filter(i => i[0].includes(moduleId) && i[1].namespace === moduleId);
@@ -190,7 +176,6 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
   }
 
   async _onSubmit(...args): Promise<any> {
-    let [event, options] = args;
     // error("On Submit", event, options.updateData, options.preventClose, options.preventRender);
     return {};
   }
@@ -281,39 +266,18 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
       ui.notifications?.warn(`midi-qol | Cant set midi settings - you have not loaded external trouble shooter data`)
       return false;
     }
-    let dialog: Promise<boolean> = new Promise((resolve, reject) => {
-      new DialogV2({
-        window: { title: `Overwrite midi-qol settings from loaded file` },
-        content: `<p>This will <strong><em>permanently</em></strong> overwrite your midi settings</p>`,
-        position: {
-          width: 400,
-          height: "auto"
-        },
-        buttons: [
-          {
-            action: "overwrite",
-            icon: "fa-solid fa-file-import",
-            label: 'Overwrite',
-            callback: async (event) => {
-              await exportSettingsToJSON(); // Just a safety net saving of the settings
-              const settingsJSON = TroubleShooter.data.midiSettings;
-              importSettingsFromJSON(settingsJSON);
-              //@ts-expect-error
-              Hooks.callAll("midi-qol.configSettingsChanged");
-              resolve(true);
-            }
-          },
-          {
-            action: "cancel",
-            default: true,
-            icon: "fa-solid fa-xmark",
-            label: 'Cancel',
-            callback: event => resolve(false)
-          }
-        ],
-      }).render({force: true});
+    const overwrite = await DialogV2.confirm({
+      window: { title: i18n("midi-qol.Import.OverwriteTitle") },
+      content: `<p>${i18n("midi-qol.Import.OverwriteWarning")}</p>`,
+      rejectClose: false,
+      yes: { label: "midi-qol.Import.Overwrite", icon: "fa-solid fa-file-import", default: false },
+      no: { label: "Cancel", icon: "fa-solid fa-xmark", default: true }
     });
-    return await dialog;
+    if (overwrite !== true) return false;
+    await exportSettingsToJSON(); // Just a safety net saving of the settings
+    await importSettingsFromJSON(TroubleShooter.data.midiSettings);
+    Hooks.callAll("midi-qol.ConfigSettingsChanged");
+    return true;
   }
 
   async _prepareContext(options) {
@@ -389,13 +353,18 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
 
   // V12-only:
   #getTabs() {
-    const tabs = {
-      summary: {id: "summary", group: "sheet", label: "midi-qol.TroubleShooter.Tabs.summary", active: true},
+    const tabs: Record<string, { id: string, group: string, label: string, active?: boolean, cssClass?: string }> = {
+      summary: {id: "summary", group: "sheet", label: "midi-qol.TroubleShooter.Tabs.summary"},
       common: {id: "common", group: "sheet", label: "midi-qol.TroubleShooter.Tabs.common"},
       problems: {id: "problems", group: "sheet", label: "midi-qol.TroubleShooter.Tabs.problems"},
       errors: {id: "errors", group: "sheet", label: "midi-qol.TroubleShooter.Tabs.errors"},
       modules: {id: "modules", group: "sheet", label: "midi-qol.TroubleShooter.Tabs.modules"}
     };
+    // The tab shown is the one Foundry remembers (tabGroups), so a re-render keeps it and the nav marks it
+    for (const tab of Object.values(tabs)) {
+      tab.active = this.tabGroups[tab.group] === tab.id;
+      tab.cssClass = tab.active ? "active" : "";
+    }
     return tabs;
   }
 
@@ -449,7 +418,7 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
       data.summary["coreSettings"]["Scene Details"] =
         `${canvas.scene.dimensions.height} x ${canvas.scene.dimensions.width} | Size: ${canvas.scene.grid.size} | Type: ${Object.keys(CONST.GRID_TYPES)[canvas.scene.grid.type]} | Distance: ${canvas.scene.grid.distance} | Global Illumination ${globalIllumination}`;
 
-      const sceneObjects = ["tokens", "sounds", "tiles", "walls", "lights", game.release.generation >= 14 ? "regions" : "templates", "notes"];
+      const sceneObjects = ["tokens", "sounds", "tiles", "walls", "lights", "regions", "notes"];
       const report: string[] = []
       for (let c of sceneObjects) {
         const collection = canvas.scene[c];
@@ -490,9 +459,6 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
       data.summary.moduleSettings["Sequencer Enable Effects"] = safeGetGameSetting("sequencer", "effectsEnabled");
       data.summary.moduleSettings["Sequencer Enable Sounds"] = safeGetGameSetting("sequencer", "soundsEnabled")
     } else data.summary.moduleSettings["Sequencer"] = i18n("midi-qol.Inactive");
-    if (game.modules.get("times-up")?.active) {
-      data.summary.moduleSettings["Times Up Disable Passive Effects Expiry"] = safeGetGameSetting("times-up", "DisablePassiveEffects");
-    } else data.summary.moduleSettings["Times-Up"] = i18n("midi-qol.Inactive");
     if (game.modules.get("tokenmagic")?.active) {
       data.summary.moduleSettings["Token Magic FX Automatic Template Effects "] = safeGetGameSetting("tokenmagic", "autoTemplateEnabled");
       data.summary.moduleSettings["Token Magic FX Default Template Grid on Hover "] = safeGetGameSetting("tokenmagic", "defaultTemplateOnHover");
@@ -589,8 +555,6 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
         case "dae":
           foundry.utils.setProperty(data.modules[moduleId], "settings", TroubleShooter.getDetailedSettings(moduleId));
           break;
-        case "ddb-game-log":
-          break;
         case "dfreds-convenient-effects":
           foundry.utils.setProperty(data.modules[moduleId], "settings", TroubleShooter.getDetailedSettings(moduleId));
 
@@ -631,17 +595,6 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
         case "midi-qol":
           foundry.utils.setProperty(data.modules[moduleId], "settings", TroubleShooter.getDetailedSettings(moduleId));
           break;
-        case "monks-combat-details":
-          if (safeGetGameSetting("monks-combat-details", "auto-defeated") !== "none" && configSettings.addDead !== "none") {
-            data.problems.push({
-              moduleId: "monks-combat-details",
-              severity: "Error",
-              problemSummary: "Both Midi and Monks Combat Details are adding defeated effects",
-              fixer: "Disable defeated effects in one of the modules",
-              problemDetail: undefined
-            });
-          }
-          break;
         case "monks-little-details":
           foundry.utils.setProperty(data.modules[moduleId], "settings", TroubleShooter.getDetailedSettings(moduleId));
           break;
@@ -652,8 +605,6 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
           foundry.utils.setProperty(data.modules[moduleId], "settings", TroubleShooter.getDetailedSettings(moduleId));
           break;
         case "multilevel-tokens":
-          break;
-        case "simbuls-cover-calculator":
           break;
         case "socketlib":
           if (!(game.modules.get("socketlib")?.active)) {
@@ -666,18 +617,6 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
               problemDetail: undefined
             });
           };
-          break;
-        case "times-up":
-          if (!(game.modules.get("times-up")?.active)) {
-            data.problems.push({
-              moduleId: "times-up",
-              severity: "Warn",
-              problemSummary: "Times Up is not installed or not active. Effects won't expire",
-              fixer: "Install and activate times-up",
-              problemDetail: undefined
-            });
-          };
-          foundry.utils.setProperty(data.modules[moduleId], "settings", TroubleShooter.getDetailedSettings(moduleId));
           break;
         case "walledtemplates":
           this.checkWalledTemplates(data);
@@ -701,7 +640,6 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
         case "multiattack-5e":
         case "obsidian":
         case "quick-rolls":
-        case "ready-set-roll-5e":
         case "roll-tooltips-5e":
         case "retroactive-advantage-5e":
         case "rollgroups":
@@ -725,7 +663,6 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
     data.summary.outOfDate = Object.keys(data.modules)
       .filter(key => foundry.utils.isNewerVersion(baseVersion, data.modules[key].compatibility ?? 0))
       .map(key => {
-        const versionString = `${data.modules[key].active ? i18n("midi-qol.Active") : i18n("midi-qol.Inactive")} ${data.modules[key].version}`
         return {
           key,
           title: data.modules[key].title,
@@ -795,17 +732,6 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
         break;
       case "center":
         break;
-      case "centerLevels":
-        if (!(game.modules.get("levels")?.active)) {
-          data.problems.push({
-            moduleId: "levels",
-            severity: "Error",
-            problemSummary: "You must enable the 'levels' module to use the 'Center Levels' option for 'Walls Block Range'",
-            problemDetail: undefined,
-            fixer: "Enable the 'levels' module"
-          });
-        }
-        break;
       case "levelsautocover":
         if (!(game.modules.get("levelsautocover")?.active)) {
           data.problems.push({
@@ -814,17 +740,6 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
             problemSummary: "You must enable the 'levelsautocover' module to use the 'Levels Auto Cover' option for 'Walls Block Range'",
             problemDetail: undefined,
             fixer: "Enable the 'levelsautocover' module"
-          });
-        }
-        break;
-      case "simbuls-cover-calculator":
-        if (!(game.modules.get("simbuls-cover-calculator")?.active)) {
-          data.problems.push({
-            moduleId: "simbuls-cover-calculator",
-            severity: "Error",
-            problemSummary: "You must enable the 'simbuls-cover-calculator' module to use the 'Simbul's Cover Calculator' option for 'Walls Block Range'",
-            problemDetail: undefined,
-            fixer: "Enable the 'simbuls-cover-calculator' module"
           });
         }
         break;
@@ -857,20 +772,9 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
           data.problems.push({
             moduleId: "levelsautocover",
             severity: "Error",
-            problemSummary: "You must enable the 'levelsautocover' module to use the 'Levels Auto Cover' option for 'Walls Block Range'",
+            problemSummary: "You must enable the 'levelsautocover' module to use the 'Levels Auto Cover' option for 'Calculate Cover'",
             problemDetail: undefined,
             fixer: "Enable the 'levelsautocover' module"
-          });
-        }
-        break;
-      case "simbuls-cover-calculator":
-        if (!(game.modules.get("simbuls-cover-calculator")?.active)) {
-          data.problems.push({
-            moduleId: "simbuls-cover-calculator",
-            severity: "Error",
-            problemSummary: "You must enable the 'simbuls-cover-calculator' module to use the 'Simbul's Cover Calculator' option for 'Walls Block Range'",
-            problemDetail: undefined,
-            fixer: "Enable the 'simbuls-cover-calculator' module"
           });
         }
         break;
@@ -883,12 +787,23 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
           fixer: "Enable the 'tokencover' module and update 'Calculate Cover' to 'Token Cover' on the Mechanics tab"
         });
         break;
+      case "simplecover5e":
+        if (!(game.modules.get("simplecover5e")?.active)) {
+          data.problems.push({
+            moduleId: "simplecover5e",
+            severity: "Error",
+            problemSummary: "You must enable the 'simplecover5e' module to use the 'Simple Cover 5e' option for 'Calculate Cover'",
+            problemDetail: undefined,
+            fixer: "Enable the 'simplecover5e' module"
+          });
+        }
+        break;
       case "tokencover":
         if (!(game.modules.get("tokencover")?.active)) {
           data.problems.push({
             moduleId: "tokencover",
             severity: "Error",
-            problemSummary: "You must enable the 'tokencover' module to use the 'Token Cover' option for 'Walls Block Range'",
+            problemSummary: "You must enable the 'tokencover' module to use the 'Token Cover' option for 'Calculate Cover'",
             problemDetail: undefined,
             fixer: "Enable the 'tokencover' module"
           });
@@ -956,7 +871,7 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
                       configSettings.autoTarget = "walledtemplates";
                       await game.settings.set("midi-qol", "ConfigSettings", configSettings);
                       //@ts-expect-error reload configure
-                      SettingsConfig.reloadConfirm({ world: true });
+                      foundry.applications.settings.SettingsConfig.reloadConfirm({ world: true });
                       TroubleShooter.data = TroubleShooter.collectTroubleShooterData();
                       app.render(true)
                     },
@@ -1014,32 +929,92 @@ export class TroubleShooter extends HandlebarsApplicationMixin(ApplicationV2) {
           // @ts-expect-error
           await game.settings.set("itemacro", "charsheet", false);
           //@ts-expect-error
-          SettingsConfig.reloadConfirm({ world: true });
+          foundry.applications.settings.SettingsConfig.reloadConfirm({ world: true });
         },
         fixerId: -1
       });
     }
   }
 
+  public static checkVolumetricTemplates(data: TroubleShooterData) {
+    if (!game.modules.get("levelsvolumetrictemplates")?.active) return;
+    if (configSettings.autoTarget === "none") return;
+    // lvt's "Target on Placement" pass runs unfiltered 100ms after region creation, overwriting
+    // midi's filtered targets.
+    if (safeGetGameSetting("levelsvolumetrictemplates", "targetOnPlacement")) {
+      data.problems.push({
+        moduleId: "levelsvolumetrictemplates",
+        severity: "Error",
+        problemSummary: "Volumetric Templates 'Target on Placement' overrides midi's targeting with an unfiltered target list",
+        problemDetail: undefined,
+        fixer: "Disable 'Target on Placement' in the Volumetric Templates settings - midi applies its own targeting rules",
+        fixerId: -1
+      });
+    }
+  }
+
   public static checkCommonProblems(data: TroubleShooterData) {
+    data.problems.push(...featureOverlapProblems());
     this.checkMidiSettings(data);
     this.checkMidiCoverSettings(data)
     this.checkMidiSaveSettings(data);
     this.checkNoActorTokens(data);
     this.checkConcentrationStatusEffects(data);
-    this.checkChatLogPrune(data);
+    this.checkVolumetricTemplates(data);
+    this.checkRulesText(data);
+    this.checkInvalidMidiMessages(data);
   }
 
-  public static checkChatLogPrune(data: TroubleShooterData) {
-    if (!(game.modules.get("chatlog-prune")?.active)) {
-      data.problems.push({
-        moduleId: "chatlog-prune",
-        severity: "Warn",
-        problemSummary: "Chat Log Prune is not active. Long sessions may experience performance issues as chat messages accumulate.",
-        problemDetail: undefined,
-        fixer: "Install and activate chatlog-prune"
-      });
-    }
+  /**
+   * Chat messages of midi's types that fail their data model (a stored shape no longer valid): Foundry only logs them
+   * while the world loads and leaves them out of the chat log, and Clear Chat Log can't remove them.
+   */
+  public static checkInvalidMidiMessages(data: TroubleShooterData) {
+    const invalid = invalidMidiMessages();
+    if (!invalid.length) return;
+    data.problems.push({
+      moduleId: "midi-qol",
+      severity: "Warn",
+      problemSummary: i18nFormat("midi-qol.InvalidMessages.Problem", { count: invalid.length }),
+      problemDetail: invalid.slice(0, 10).map(message => `${message.id} (${message._source.type}, ${new Date(message._source.timestamp ?? 0).toLocaleString()})`),
+      fixer: i18n("midi-qol.InvalidMessages.Fixer"),
+      fixerFunc: async (app: TroubleShooter) => {
+        if (!game.user?.isGM) {
+          ui.notifications?.error(i18n("midi-qol.InvalidMessages.GMOnly"));
+          return;
+        }
+        const ids = invalidMidiMessages().map(message => message.id).filter((id): id is string => !!id);
+        await ChatMessage.implementation.deleteDocuments(ids);
+        ui.notifications?.info(i18nFormat("midi-qol.InvalidMessages.Deleted", { count: ids.length }));
+        TroubleShooter.data = TroubleShooter.collectTroubleShooterData();
+        app.render({ force: true });
+      },
+      fixerId: -1
+    });
+  }
+
+  public static checkRulesText(data: TroubleShooterData) {
+    const items = itemsLackingRulesText();
+    if (!items.length) return;
+    data.problems.push({
+      moduleId: "midi-qol",
+      severity: "Warn",
+      problemSummary: i18nFormat("midi-qol.RulesText.Problem", { count: items.length }),
+      problemDetail: items.slice(0, 20).map(item => item.parent ? `${item.parent.name}: ${item.name}` : item.name),
+      fixer: i18n("midi-qol.RulesText.Fixer"),
+      fixerFunc: async (app: TroubleShooter) => {
+        if (!game.user?.isGM) {
+          ui.notifications?.error(i18n("midi-qol.RulesText.GMOnly"));
+          return;
+        }
+        const { filled, notFound } = await fillAllRulesText();
+        ui.notifications?.info(i18nFormat("midi-qol.RulesText.FilledAll", { filled, missing: notFound.length }));
+        if (notFound.length) console.warn("midi-qol | rules text not found for", notFound);
+        TroubleShooter.data = TroubleShooter.collectTroubleShooterData();
+        app.render({ force: true });
+      },
+      fixerId: -1
+    });
   }
 
   public static checkAutoAnimations(data: TroubleShooterData) {

@@ -4,15 +4,16 @@
   "img": "icons/magic/fire/explosion-embers-evade-silhouette.webp",
   "system": {
     "description": {
-      "value": "<p>When you take the Attack action, you can expend one use of Channel Divinity to utter a vow of enmity against a creature you can see within 30 feet of yourself. You have advantage on attack rolls against that creature for 1 minute, or until you use this feature again.</p><p>If the creature drops to 0 hit points before the vow ends, use <em>Transfer Vow</em> to move it to another creature within 30 feet (no action required). The original duration keeps running.</p><p><em>Sample item note:</em> uses are tracked on this item. On a 2024 paladin, repoint the Utter Vow consumption at the actor's own Channel Divinity feature.</p>",
+      "value": "<div class=\"cat-description\"><p><em>midi-qol: Utter Vow gives you advantage on attack rolls against the creature for 1 minute; Transfer Vow moves the vow to another creature within 30 feet when the first drops to 0 hit points, keeping the time left. Uses are tracked on this item: on a 2024 Paladin, point Utter Vow's consumption at your Channel Divinity feature.</em></p><p><em>No rules text (not SRD; Player's Handbook (2024)): give the character your own copy and apply this automation to it with CAT's medkit, which keeps your copy's description.</em></p></div>",
       "chat": ""
     },
     "source": {
       "revision": 1,
       "rules": "2024",
-      "book": "",
+      "book": "Player's Handbook (2024)",
       "page": "",
-      "custom": ""
+      "custom": "midi-qol sample",
+      "license": ""
     },
     "activities": {
       "vowMakeVowAct000": {
@@ -230,26 +231,12 @@
       "name": "Vow of Enmity",
       "img": "icons/magic/fire/explosion-embers-evade-silhouette.webp",
       "type": "base",
-      "changes": [
-        {
-          "key": "flags.midi-qol.advantage.attack.all",
-          "mode": 0,
-          "value": "targetUuid === \"\"",
-          "priority": 20
-        }
-      ],
       "disabled": false,
       "transfer": false,
       "origin": null,
-      "tint": "#ffffff",
       "duration": {
-        "startTime": null,
-        "seconds": 60,
-        "combat": null,
-        "rounds": 10,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+        "value": 10,
+        "units": "rounds"
       },
       "description": "",
       "statuses": [],
@@ -269,27 +256,27 @@
           "disableCondition": ""
         }
       },
-      "_key": "!items.effects!vowOfEnmity00000.vowSelfAdvant000"
+      "_key": "!items.effects!vowOfEnmity00000.vowSelfAdvant000",
+      "system": {
+        "changes": [
+          {
+            "key": "flags.midi-qol.advantage.attack.all",
+            "value": "targetUuid === \"\"",
+            "priority": 20,
+            "type": "custom"
+          }
+        ]
+      }
     },
     {
       "_id": "vowTargetMark000",
       "name": "Marked by Vow of Enmity",
       "img": "icons/magic/fire/explosion-embers-evade-silhouette.webp",
       "type": "base",
-      "changes": [],
       "disabled": false,
       "transfer": false,
       "origin": null,
-      "tint": "#ffffff",
-      "duration": {
-        "startTime": null,
-        "seconds": null,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
-      },
+      "duration": {},
       "description": "",
       "statuses": [],
       "sort": 0,
@@ -308,7 +295,10 @@
           "disableCondition": ""
         }
       },
-      "_key": "!items.effects!vowOfEnmity00000.vowTargetMark000"
+      "_key": "!items.effects!vowOfEnmity00000.vowTargetMark000",
+      "system": {
+        "changes": []
+      }
     }
   ],
   "folder": "fZIl4G4qj3C894LI",
@@ -324,7 +314,7 @@
         "type": "script",
         "img": "icons/svg/dice-target.svg",
         "scope": "global",
-        "command": "const version = \"13.0.64\";\ntry {\n  if (args[0].macroPass !== \"postActiveEffects\") return;\n  const target = workflow.targets.first();\n  if (!target) return;\n  const ADV = \"flags.midi-qol.advantage.attack.all\";\n  const markName = \"Marked by Vow of Enmity\";\n  const mine = ef => MidiQOL.getItemFromEffectOrigin(ef.origin ?? \"\")?.uuid === macroItem.uuid;\n  const isTransfer = rolledActivity?.id === \"vowSwapVowAct000\";\n\n  const selfEffect = actor.effects.find(ef => ef.name === macroItem.name && mine(ef));\n  if (!selfEffect) {\n    if (isTransfer) {\n      ui.notifications?.warn(`${macroItem.name}: no active vow to transfer.`);\n      workflow.aborted = true;\n    }\n    return;\n  }\n\n  // RAW the vow only transfers once the vowed creature is at 0 HP.\n  if (isTransfer) {\n    const prevUuid = selfEffect.changes.find(c => c.key === ADV)?.value?.match(/\"([^\"]+)\"/)?.[1];\n    const prev = prevUuid ? await fromUuid(prevUuid) : null;\n    if (prev && (prev.actor?.system?.attributes?.hp?.value ?? 0) > 0) {\n      const ok = await foundry.applications.api.DialogV2.confirm({\n        window: { title: macroItem.name },\n        content: `<p>${prev.name} still has hit points - the vow transfers only when the vowed creature drops to 0. Transfer anyway?</p>`,\n        rejectClose: false\n      });\n      if (!ok) { workflow.aborted = true; return; }\n    }\n  }\n\n  // The advantage lives on the paladin; only the stored uuid changes.\n  const changes = selfEffect.changes.map(c => c.key === ADV\n    ? { ...c, value: `targetUuid === \"${target.document.uuid}\"` }\n    : c);\n  await selfEffect.update({ changes });\n\n  for (const t of canvas.tokens?.placeables ?? []) {\n    if (t.document.uuid === target.document.uuid) continue;\n    for (const ef of (t.actor?.effects ?? []).filter(ef => ef.name === markName && mine(ef))) await ef.delete();\n  }\n  const marker = target.actor?.effects?.find(ef => ef.name === markName && mine(ef));\n  if (marker) await MidiQOL.addDependent(selfEffect, marker);\n} catch (err) {\n  console.error(`${macroItem?.name} ${version}`, err);\n}\n",
+        "command": "const version = \"13.0.64\";\ntry {\n  if (args[0].macroPass !== \"postActiveEffects\") return;\n  const target = workflow.targets.first();\n  if (!target) return;\n  const ADV = \"flags.midi-qol.advantage.attack.all\";\n  const markName = \"Marked by Vow of Enmity\";\n  const mine = ef => MidiQOL.getItemFromEffectOrigin(ef.origin ?? \"\")?.uuid === macroItem.uuid;\n  const isTransfer = rolledActivity?.id === \"vowSwapVowAct000\";\n\n  const selfEffect = actor.effects.find(ef => ef.name === macroItem.name && mine(ef));\n  if (!selfEffect) {\n    if (isTransfer) {\n      ui.notifications?.warn(`${macroItem.name}: no active vow to transfer.`);\n      workflow.aborted = true;\n    }\n    return;\n  }\n\n  // RAW the vow only transfers once the vowed creature is at 0 HP.\n  if (isTransfer) {\n    const prevUuid = selfEffect.system.changes.find(c => c.key === ADV)?.value?.match(/\"([^\"]+)\"/)?.[1];\n    const prev = prevUuid ? await fromUuid(prevUuid) : null;\n    if (prev && (prev.actor?.system?.attributes?.hp?.value ?? 0) > 0) {\n      const ok = await foundry.applications.api.DialogV2.confirm({\n        window: { title: macroItem.name },\n        content: `<p>${prev.name} still has hit points - the vow transfers only when the vowed creature drops to 0. Transfer anyway?</p>`,\n        rejectClose: false\n      });\n      if (!ok) { workflow.aborted = true; return; }\n    }\n  }\n\n  // The advantage lives on the paladin; only the stored uuid changes.\n  const changes = selfEffect.system.changes.map(c => c.key === ADV\n    ? { ...c, value: `targetUuid === \"${target.document.uuid}\"` }\n    : c);\n  await selfEffect.update({ \"system.changes\": changes });\n\n  for (const t of canvas.tokens?.placeables ?? []) {\n    if (t.document.uuid === target.document.uuid) continue;\n    for (const ef of (t.actor?.effects ?? []).filter(ef => ef.name === markName && mine(ef))) await ef.delete();\n  }\n  const marker = target.actor?.effects?.find(ef => ef.name === markName && mine(ef));\n  if (marker) await MidiQOL.addDependent(selfEffect, marker);\n} catch (err) {\n  console.error(`${macroItem?.name} ${version}`, err);\n}\n",
         "sort": 0,
         "ownership": {
           "default": 0
@@ -377,6 +367,11 @@
       "info": {
         "source": "midi-qol.midiqol-sample-items",
         "version": "13.0.64"
+      }
+    },
+    "cat": {
+      "automation": {
+        "version": "14.6.5"
       }
     }
   },

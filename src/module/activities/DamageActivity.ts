@@ -1,7 +1,6 @@
-import { usesSystemChatData } from "../compatibility.js";
 import { AnyMutableObject } from "fvtt-types/utils";
 import { Activity } from "../../globals.js";
-import { debugEnabled, GameSystemConfig, i18n, warn } from "../../midi-qol.js";
+import { debugEnabled, GameSystemConfig, warn } from "../../midi-qol.js";
 import { Workflow } from "../Workflow.js";
 import { replaceDefaultActivities, configSettings } from "../settings.js";
 import { isAutoFastForward } from "../utils.js";
@@ -33,7 +32,12 @@ let defineMidiDamageActivityClass = <T extends Activity>(ActivityClass: T) => {
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiDamageSheet,
         usage: {
-          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
+          /*
+           * No `chatCard`. Supplying one keeps the activity on dnd5e's legacy content path — the
+           * system renders the template into `message.content` and `MidiUsageMessageData`'s own
+           * template short-circuits on it, so the card face never runs. Deprecated in dnd5e 6.0 and
+           * removed in 6.2 (`activity/mixin.mjs#legacyUsageContent`) regardless. See AttackActivity.
+           */
           actions: {
             rollDamage: MidiDamageActivity.#rollDamage
           },
@@ -41,18 +45,16 @@ let defineMidiDamageActivityClass = <T extends Activity>(ActivityClass: T) => {
       }, { inplace: false, insertKeys: true, insertValues: true });
 
     static #rollDamage(this: Activity, event: PointerEvent, target: HTMLElement, message: ChatMessage.Implementation) {
-      const workflow = Workflow.getWorkflow(message?.uuid);
-      if (workflow) workflow.activity = this;
-      this.rollDamage({ event, workflow }, {}, {});
+      const workflow = Workflow.forDamageButton(message);
+      if (workflow === false) return;
+      const activity = workflow && !workflow.readOnly ? workflow.activityFor(this) : this;
+      activity.rollDamage({ event, workflow }, {}, {});
     }
 
     get possibleOtherActivity() {
       return true;
     }
     
-    get canUseOtherActivity() {
-      return true;
-    }
     async rollDamage(config: AnyMutableObject, dialog: AnyMutableObject, message: AnyMutableObject) {
       config.midiOptions ??= {};
       // @ts-expect-error config is AnyMutableObject
@@ -66,15 +68,5 @@ let defineMidiDamageActivityClass = <T extends Activity>(ActivityClass: T) => {
 }
 
 export function defineMidiDamageSheetClass(baseClass: any) {
-  return class MidiDamageSheet extends MidiActivityMixinSheet(baseClass) {
-    static PARTS = {
-      ...super.PARTS,
-      effect: {
-        template: "modules/midi-qol/templates/activity/damage-effect.hbs",
-        templates: [
-          ...super.PARTS.effect.templates
-        ]
-      }
-    };
-  }
+  return class MidiDamageSheet extends MidiActivityMixinSheet(baseClass) {};
 }

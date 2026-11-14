@@ -10,7 +10,7 @@
                     <th>Problem</th>
                     <th>Fix</th>
                     </tr>
-                    {{#each problems as |problem moudleId|}}
+                    {{#each problems as |problem moduleId|}}
                         <tr>
                         {{#if problem.critical}}
                             <td style="color: red"><strong>Critical {{problem.severity}}</strong></td>
@@ -28,7 +28,7 @@
                                 <td></td>
                                 <td style="text-align: center">
                                     <div class="midi-qol-box">
-                                        <div class="trouble-shooter-action-label" id="fixer-{{problem.fixerid}}"><strong>{{localize "Auto
+                                        <div class="trouble-shooter-action-label" id="fixer-{{problem.fixerId}}"><strong>{{localize "Auto
                                             Fix"}}</strong></div>
                                     </div>
                                 </td>
@@ -51,7 +51,7 @@
         <div class="midi-qol-box">
             {{#if hasIncompatible}}
                 <table>
-                    <t style="text-align: center" colspan="2">Incompatible Modules Active</th>
+                    <tr><th style="text-align: center" colspan="2">Incompatible Modules Active</th></tr>
                     <tr>
                         <td>Module Id</td>
                         <td>Module Name</td>

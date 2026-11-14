@@ -1,10 +1,7 @@
-import { usesSystemChatData } from "../compatibility.js";
-import { AnyObject } from "fvtt-types/utils";
 import { Activity, ActivityUseConfiguration, RollDialogConfig, RollMessageConfig } from "../../globals.js";
-import { debugEnabled, GameSystemConfig, i18n, warn } from "../../midi-qol.js";
+import { debugEnabled, GameSystemConfig, warn } from "../../midi-qol.js";
 import { Workflow } from "../Workflow.js";
 import { replaceDefaultActivities, configSettings } from "../settings.js";
-import { asyncHooksCall } from "../utils.js";
 import { MidiActivityMixin, MidiActivityMixinSheet } from "./MidiActivityMixin.js";
 
 export let MidiCastActivity: ReturnType<typeof defineMidiCastActivityClass>;
@@ -37,7 +34,12 @@ let defineMidiCastActivityClass =  <T extends Activity>(ActivityClass: T) => {
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiCastSheet,
         usage: {
-          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
+          /*
+           * No `chatCard`. Supplying one keeps the activity on dnd5e's legacy content path — the
+           * system renders the template into `message.content` and `MidiUsageMessageData`'s own
+           * template short-circuits on it, so the card face never runs. Deprecated in dnd5e 6.0 and
+           * removed in 6.2 (`activity/mixin.mjs#legacyUsageContent`) regardless. See AttackActivity.
+           */
           dialog: ActivityClass.metadata.usage.dialog,
         },
       }, { inplace: false, insertKeys: true, insertValues: true });
@@ -104,14 +106,16 @@ let defineMidiCastActivityClass =  <T extends Activity>(ActivityClass: T) => {
         delete usage.workflow;
         throw err;
       }
-      // Process the Cast activity's own consumption (e.g., activityUses on Paladin's Smite).
-      // dnd5e's CastActivity.use() bypasses Activity.use() entirely so consume() never runs.
-      // The spell's config.cause mechanism also fails when the cached spell's activity has
-      // consumption.spellSlot: false (ignoreLinkedConsumption becomes true).
-      // Delegate to dnd5e CastActivity.use() which fetches/creates the cached spell and calls spell.use().
-      // The spell's activity handles consuming the CastActivity's resources via config.cause in _prepareUsageUpdates.
+      // Delegate to dnd5e CastActivity.use() which fetches/creates the cached spell and calls spell.use()
       // @ts-expect-error
-      return await ActivityClass.prototype.use.bind(this)(usage, dialog, message);
+      return ActivityClass.prototype.use.bind(this)(usage, dialog, message);
+    }
+
+    prepareFinalData(rollData: any) {
+      super.prepareFinalData(rollData);
+      // dnd5e handles CastActivity overrides via an enchantment effect on the cached spell
+      // (see getSpellChanges/getCachedSpellData) — no need to copy spell values onto the
+      // CastActivity here. The spell's own workflow uses the spell's activity data directly.
     }
 
     get possibleOtherActivity() {

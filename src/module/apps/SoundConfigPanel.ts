@@ -1,6 +1,6 @@
 import { GameSystemConfig, i18n } from "../../midi-qol.js";
 import { MidiSounds } from "../midi-sounds.js";
-import { configSettings, midiSoundSettings } from "../settings.js";
+import { midiSoundSettings } from "../settings.js";
 const { ApplicationV2, HandlebarsApplicationMixin } = foundry.applications.api;
 
 export class SoundConfigPanel extends HandlebarsApplicationMixin(ApplicationV2) {
@@ -181,10 +181,15 @@ export class SoundConfigPanel extends HandlebarsApplicationMixin(ApplicationV2) 
     return canSave;
   }
   #getTabs() {
-    const tabs = {
-      sounds: { id: "sounds", group: "sheet", label: "midi-qol.SoundSettings.Name", active: true },
+    const tabs: Record<string, { id: string, group: string, label: string, active?: boolean, cssClass?: string }> = {
+      sounds: { id: "sounds", group: "sheet", label: "midi-qol.SoundSettings.Name"},
       quick: { id: "quick", group: "sheet", label: "midi-qol.Config.Tabs.quick" }
     };
+    // The tab shown is the one Foundry remembers (tabGroups), so a re-render keeps it and the nav marks it
+    for (const tab of Object.values(tabs)) {
+      tab.active = this.tabGroups[tab.group] === tab.id;
+      tab.cssClass = tab.active ? "active" : "";
+    }
     return tabs;
   }
 

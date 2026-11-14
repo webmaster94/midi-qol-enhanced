@@ -1,10 +1,8 @@
-import { getRollModes } from "../compatibility.js";
-import { usesSystemChatData } from "../compatibility.js";
 import { AnyMutableObject } from "fvtt-types/utils";
 import { Activity, RollDialogConfig, RollMessageConfig, RollProcessConfig } from "../../globals.js";
 import { debugEnabled, GameSystemConfig, i18n, warn } from "../../midi-qol.js";
 import { Workflow } from "../Workflow.js";
-import { replaceDefaultActivities, autoCheckSavesOptions, configSettings } from "../settings.js";
+import { replaceDefaultActivities, autoCheckSavesOptions, configSettings, safeGetGameSetting } from "../settings.js";
 import { MidiActivityMixin, MidiActivityMixinSheet } from "./MidiActivityMixin.js";
 import { MidiSaveActivity } from "./SaveActivity.js";
 import { getSceneTargets } from "./activityHelpers.js";
@@ -36,7 +34,12 @@ let defineMidiCheckActivityClass = <T extends Activity>(ActivityClass: T) => {
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiCheckSheet,
         usage: {
-          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
+          /*
+           * No `chatCard`. Supplying one keeps the activity on dnd5e's legacy content path — the
+           * system renders the template into `message.content` and `MidiUsageMessageData`'s own
+           * template short-circuits on it, so the card face never runs. Deprecated in dnd5e 6.0 and
+           * removed in 6.2 (`activity/mixin.mjs#legacyUsageContent`) regardless. See AttackActivity.
+           */
           actions: {
             rollCheck: MidiCheckActivity.#rollCheck, // Having this means having to track CheckActivity.#rollCheck code changes
             // Needed so the workflow can be inserted
@@ -46,17 +49,14 @@ let defineMidiCheckActivityClass = <T extends Activity>(ActivityClass: T) => {
       }, { inplace: false, insertKeys: true, insertValues: true })
 
     static defineSchema() {
-      const { StringField, ArrayField, BooleanField, SchemaField, ObjectField } = foundry.data.fields;
+      const { StringField, ArrayField, BooleanField, SchemaField } = foundry.data.fields;
       //@ts-expect-error
       const dataModels = game.system.dataModels;
-      const { ActivationField: ActivationField, CreatureTypeField, CurrencyTemplate, DamageData,
-        DamageField, DurationField, MovementField, RangeField, RollConfigField, SensesField,
-        SourceField, TargetField, UsesField } = dataModels.shared
+      const { DamageField } = dataModels.shared
       const FormulaField = dataModels.fields.FormulaField;
 
       const schema = {
         ...super.defineSchema(),
-        otherActivityId: new StringField({ name: "otherActivity", initial: "none" }),
         otherActivityAsParentType: new BooleanField({
           name: "otherActivityAsParentType",
           initial: true,
@@ -79,40 +79,48 @@ let defineMidiCheckActivityClass = <T extends Activity>(ActivityClass: T) => {
           }),
         }),
         friendlySave: new StringField({ initial: "default", name: "friendlySave" })
-        // WIP
-        // saveDisplay: new StringField({initial: "default"}),
       };
       return schema;
     }
 
     static async #rollCheck(this: Activity, event: PointerEvent, target: HTMLElement, message: ChatMessage.Implementation) {
-      let workflow = message ? Workflow.getWorkflow(message.uuid) : null;
-      if (workflow) workflow.activity = this;
+      let workflow = message ? Workflow.findWorkflow(message.uuid) : null;
+      const activity = workflow ? workflow.activityFor(this) : this;
       // return ActivityClass.#rollCheck return ActivityClass.#rollCheck.bind(this)(event, target);
       // Can't do this as it's private
-      const targets: Array<foundry.canvas.placeables.Token.Implementation | Actor.Implementation> = getSceneTargets();
+      // As dnd5e 6: the card's targets (honouring its targeted/selected toggle) and the clicked button's data from
+      // the card, which is all a grouped (dropdown) button carries.
+      const targets: Array<foundry.canvas.placeables.Token.Implementation | TokenDocument.Implementation | Actor.Implementation> =
+        // @ts-expect-error no dnd5e-types
+        [...(message?.system?.evaluatedTargets ?? getSceneTargets())];
       if (!targets.length && game.user?.character) targets.push(game.user?.character);
       if (!targets.length) ui.notifications?.warn("DND5E.ActionWarningNoToken", { localize: true });
-      let { ability, dc: dcStr, skill, tool } = target.dataset;
-      let dc = parseInt(dcStr ?? "0");
-      const check = this.check;
-      const item = this.item;
+      // @ts-expect-error no dnd5e-types
+      const button: Record<string, string | number | undefined> = message?.system?.getButton?.(target)?.dataset ?? target.dataset;
+      const ability = button.ability as string | undefined;
+      const skill = button.skill as string | undefined;
+      const tool = button.tool as string | undefined;
+      const dc = (button.dc === undefined || button.dc === "") ? NaN : Number(button.dc);
+      const check = activity.check;
+      const item = activity.item;
       const rollData: AnyMutableObject = { event, target: Number.isFinite(dc) ? dc : check!.dc.value };
       if (ability && (ability in globalThis.dnd5e.config.abilities)) rollData.ability = ability;
 
       for (const token of targets) {
         const actor = token instanceof Actor ? token : token.actor;
-        const speaker = ChatMessage.getSpeaker({ actor, scene: canvas.scene, token: token instanceof Token ? token.document : null });
+        const tokenDocument = token instanceof foundry.canvas.placeables.Token ? token.document : token instanceof TokenDocument ? token : null;
+        const speaker = ChatMessage.getSpeaker({ actor, scene: canvas.scene, token: tokenDocument });
         const messageData: AnyMutableObject = { data: { speaker } };
         if (!actor) continue;
-        if (["none", "allShow"].includes(configSettings.autoCheckSaves) || actor?.hasPlayerOwner) messageData.rollMode = game.settings.get("core", "rollMode");
-        else messageData.rollMode = getRollModes().PRIVATE;
+        // v14 message-mode strings (CONFIG.ChatMessage.modes keys) so the value matches the roll dialog's options
+        if (["none", "allShow"].includes(configSettings.autoCheckSaves) || actor?.hasPlayerOwner) messageData.rollMode = safeGetGameSetting("core", "messageMode");
+        else messageData.rollMode = "gm";
         if (!game.user?.isGM) {
-          if (configSettings.playerRollSaves === "noneDialogPublic") messageData.rollMode = getRollModes().PUBLIC;
-          else if (configSettings.playerRollSaves === "noneDialogPrivate") messageData.rollMode = getRollModes().PRIVATE;
-          else if (configSettings.playerRollSaves === "noneDialogSelf") messageData.rollMode = getRollModes().SELF;
-          else if (configSettings.playerRollSaves === "noneDialogBlind") messageData.rollMode = getRollModes().BLIND;
-          else messageData.rollMode = game.settings.get("core", "rollMode");
+          if (configSettings.playerRollSaves === "noneDialogPublic") messageData.rollMode = "public";
+          else if (configSettings.playerRollSaves === "noneDialogPrivate") messageData.rollMode = "gm";
+          else if (configSettings.playerRollSaves === "noneDialogSelf") messageData.rollMode = "self";
+          else if (configSettings.playerRollSaves === "noneDialogBlind") messageData.rollMode = "blind";
+          else messageData.rollMode = safeGetGameSetting("core", "messageMode");
         }
         //@ts-expect-error no dnd5e types
         if (skill) await actor.rollSkill({ ...rollData, skill }, {}, messageData);
@@ -138,9 +146,6 @@ let defineMidiCheckActivityClass = <T extends Activity>(ActivityClass: T) => {
       return true;
     }
 
-    get canUseOtherActivity() {
-      return true;
-    }
 
     get isSelfTriggerableOnly() {
       return false;
@@ -150,11 +155,7 @@ let defineMidiCheckActivityClass = <T extends Activity>(ActivityClass: T) => {
     }
 
     async rollDamage(config: RollProcessConfig, dialog: RollDialogConfig = {}, message: RollMessageConfig = {}) {
-      message = foundry.utils.mergeObject({
-        "data.flags.dnd5e.roll": {
-          damageOnSave: this.damage?.onSave
-        }
-      }, message);
+      message = foundry.utils.mergeObject({ "data.system.onSave": this.damage?.onSave ?? null }, message);
       return super.rollDamage(config, dialog, message);
     }
 
@@ -164,12 +165,12 @@ let defineMidiCheckActivityClass = <T extends Activity>(ActivityClass: T) => {
 
     _usageChatButtons(message) {
       const buttons: any[] = [];
+      // 6.0 button format: action at the top level, a label object holding the i18n key, and icon as
+      // FontAwesome classes. The old shape triggered `#migrateLegacyChatButtons` (removed in 6.2).
       if (this.damage!.parts.length) buttons.push({
-        ...(usesSystemChatData() ? { action: "rollDamage", label: { value: "DND5E.Damage" }, icon: "fas fa-burst" }
-          : { label: i18n("DND5E.Damage"), icon: '<i class="fas fa-burst" inert></i>' }),
-        dataset: {
-          action: "rollDamage"
-        }
+        action: "rollDamage",
+        label: { value: "DND5E.Damage" },
+        icon: "fa-solid fa-burst"
       });
       const superButtons = super._usageChatButtons(message);
       // If no check buttons were generated by super (no ability/skill/tool),
@@ -178,18 +179,23 @@ let defineMidiCheckActivityClass = <T extends Activity>(ActivityClass: T) => {
       if (!hasCheckButton) {
         const dc = this.check?.dc.value;
         const label = i18n("midi-qol.plain-d20-roll");
-        const dataset: any = { action: "rollCheck", visibility: "all" };
-        if (dc) dataset.dc = dc;
+        /*
+         * Built the way dnd5e's own check buttons are: the DC lives in `label.value` and the plain
+         * form in `label.hidden`, which is what `_prepareButtons` picks between for a viewer who
+         * should not see the challenge. midi previously encoded the same choice as `.visible-dc` /
+         * `.hidden-dc` spans, which only worked because 6.0 parses them back out again on the way to
+         * removing the format. `visibility` is a field of its own, not a dataset entry.
+         */
         buttons.push({
-          ...(usesSystemChatData() ? {
-            action: "rollCheck", visibility: "all",
-            label: { value: dc ? game.i18n!.format("EDITOR.DND5E.Inline.DC", { dc: String(dc), check: label }) : label, hidden: label },
-            icon: "systems/dnd5e/icons/svg/ability-score-improvement.svg"
-          } : {
-            label: dc ? `<span class="visible-dc">${game.i18n!.format("EDITOR.DND5E.Inline.DC", { dc: String(dc), check: label })}</span><span class="hidden-dc">${label}</span>` : label,
-            icon: '<i class="dnd5e-icon" data-src="systems/dnd5e/icons/svg/ability-score-improvement.svg" inert></i>'
-          }),
-          dataset
+          action: "rollCheck",
+          canGroup: true,
+          icon: "systems/dnd5e/icons/svg/ability-score-improvement.svg",
+          label: {
+            hidden: label,
+            value: dc ? game.i18n!.format("EDITOR.DND5E.Inline.DC", { dc: String(dc), check: label }) : label
+          },
+          dataset: dc ? { dc } : {},
+          visibility: "all"
         });
       }
       return buttons.concat(superButtons);

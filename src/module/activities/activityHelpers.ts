@@ -1,13 +1,12 @@
-import { getRollModes } from "../compatibility.js";
+import { TokenDocumentSet, memberCount } from "../lib/tokenDocumentSet.js";
 import { Activity, ActivityUseConfiguration, RollMessageConfig, TokenOrDocument } from "../../globals.js";
-import { MODULE_ID, debugEnabled, warn, error } from "../../midi-qol.js";
+import { MODULE_ID, debugEnabled, warn, i18n, GameSystemConfig } from "../../midi-qol.js";
 import { Workflow } from "../Workflow.js";
 import { TargetConfirmationDialog, TargetConfirmationOptions } from "../apps/TargetConfirmation.js";
-import { configSettings, safeGetGameSetting, targetConfirmation } from "../settings.js";
+import { configSettings, targetConfirmation } from "../settings.js";
 import { installedModules } from "../setupModules.js";
-import { getFlankingEffect, CERemoveEffect, sumRolls, evalActivationCondition, computeTemplateShapeDistance, getToken, checkActivityRange, checkDefeated, checkIncapacitated, computeCoverBonus, getSpeaker, hasWallBlockingCondition, isValidTarget, tokenForActor, activityHasAreaTarget, activityHasAutoPlaceTemplate, activityHasEmanationNoTemplate, getActivityAutoTargetAction, getAoETargetType, doReactions, getUnitDist, updateUserTargets, MidiOptions } from "../utils.js";
+import { collisionLevel, getFlankingEffect, CERemoveEffect, sumRolls, computeTemplateShapeDistance, getToken, getTokenDocument, checkActivityRange, checkDefeated, checkIncapacitated, computeCoverBonus, hasWallBlockingCondition, isValidTarget, tokenForActor, activityHasAreaTarget, activityHasAutoPlaceTemplate, activityHasEmanationNoTemplate, getActivityAutoTargetAction, getAoETargetType, doReactions, updateUserTargets, rangeToSceneUnits, tokenSourcePosition, tokenSourceCenter, tokenSourceElevation, getTokenVisionElevation, userTargetsKeepingUndrawn, MidiOptions } from "../utils.js";
 import { allAttackTypes } from "../../midi-qol.js";
-const { DialogV2 } = foundry.applications.api;
 import Token = foundry.canvas.placeables.Token;
 
 // Target types that represent discrete creatures (not areas)
@@ -19,6 +18,22 @@ const creatureTargetTypes = ["creature", "enemy", "ally", "willing"];
  * @param activity The activity to check
  * @returns true if single target should be enforced
  */
+export function attachTokenOptions(selected: string) {
+  return ["default", "caster", "target"].map(value => ({
+    value,
+    label: i18n(`midi-qol.REGION_BEHAVIOR.attachToken.${value}`),
+    selected: selected === value
+  }));
+}
+
+export function templateOriginOptions(selected: string) {
+  return ["default", "floor", "base", "top", "eye"].map(value => ({
+    value,
+    label: i18n(`midi-qol.REGION_BEHAVIOR.templateOrigin.${value}`),
+    selected: selected === value
+  }));
+}
+
 export function shouldEnforceSingleTarget(activity: Activity): boolean {
   if (!configSettings.enforceSingleWeaponTarget) return false;
   if (!allAttackTypes.includes(activity.actionType)) return false;
@@ -37,50 +52,6 @@ export function shouldEnforceSingleTarget(activity: Activity): boolean {
   return !affectsType || creatureTargetTypes.includes(affectsType);
 }
 
-export async function confirmWorkflow(existingWorkflow: Workflow): Promise<boolean> {
-  const validStates = [existingWorkflow.WorkflowState_Completed, existingWorkflow.WorkflowState_Start, existingWorkflow.WorkflowState_RollFinished]
-  if (existingWorkflow.currentAction === existingWorkflow.WorkflowState_NoAction) return true;
-  if (!(validStates.includes(existingWorkflow.currentAction!))) {// && configSettings.confirmAttackDamage !== "none") {
-    if (configSettings.autoCompleteWorkflow) {
-      existingWorkflow.aborted = true;
-      await existingWorkflow.performState(existingWorkflow.WorkflowState_Cleanup);
-      await Workflow.removeWorkflow(existingWorkflow.id);
-    } else if (existingWorkflow.currentAction === existingWorkflow.WorkflowState_WaitForDamageRoll && existingWorkflow.hitTargets.size === 0) {
-      existingWorkflow.aborted = true;
-      await existingWorkflow.performState(existingWorkflow.WorkflowState_Cleanup);
-    } else {
-      switch (await DialogV2.wait({
-        window: { title: game.i18n?.format("midi-qol.WaitingForPreviousWorkflow", { name: existingWorkflow.activity.name ?? "" }) },
-        content: game.i18n?.localize("midi-qol.ResolvePreviousWorkflow"),
-        rejectClose: false,
-        close: () => { return false },
-        buttons: [
-          { action: "complete", label: `<i class="fas fa-check"></i> Complete previous`, callback: () => { return "complete" } },
-          { action: "discard", label: `<i class="fas fa-trash"></i> Discard previous`, callback: () => { return "discard" } },
-          { action: "undo", label: `<i class="fas fa-arrow-rotate-left"></i> Undo until previous`, callback: () => { return "undo" } },
-          { action: "cancel", default: true, label: `<i class="fas fa-xmark"></i> Cancel New`, callback: () => { return "cancel" } }
-        ],
-      })) {
-        case "complete":
-          await existingWorkflow.performState(existingWorkflow.WorkflowState_Cleanup);
-          await Workflow.removeWorkflow(existingWorkflow.id);
-          break;
-        case "discard":
-          await existingWorkflow.performState(existingWorkflow.WorkflowState_Abort);
-          Workflow.removeWorkflow(existingWorkflow.id);
-          break;
-        case "undo":
-          await existingWorkflow.performState(existingWorkflow.WorkflowState_Cancel);
-          Workflow.removeWorkflow(existingWorkflow.id);
-          break;
-        case "cancel":
-        default:
-          return false;
-      }
-    }
-  }
-  return true;
-}
 export async function removeFlanking(actor: Actor.Implementation): Promise<void> {
   let CEFlanking = getFlankingEffect();
   if (CEFlanking && CEFlanking.name) await CERemoveEffect({ effectName: CEFlanking.name, uuid: actor.uuid });
@@ -109,7 +80,7 @@ export async function doActivityReactions(activity: Activity, workflow: Workflow
     ac?: number;
   }>[] = [];
   if (!foundry.utils.getProperty(activity, `flags.${MODULE_ID}.noProvokeReaction`) && !workflow?.workflowOptions.noProvokeReaction) {
-    for (let targetToken of workflow.targets) {
+    for (let targetToken of workflow.targets.tokens) {
       promises.push((async () => {
         const result = await doReactions(targetToken, workflow.tokenUuid, null, "reactionpreattack", { item: activity.item, workflow, workflowOptions: foundry.utils.mergeObject(workflow.workflowOptions, { sourceActorUuid: activity.actor?.uuid, sourceItemUuid: activity.item?.uuid }, { inplace: false, overwrite: true }) });
         if (result.name) {
@@ -168,32 +139,34 @@ function activityRequiresPostTemplateConfirmation(activity: Activity): boolean {
   return false;
 }
 
-function itemRequiresPostTemplateConfirmation(activity: Activity): boolean {
-  // @ts-expect-error no dnd5e-types
-  const isRangeTargeting = ["ft", "m"].includes(activity.item.system.range?.units) && ["creature", "ally", "enemy"].includes(activity.target?.affects.type);
-  if (activity.target?.template?.type) {
-    return true;
-  } else if (isRangeTargeting) {
-    return true;
-  }
-  return false;
-}
-
 export function requiresTargetConfirmation(activity: Activity, options: MidiOptions): boolean {
   // if (!activity.item) debugger;
   // fix for very silly value choice in midi properties.
   if (["none", "never"].includes(options.workflowOptions?.targetConfirmation ?? "")) return false;
   if (options.workflowOptions?.targetConfirmation === "always") return true;
+  // The targets this use will have: those it was given, else the user's (another use can change the user's meanwhile).
+  const targets: Set<TokenOrDocument> = memberCount(options.targetsToUse) ? options.targetsToUse! : new Set(game.user?.targets ?? []);
+  // Every target as a document (drawn or not): what the checks read is the token's, not the canvas's
+  const targetDocuments = targets instanceof TokenDocumentSet ? targets.documents
+    : [...targets].map(target => getTokenDocument(target)).filter((document): document is TokenDocument.Implementation => !!document);
+  const targetCount = targetDocuments.length;
   if (["enchant", "summon"].includes(activity.type)) return false;
-  if (activity.target?.affects?.choice) return true;
+  /*
+   * "Choose Targets" (target.affects.choice) means "when targeting an area, can the user choose who
+   * it affects?". dnd5e only renders the checkbox while a template type is set
+   * (shared/fields/field-targets.hbs), so clearing the template type leaves a stored true that is
+   * invisible on the sheet but was still forcing confirmation on every use. Apply it only under the
+   * condition it can be set.
+   */
+  if (activity.target?.affects?.choice && activity.target?.template?.type) return true;
   if (["", "self", undefined].includes(activity.target?.affects?.type) && ["", undefined, "self"].includes(activity.range?.units)) return false;
   if (activity.target?.affects.type === "self") return false;
   if (options.workflowOptions?.attackPerTarget === true) return false;
   if ((activity.forcedTargetConfirmation ?? activity.midiProperties?.confirmTargets) === "always") return true;
   if ((activity.forcedTargetConfirmation ?? activity.midiProperties?.confirmTargets) === "never") return false;
-  if (targetConfirmation.noneTargeted && ((activity.target?.affects.type ?? "") !== "" || activity.attack) && (game.user?.targets?.size ?? 0) === 0)
+  if (targetConfirmation.enabled && targetConfirmation.noneTargeted && ((activity.target?.affects.type ?? "") !== "" || activity.attack) && targetCount === 0)
     return true;
-  let numTargets = game.user?.targets?.size ?? 0;
+  let numTargets = targetCount;
   // @ts-expect-error no dnd5e-types
   if (numTargets === 0 && activity.item.type === "weapon" && shouldEnforceSingleTarget(activity))
     numTargets = 1;
@@ -216,7 +189,7 @@ export function requiresTargetConfirmation(activity: Activity, options: MidiOpti
       return true;
     }
     if (targetConfirmation.allies && token && numTargets > 0 && activity.target?.affects.type !== "self") {
-      if (game.user?.targets.some(t => t.document.disposition == token.document.disposition)) {
+      if (targetDocuments.some(t => t.disposition == token.document.disposition)) {
         if (debugEnabled > 0) warn("target confirmation triggered from targetConfirmation.allies");
         return true;
       }
@@ -224,34 +197,32 @@ export function requiresTargetConfirmation(activity: Activity, options: MidiOpti
     if (targetConfirmation.targetSelf && activity.target?.affects.type !== "self") {
       let tokenToUse = token;
       /*
-      if (tokenToUse && game.user?.targets) {
+      if (tokenToUse) {
         const { result, attackingToken } = checkActivityRange(activity, tokenToUse, new Set(game.user?.targets))
         if (speaker.token && result === "fail")
           tokenToUse = undefined; 
         else tokenToUse = attackingToken;
       }
       */
-      if (tokenToUse && game.user?.targets?.has(tokenToUse)) {
+      if (tokenToUse && targets.has(tokenToUse)) {
         if (debugEnabled > 0) warn("target confirmation triggered by has targetConfirmation.targetSelf");
         return true;
       }
     }
-    if (targetConfirmation.mixedDisposition && numTargets > 0 && game.user?.targets) {
+    if (targetConfirmation.mixedDisposition && numTargets > 0) {
       const dispositions = new Set();
-      for (let target of game.user?.targets) {
-        if (target) dispositions.add(target.document.disposition);
-      }
+      for (const target of targetDocuments) dispositions.add(target.disposition);
       if (dispositions.size > 1) {
         if (debugEnabled > 0) warn("target confirmation triggered from targetConfirmation.mixedDisposition");
         return true;
       }
     }
-    if (targetConfirmation.longRange && game.user?.targets && numTargets > 0 &&
+    if (targetConfirmation.longRange && numTargets > 0 &&
       // @ts-expect-error no dnd5e-types
       (["ft", "m"].includes(activity.item.system.range?.units) || activity.item.system.range?.type === "touch")) {
       if (token) {
-        for (let target of game.user?.targets) {
-          const { result, attackingToken } = checkActivityRange(activity, token, new Set([target]))
+        for (let target of targets) {
+          const { result } = checkActivityRange(activity, token, new Set([target]))
           if (result !== "normal") {
             if (debugEnabled > 0) warn("target confirmation triggered from targetConfirmation.longRange");
             return true;
@@ -259,10 +230,10 @@ export function requiresTargetConfirmation(activity: Activity, options: MidiOpti
         }
       }
     }
-    if (targetConfirmation.inCover && numTargets > 0 && token && game.user?.targets) {
+    if (targetConfirmation.inCover && numTargets > 0 && token) {
       const isRangeTargeting = ["ft", "m"].includes(activity.range?.units ?? "") && ["creature", "ally", "enemy"].includes(activity.target?.affects?.type ?? "");
       if (!activity.target?.template?.type && !isRangeTargeting && token) {
-        for (let target of game.user?.targets) {
+        for (let target of targets) {
           if (computeCoverBonus(token, target, activity) > 0) {
             if (debugEnabled > 0) warn("target confirmation triggered from targetConfirmation.inCover");
             return true;
@@ -292,13 +263,14 @@ export async function preTemplateTargets(activity: Activity, options: MidiOption
 export async function postTemplateConfirmTargets(activity: Activity, options: MidiOptions, workflow: Workflow): Promise<boolean> {
   const updateTargets = async () => {
     const needCanSeeSense = game.user?.targets && !workflow.targets.equals(new Set(game.user?.targets));
-    workflow.setTargets(new Set(game.user?.targets));
+    workflow.setTargets(userTargetsKeepingUndrawn(workflow.targets));
     if (needCanSeeSense) await workflow.activity.setupCanSeeSense({ workflow });
   }
   // Only show confirmation here if the activity deferred from pre-template
   // (i.e. it has a template or scaled target count). Otherwise preTemplateTargets
   // already handled confirmation and we just need to sync targets.
   if (activityRequiresPostTemplateConfirmation(activity) && requiresTargetConfirmation(activity, options)) {
+    await workflow.flushCardWrites(); // a person decides next
     const result = await resolveTargetConfirmation(activity, options);
     if (result && game.user?.targets) {
       await updateTargets();
@@ -310,7 +282,10 @@ export async function postTemplateConfirmTargets(activity: Activity, options: Mi
   // tokens inside the template. For non-template activities, targets were already set
   // in setupTargets and must not be overwritten from game.user.targets (which may have
   // been changed by concurrent effects during the async workflow state transitions).
-  if (activityRequiresPostTemplateConfirmation(activity) && game.user?.targets) {
+  // A use given its targets (workflowOptions.ignoreUserTargets) keeps them: the user's targets may be anyone's by now. An
+  // area's targets are the template's, whatever it was given
+  const keepGiven = !!workflow.workflowOptions?.ignoreUserTargets && !activityHasAreaTarget(activity);
+  if (activityRequiresPostTemplateConfirmation(activity) && game.user?.targets && !keepGiven) {
     await updateTargets();
   }
   return true;
@@ -336,7 +311,12 @@ export async function resolveTargetConfirmation(activity: Activity, options: Tar
     // create target dialog which updates the target display
     options ??= {};
     options.callback = resolve;
-    new TargetConfirmationDialog(activity.actor!, activity, game.user!, options).render({ force: true });
+    const dialog = new TargetConfirmationDialog(activity.actor!, activity, game.user!, options);
+    // A dialog that fails to render cancels the use rather than leaving it waiting.
+    dialog.render({ force: true }).catch(err => {
+      console.error("midi-qol | Target Confirmation failed to render", err);
+      dialog.doCallback(false);
+    });
   });
   let shouldContinue = await targets;
   for (let token of canvas.tokens?.placeables ?? []) token.initializeVisionSource();
@@ -347,59 +327,10 @@ export async function resolveTargetConfirmation(activity: Activity, options: Tar
   return !!shouldContinue;
 }
 
+/** Post the item's card, as dnd5e's own "display card" does. */
 export async function showItemInfo(this: Item.Implementation): Promise<ChatMessage.Implementation | undefined> {
-  const token = this.actor?.token;
-
-  const templateData = {
-    actor: this.actor,
-    // tokenId: token?.id,
-    tokenId: token?.uuid,
-    tokenUuid: token?.uuid,
-    item: this,
-    itemUuid: this.uuid,
-    // @ts-expect-error no dnd5e-types
-    data: await this.system.getCardData(),
-    // @ts-expect-error no dnd5e-types
-    labels: this.labels,
-    condensed: false,
-    hasAttack: false,
-    isHealing: false,
-    hasDamage: false,
-    // @ts-expect-error no dnd5e-types
-    isSpell: this.type === "spell",
-    isPower: false,
-    hasSave: false,
-    hasAreaTarget: false,
-    hasAttackRoll: false,
-    configSettings,
-    hideItemDetails: false,
-    hasEffects: false,
-    isMerge: false,
-  };
-
-  const templateType = ["tool"].includes(this.type) ? this.type : "item";
-  const template = `modules/midi-qol/templates/${templateType}-card.hbs`;
-  const html = await foundry.applications.handlebars.renderTemplate(template, templateData);
-
-  const chatData: ChatMessage.CreateData = {
-    content: html,
-    // @ts-expect-error no dnd5e-types
-    flavor: this.system.chatFlavor || this.name,
-    speaker: getSpeaker(this.actor!),
-    flags: {
-      "core": { "canPopout": true }
-    }
-  };
-  chatData.style = CONST.CHAT_MESSAGE_STYLES.OTHER;
-
-  // Toggle default roll mode
-  let rollMode = safeGetGameSetting("core", "rollMode") ?? "public";
-  if ([getRollModes().PRIVATE, getRollModes().BLIND].includes(rollMode)) chatData["whisper"] = ChatMessage.getWhisperRecipients("GM").filter(u => u.active);
-  if (rollMode === getRollModes().BLIND) chatData["blind"] = true;
-  if (rollMode === getRollModes().SELF) chatData["whisper"] = [game.user?.id];
-
-  // Create the chat message
-  return ChatMessage.create(chatData);
+  // @ts-expect-error no dnd5e-types
+  return this.displayCard();
 }
 
 function isTokenInside(template: foundry.canvas.placeables.MeasuredTemplate.Implementation, token: Token.Implementation, wallsBlockTargeting: boolean): boolean {
@@ -409,17 +340,20 @@ function isTokenInside(template: foundry.canvas.placeables.MeasuredTemplate.Impl
   if (configSettings.optionalRules.wallsBlockRange !== "none" && hasWallBlockingCondition(token))
     return false;
   if (!isValidTarget(token)) return false;
+  // No backing Region during preview, so derive the band from the template.
+  if (!withinBand(templateElevationBand(template.document), token)) return false;
 
   // TODO: This can be vastly simplified, _IF_ we can assume gridded scenes
   // Check for center of each square the token uses.
   // e.g. for large tokens all 4 squares
-  const startX = token.document.width >= 1 ? 0.5 : (token.document.width / 2);
-  const startY = token.document.height >= 1 ? 0.5 : (token.document.height / 2);
-  for (let x = startX; x < token.document.width; x++) {
-    for (let y = startY; y < token.document.height; y++) {
+  const pos = tokenSourcePosition(token);
+  const startX = pos.width >= 1 ? 0.5 : (pos.width / 2);
+  const startY = pos.height >= 1 ? 0.5 : (pos.height / 2);
+  for (let x = startX; x < pos.width; x++) {
+    for (let y = startY; y < pos.height; y++) {
       const currGrid = {
-        x: token.x + x * grid.size! - templatePos.x,
-        y: token.y + y * grid.size! - templatePos.y,
+        x: pos.x + x * grid.size! - templatePos.x,
+        y: pos.y + y * grid.size! - templatePos.y,
       };
       let contains = template.shape?.contains(currGrid.x, currGrid.y);
       if (contains && wallsBlockTargeting) {
@@ -429,29 +363,11 @@ function isTokenInside(template: foundry.canvas.placeables.MeasuredTemplate.Impl
           tx = tx + template.shape.width / 2;
           ty = ty + template.shape.height / 2;
         }
-        const r = new foundry.canvas.geometry.Ray({ x: tx, y: ty }, { x: currGrid.x + templatePos.x, y: currGrid.y + templatePos.y });
 
         // If volumetric templates installed always leave targeting to it.
-        if (
-          configSettings.optionalRules.wallsBlockRange === "centerLevels"
-          && installedModules.get("levels")
-          && !installedModules.get("levelsvolumetrictemplates")) {
-          let p1 = {
-            x: currGrid.x + templatePos.x, y: currGrid.y + templatePos.y,
-            z: token.document.elevation
-          }
-          // installedModules.get("levels").lastTokenForTemplate.elevation no longer defined
-          //@ts-expect-error no levels types
-          const { elevation } = CONFIG.Levels.handlers.TemplateHandler.getTemplateData(false)
-          let p2 = {
-            x: tx, y: ty,
-            z: elevation as number
-          }
-          contains = getUnitDist(p2.x, p2.y, p2.z, token) <= template.document.distance;
-          //@ts-expect-error no levels types
-          contains = contains && !CONFIG.Levels?.API?.testCollision(p1, p2, "collision");
-        } else if (!installedModules.get("levelsvolumetrictemplates")) {
-          contains = !CONFIG.Canvas.polygonBackends.sight.testCollision({ x: tx, y: ty }, { x: currGrid.x + templatePos.x, y: currGrid.y + templatePos.y }, { mode: "any", type: "move" })
+        if (!installedModules.get("levelsvolumetrictemplates")) {
+          // @ts-expect-error v14 collision level not in fvtt-types
+          contains = !CONFIG.Canvas.polygonBackends.sight.testCollision({ x: tx, y: ty }, { x: currGrid.x + templatePos.x, y: currGrid.y + templatePos.y }, { mode: "any", type: "move", level: collisionLevel(token) })
         }
       }
       // Check the distance from origin.
@@ -460,44 +376,425 @@ function isTokenInside(template: foundry.canvas.placeables.MeasuredTemplate.Impl
   }
   return false;
 }
-export function isAoETargetable(targetToken: Token.Implementation, options: { selfToken?: TokenOrDocument | string | null | undefined, ignoreSelf?: boolean, AoETargetType?: string, autoTarget?: string } = { ignoreSelf: false, AoETargetType: "any" }): boolean {
+export function isAoETargetable(targetToken: TokenOrDocument, options: { selfToken?: TokenOrDocument | string | null | undefined, ignoreSelf?: boolean, AoETargetType?: string, autoTarget?: string } = { ignoreSelf: false, AoETargetType: "any" }): boolean {
   if (!isValidTarget(targetToken)) return false;
+  const targetDocument = getTokenDocument(targetToken)!;
   const autoTarget = options.autoTarget ?? configSettings.autoTarget;
   const selfToken = getToken(options.selfToken);
   if (["wallsBlockIgnoreIncapacitated", "alwaysIgnoreIncapacitated"].includes(autoTarget) && checkIncapacitated(targetToken.actor, false, false)) return false;
   if (["wallsBlockIgnoreDefeated", "alwaysIgnoreDefeated"].includes(autoTarget) && checkDefeated(targetToken)) return false;
-  if (targetToken.document.uuid === selfToken?.document.uuid && options.ignoreSelf) return false;
+  if (targetDocument.uuid === selfToken?.document.uuid && options.ignoreSelf) return false;
   const selfDisposition = selfToken?.document.disposition ?? 1;
   switch (options.AoETargetType) {
     case "any":
       return true;
     case "ally":
-      return targetToken.document.disposition === selfDisposition;
+      return targetDocument.disposition === selfDisposition;
     case "notAlly":
-      return targetToken.document.disposition !== selfDisposition
+      return targetDocument.disposition !== selfDisposition
     case "enemy":
-      return targetToken.document.disposition === -selfDisposition || targetToken.document.disposition == CONST.TOKEN_DISPOSITIONS.SECRET;
+      return targetDocument.disposition === -selfDisposition || targetDocument.disposition == CONST.TOKEN_DISPOSITIONS.SECRET;
     case "notEnemy":
-      return targetToken.document.disposition !== -selfDisposition && targetToken.document.disposition !== CONST.TOKEN_DISPOSITIONS.SECRET;
+      return targetDocument.disposition !== -selfDisposition && targetDocument.disposition !== CONST.TOKEN_DISPOSITIONS.SECRET;
     case "neutral":
-      return targetToken.document.disposition === CONST.TOKEN_DISPOSITIONS.NEUTRAL;
+      return targetDocument.disposition === CONST.TOKEN_DISPOSITIONS.NEUTRAL;
     case "notNeutral":
-      return targetToken.document.disposition !== CONST.TOKEN_DISPOSITIONS.NEUTRAL;
+      return targetDocument.disposition !== CONST.TOKEN_DISPOSITIONS.NEUTRAL;
     case "friendly":
-      return targetToken.document.disposition === CONST.TOKEN_DISPOSITIONS.FRIENDLY;
+      return targetDocument.disposition === CONST.TOKEN_DISPOSITIONS.FRIENDLY;
     case "notFriendly":
-      return targetToken.document.disposition !== CONST.TOKEN_DISPOSITIONS.FRIENDLY;
+      return targetDocument.disposition !== CONST.TOKEN_DISPOSITIONS.FRIENDLY;
     case "hostile":
-      return targetToken.document.disposition === CONST.TOKEN_DISPOSITIONS.HOSTILE || targetToken.document.disposition == CONST.TOKEN_DISPOSITIONS.SECRET;
+      return targetDocument.disposition === CONST.TOKEN_DISPOSITIONS.HOSTILE || targetDocument.disposition == CONST.TOKEN_DISPOSITIONS.SECRET;
     case "notHostile":
-      return targetToken.document.disposition !== CONST.TOKEN_DISPOSITIONS.HOSTILE && targetToken.document.disposition !== CONST.TOKEN_DISPOSITIONS.SECRET;
+      return targetDocument.disposition !== CONST.TOKEN_DISPOSITIONS.HOSTILE && targetDocument.disposition !== CONST.TOKEN_DISPOSITIONS.SECRET;
     default:
       return true;
   }
 }
 
+/**
+ * midi's flags for an activity template region — the marker `isTemplateRegion` tests, the caster
+ * token and, when `constrainTemplatePlacement` is on, the range limit `preCreateRegion` enforces.
+ *
+ * Shared so a region placed interactively (via `dnd5e.createMeasuredTemplate`) and one placed
+ * programmatically (via `createActivityTemplateRegions`) carry the same flags.
+ */
+export function midiTemplateFlags(activity: any): Record<string, unknown> {
+  const flags: Record<string, unknown> = { activityTemplate: true };
+  const casterToken = activity?.actor ? tokenForActor(activity.actor) : undefined;
+  if (casterToken) flags.sourceTokenUuid = casterToken.document.uuid;
+  if (activity?.item) flags.itemUuid = activity.item.uuid;
+  if (activity?.actor) flags.actorUuid = activity.actor.uuid;
+  // The use it is placed for (13.0.42 and earlier wrote these too)
+  if (activity) for (const [key, value] of Object.entries(Workflow.templateWorkflowFlags(activity))) if (value) flags[key] = value;
+  const range = activity?.range;
+  const rangeUnits = range?.units;
+  if (configSettings.constrainTemplatePlacement && rangeUnits && !["self", "none", "any"].includes(rangeUnits)) {
+    const declared = range.long || range.value;
+    if (declared && declared > 0) {
+      flags.maxRange = rangeUnits === "touch"
+        ? (canvas?.dimensions?.distance ?? 5) : rangeToSceneUnits(declared, rangeUnits);
+    }
+  }
+  return flags;
+}
+
+type LevelElevation = { elevation: { bottom: number, top: number, base?: number } };
+type Band = { bottom: number, top: number | null, topInclusive: boolean };
+/** Foundry 14 fields fvtt-types (13.x) lacks: a region's attachment and levels, a scene's levels, a token's level. */
+type RegionV14 = { attachment?: { token?: TokenDocument.Implementation | null }, levels?: Set<string>, _source: { levels?: string[], elevation: Band } };
+type SceneV14 = {
+  levels?: Map<string, LevelElevation>,
+  getSurfaces?: (options: { type?: string, level?: string }) => readonly unknown[],
+  testSurfaceCollision?: (origin: ElevatedPoint, destination: ElevatedPoint, options: { type: string, mode: "any", level?: string }) => boolean,
+  grid: { size: number, distance: number }
+};
+type ElevatedPoint = { x: number, y: number, elevation: number };
+const tokenLevel = (token: TokenDocument.Implementation) => (token as unknown as { level?: string }).level;
+/**
+ * An area's band before it is kept within its level, and the height its lines of effect start from (flags.midi-qol.reach):
+ * what a creature on another level, or behind a floor inside the level, is measured against.
+ */
+type Reach = { bottom: number, top: number | null, from: number };
+/** How far a sphere or emanation reaches, for the exact test inside its band (flags.midi-qol.area). */
+export type AreaReach = { kind: "sphere", radius: number, centre: number } | { kind: "emanation", radius: number, feet: number, head: number };
+
+/** An area that starts from its caster (range Self, Touch or none) rather than at a point placed within range. */
+function startsFromCaster(activity: any): boolean {
+  const range = activity?.range;
+  return ["self", "touch", "none"].includes(range?.units) || (!range?.value && !range?.long);
+}
+
+/** The floor of a level, if it has one. */
+function levelFloor(level: LevelElevation | undefined): number | undefined {
+  const floor = level?.elevation.base ?? level?.elevation.bottom;
+  return Number.isFinite(floor) ? floor : undefined;
+}
+
+/** A token's feet and head, from its document (drawn or not). */
+function tokenSpan(token: TokenDocument.Implementation): { feet: number, head: number } {
+  const feet = token.elevation ?? 0;
+  return { feet, head: feet + (token.depth ?? 1) * (token.parent?.grid.distance ?? 5) };
+}
+
+/**
+ * The height an area is measured from: the floor of its level, or its token's base, top (base plus its height) or eye
+ * level (midi's vision height). The activity's override decides; else an area placed at a point follows Height of Areas
+ * Placed at a Point (the floor, or the caster as Template Origin Height says), and one that starts from the caster or
+ * follows a token follows Template Origin Height.
+ */
+function templateOriginElevation(activity: any, token: TokenDocument.Implementation, level: LevelElevation | undefined, attached: boolean): number {
+  const override: string | undefined = activity?.regionBehavior?.templateOrigin;
+  let origin = override && override !== "default" ? override : undefined;
+  if (!origin && !attached && !startsFromCaster(activity) && (configSettings.optionalRules.templatePlacedOrigin ?? "floor") === "floor") origin = "floor";
+  origin ??= configSettings.optionalRules.templateOriginHeight ?? "base";
+  if (origin === "floor" && !attached) {
+    const floor = levelFloor(level);
+    if (floor !== undefined) return floor;
+  }
+  const placeable = token.object as Token.Implementation | null;
+  if (origin === "eye" && placeable) return getTokenVisionElevation(placeable, "visionSourceHeight");
+  const { feet, head } = tokenSpan(token);
+  return origin === "top" ? head : feet;
+}
+
+/**
+ * Keep a band within a level: an area doesn't reach through its floor or ceiling (and an animation drawn at the region's
+ * bottom isn't hidden under the floor). The ceiling is the next level's floor, so a top clamped to it is exclusive: a
+ * creature standing on the floor above is outside.
+ */
+function clampToLevel(band: Band, level: LevelElevation | undefined): Band {
+  const levelBottom = level?.elevation.bottom, levelTop = level?.elevation.top;
+  const bottom = Number.isFinite(levelBottom) ? Math.max(band.bottom, levelBottom as number) : band.bottom;
+  if (Number.isFinite(levelTop) && (band.top === null || band.top >= (levelTop as number)))
+    return { bottom: Math.min(bottom, levelTop as number), top: levelTop as number, topInclusive: false };
+  return { ...band, bottom, top: band.top === null ? null : Math.max(band.top, bottom) };
+}
+
+function sceneLevel(levelId?: string | null): LevelElevation | undefined {
+  const scene = canvas?.scene as unknown as { levels?: Map<string, LevelElevation> } | undefined;
+  return (levelId ? scene?.levels?.get(levelId) : undefined) ?? (canvas as unknown as { level?: LevelElevation }).level;
+}
+
+/**
+ * The vertical extent of an activity's area, unclamped, measured from `token` (the caster, or the token the area
+ * follows): a sphere is centred on the origin height, a cone on its axis, a cylinder, ring, cube or line stands on it,
+ * and an emanation reaches its radius below the token's feet and above its head. Flat circles and squares have none.
+ */
+function templateBand(activity: any, shape: any, { level, token, attached = false }: { level?: LevelElevation, token?: TokenDocument.Implementation, attached?: boolean } = {})
+  : { band: Band, area?: AreaReach, reach: Reach } | undefined {
+  const template = activity?.target?.template ?? {};
+  const type: string | undefined = template.type;
+  if (!type || ["circle", "square"].includes(type)) return undefined;
+  const source = token ?? (activity?.actor ? tokenForActor(activity.actor)?.document
+    ?? canvas?.scene?.tokens.find(t => t.actor === activity.actor) : undefined);
+  if (!source) return undefined;
+  const sceneUnits = (value: unknown): number | undefined => {
+    const size = Number(value);
+    if (!Number.isFinite(size) || size <= 0) return undefined;
+    const converted = globalThis.dnd5e?.utils?.convertLength?.(size, template.units, canvas?.scene?.grid.units, { strict: false });
+    return typeof converted === "number" ? converted : size;
+  };
+  const band = (bottom: number, top: number | undefined): Band => ({ bottom, top: top ?? null, topInclusive: true });
+  const { feet, head } = tokenSpan(source);
+  if (type === "radius" || shape?.type === "emanation") {
+    const radius = sceneUnits(template.size);
+    if (radius === undefined) return undefined;
+    const emanation = band(feet - radius, head + radius);
+    return { band: emanation, area: { kind: "emanation", radius, feet, head }, reach: { bottom: emanation.bottom, top: emanation.top, from: (feet + head) / 2 } };
+  }
+  const e = templateOriginElevation(activity, source, level, attached);
+  // Lines of effect start at the area's origin; from the caster, at the middle of its space (not its feet, on the floor)
+  const from = attached || startsFromCaster(activity) ? (feet + head) / 2 : e;
+  const withReach = (result: { band: Band, area?: AreaReach } | undefined) => result && { ...result, reach: { bottom: result.band.bottom, top: result.band.top, from } };
+  const centred = (height: number | undefined) => height === undefined ? band(e, undefined) : band(e - height / 2, e + height / 2);
+  switch (type) {
+    case "sphere": {
+      const radius = sceneUnits(template.size);
+      return radius === undefined ? undefined : withReach({ band: band(e - radius, e + radius), area: { kind: "sphere", radius, centre: e } });
+    }
+    case "cylinder": case "ring": case "wall": { const height = sceneUnits(template.height); return withReach({ band: band(e, height === undefined ? undefined : e + height) }); }
+    case "cube": { const side = sceneUnits(template.size); return withReach({ band: band(e, side === undefined ? undefined : e + side) }); }
+    case "line": return withReach({ band: band(e, e + (sceneUnits(template.width) ?? canvas?.scene?.grid.distance ?? 5)) });
+    case "cone": return withReach({ band: centred(regionShapeHeight(shape)) });
+    default: { const height = regionShapeHeight(shape); return withReach({ band: band(e, height === undefined ? undefined : e + height) }); }
+  }
+}
+
+/**
+ * The elevation band (kept within the level) and reach of an activity's template region, for the region data; undefined
+ * for a flat area. `tokenId` is the token the area follows or emanates from, else its caster's.
+ */
+export function templateElevation(activity: any, shape: any, levelId?: string, tokenId?: string): { elevation: Band, area?: AreaReach, reach: Reach } | undefined {
+  const level = sceneLevel(levelId);
+  const token = tokenId ? canvas?.scene?.tokens.get(tokenId) : undefined;
+  const result = templateBand(activity, shape, { level, token, attached: !!tokenId });
+  return result && { elevation: clampToLevel(result.band, level), area: result.area, reach: result.reach };
+}
+
+/** An elevation another module gave a template region, kept within its level. */
+export function clampTemplateElevation(elevation: Band, levelId?: string): Band {
+  return clampToLevel(elevation, sceneLevel(levelId));
+}
+
+/** The band of a midi-banded region that follows a token, from the token as it is now, kept within its level. */
+export function attachedRegionBand(region: RegionDocument.Implementation): { elevation: Band, area?: AreaReach, reach: Reach } | undefined {
+  const token = (region as unknown as RegionV14).attachment?.token;
+  if (!token || !foundry.utils.getProperty(region, `flags.${MODULE_ID}.band`)) return undefined;
+  const activityUuid = foundry.utils.getProperty(region, "flags.dnd5e.activity") as string | undefined;
+  const activity = activityUuid ? fromUuidSync(activityUuid) : undefined;
+  if (!activity) return undefined;
+  const levelId = tokenLevel(token) ?? (region as unknown as RegionV14)._source.levels?.[0];
+  const level = levelId ? (region.parent as unknown as SceneV14 | null)?.levels?.get(levelId) : undefined;
+  const result = templateBand(activity, region.shapes[0], { level, token, attached: true });
+  return result && { elevation: clampToLevel(result.band, level), area: result.area, reach: result.reach };
+}
+
+/** An area's reach: from the token it follows as it is now, else as recorded when it was placed. */
+function regionReach(region: RegionDocument.Implementation): Reach | undefined {
+  return attachedRegionBand(region)?.reach ?? foundry.utils.getProperty(region, `flags.${MODULE_ID}.reach`) as Reach | undefined;
+}
+
+/** Whether a scene has floors that stop movement (defineSurface regions); without any, each level's floor is solid. */
+function hasMoveSurfaces(scene: SceneV14 | null | undefined): boolean {
+  return !!scene?.getSurfaces?.({ type: "move" }).length;
+}
+
+/**
+ * Line of effect through floors: the straight line from the area's origin to the middle of the token's space must not
+ * pass through a surface that stops movement (as walls count as total cover only when they stop movement), in the
+ * area's level or the token's. An opening in a floor lets it through. True when the scene has no such surfaces.
+ */
+export function lineOfEffectClear(region: RegionDocument.Implementation, token: TokenDocument.Implementation): boolean {
+  const scene = region.parent as unknown as SceneV14 | null;
+  if (!scene?.testSurfaceCollision || !hasMoveSurfaces(scene)) return true;
+  const reach = regionReach(region);
+  const from = regionShapeOrigin(region);
+  if (!reach || !from) return true;
+  const { feet, head } = tokenSpan(token);
+  const size = scene.grid.size;
+  const origin = { x: from.x, y: from.y, elevation: reach.from };
+  const target = { x: token.x + token.width * size / 2, y: token.y + token.height * size / 2, elevation: (feet + head) / 2 };
+  const levels = new Set([(region as unknown as RegionV14)._source.levels?.[0], tokenLevel(token)].filter((id): id is string => !!id));
+  for (const level of levels) if (scene.testSurfaceCollision(origin, target, { type: "move", mode: "any", level })) return false;
+  return true;
+}
+
+/**
+ * Whether an area reaches a token: within the area's band or, on another level, its reach (only where the scene's floors
+ * have openings), within a sphere's or emanation's true reach, and with a clear line of effect through any floors.
+ * The 2D shape and walls are tested separately.
+ */
+export function areaReachesToken(region: RegionDocument.Implementation, token: TokenOrDocument): boolean {
+  const document = getTokenDocument(token);
+  if (!document) return false;
+  let band: { bottom: number, top: number, topInclusive?: boolean };
+  if (onRegionLevel(region, token)) band = regionElevationBand(region);
+  else {
+    const reach = regionReach(region);
+    if (!reach || !hasMoveSurfaces(region.parent as unknown as SceneV14)) return false;
+    band = { bottom: reach.bottom, top: reach.top ?? Infinity, topInclusive: true };
+  }
+  return withinBand(band, token) && withinAreaReach(region, document) && lineOfEffectClear(region, document);
+}
+
+/**
+ * Creatures on other levels that an activity's areas reach through openings in the floors. Core doesn't draw tokens on
+ * a level other than the one viewed, so they can't be the user's targets: they are added to the workflow's.
+ */
+export function computeOffLevelTemplateTargets(activity: Activity | undefined, templates: (RegionDocument.Implementation | string)[]): TokenDocument.Implementation[] {
+  const autoTarget = getActivityAutoTargetAction(activity);
+  const scene = canvas?.scene;
+  if (autoTarget === "none" || !scene || !hasMoveSurfaces(scene as unknown as SceneV14)) return [];
+  const selfToken = getToken(activity?.actor);
+  const ignoreSelf = (activity?.target?.affects.special ?? "").split(";").includes("-self");
+  const AoETargetType = activity ? getAoETargetType(activity) : "any";
+  const wallsBlockTargeting = ["wallsBlock", "wallsBlockIgnoreDefeated", "wallsBlockIgnoreIncapacitated"].includes(autoTarget);
+  const drawn = new Set(canvas.tokens?.placeables.map(t => t.document) ?? []);
+  const reached = new Map<string, TokenDocument.Implementation>();
+  for (const ref of templates) {
+    const region = (typeof ref === "string" ? fromUuidSync(ref) : ref) as RegionDocument.Implementation | null;
+    if (!region || region.documentName !== "Region" || !foundry.utils.getProperty(region, `flags.${MODULE_ID}.reach`)) continue;
+    for (const document of scene.tokens) {
+      if (drawn.has(document) || !document.actor || onRegionLevel(region, document)) continue;
+      if (!isAoETargetable(document, { selfToken, ignoreSelf, AoETargetType, autoTarget })) continue;
+      if (isTokenInsideRegion(region, document, wallsBlockTargeting)) reached.set(document.id!, document);
+    }
+  }
+  return [...reached.values()];
+}
+
+const gap = (a0: number, a1: number, b0: number, b1: number) => Math.max(0, Math.max(a0, b0) - Math.min(a1, b1));
+
+/**
+ * Whether a token in an area's shape and band is within the area's reach in 3D: a sphere's from its centre, an
+ * emanation's from its token's space. Only height is limited: a token level with the centre is inside wherever the 2D
+ * shape includes it, so grid-based shapes keep their corner squares.
+ */
+export function withinAreaReach(region: RegionDocument.Implementation, token: TokenDocument.Implementation): boolean {
+  const stored = foundry.utils.getProperty(region, `flags.${MODULE_ID}.area`) as AreaReach | undefined;
+  if (!stored?.radius) return true;
+  const area = attachedRegionBand(region)?.area ?? stored;
+  const scene = region.parent;
+  const perPixel = (scene?.grid.distance ?? 5) / (scene?.grid.size ?? 100);
+  const size = scene?.grid.size ?? 100;
+  const box = { x0: token.x, y0: token.y, x1: token.x + token.width * size, y1: token.y + token.height * size };
+  const { feet, head } = tokenSpan(token);
+  const shape: any = region.shapes[0];
+  let horizontal: number, vertical: number;
+  if (area.kind === "emanation") {
+    const base = (region as unknown as RegionV14).attachment?.token ?? shape?.base;
+    if (!base) return true;
+    const from = { x0: base.x, y0: base.y, x1: base.x + base.width * size, y1: base.y + base.height * size };
+    horizontal = Math.hypot(gap(from.x0, from.x1, box.x0, box.x1), gap(from.y0, from.y1, box.y0, box.y1)) * perPixel;
+    vertical = gap(area.feet, area.head, feet, head);
+  } else {
+    const cx = shape?.x, cy = shape?.y;
+    if (!Number.isFinite(cx) || !Number.isFinite(cy)) return true;
+    horizontal = Math.hypot(gap(cx, cx, box.x0, box.x1), gap(cy, cy, box.y0, box.y1)) * perPixel;
+    vertical = gap(area.centre, area.centre, feet, head);
+  }
+  const reach = Math.sqrt(Math.max(0, area.radius ** 2 - Math.min(horizontal, area.radius) ** 2));
+  return vertical <= reach + 1e-6;
+}
+
+/**
+ * Whether a region is a template: one midi marked when an activity placed it, or one created
+ * through Foundry's MeasuredTemplate compatibility layer. `flags.dnd5e.activity` is not a test —
+ * dnd5e sets it on any region that belongs to an activity.
+ */
+export function isTemplateRegion(region: unknown): boolean {
+  return !!(foundry.utils.getProperty(region as object, "flags.core.MeasuredTemplate")
+    || foundry.utils.getProperty(region as object, `flags.${MODULE_ID}.activityTemplate`));
+}
+
+/**
+ * Create template Regions for an activity at known positions, without the placement UI.
+ *
+ * dnd5e's `TemplatePlacement.fromActivity` bundles the interactive placement with the region
+ * creation, so there is no system API for "put this activity's template here" — which is what a
+ * TrapWorkflow and midi's auto-placed templates need. The region data mirrors what
+ * `TemplatePlacement.fromActivity` builds, so a template placed this way is indistinguishable from
+ * one the player positioned by hand.
+ *
+ * Sizes go through dnd5e's own `convertLength`, from the activity's units to the scene's, then to
+ * pixels. The deprecated `AbilityTemplate` path skipped that conversion.
+ */
+export async function createActivityTemplateRegions(
+  activity: any,
+  placements: { x: number, y: number, direction?: number, token?: TokenDocument.Implementation }[],
+  extraFlags: Record<string, unknown> = {}
+): Promise<RegionDocument.Implementation[]> {
+  const scene = canvas?.scene;
+  if (!scene || !placements.length) return [];
+  const target = activity?.target?.template ?? {};
+  const shapeType = GameSystemConfig.areaTargetTypes?.[target.type]?.template;
+  if (!shapeType) return [];
+
+  const convert = (value: number | undefined) => {
+    if (!value) return 0;
+    const converted = globalThis.dnd5e?.utils?.convertLength?.(value, target.units, scene.grid.units, { strict: false });
+    return (typeof converted === "number" ? converted : value) * (scene.grid.size / scene.grid.distance);
+  };
+  const size = convert(target.size);
+  const width = convert(target.width) || (scene.grid.size);
+
+  const shapeFor = (x: number, y: number, rotation: number, token?: TokenDocument.Implementation) => {
+    const base = { x, y, rotation };
+    switch (shapeType) {
+      case "circle": return { ...base, type: "circle", radius: size };
+      case "emanation":
+        // As TemplatePlacement.fromActivity builds it: measured from the token's edge, not its centre.
+        if (!token) return { ...base, type: "circle", radius: size };
+        const { x: tokenX, y: tokenY, width: tokenWidth, height: tokenHeight } = tokenSourcePosition(token);
+        return {
+          type: "emanation", radius: size,
+          base: { type: "token", x: tokenX, y: tokenY, width: tokenWidth, height: tokenHeight, shape: token._source.shape, rotation: 0 }
+        };
+      case "cone": return { ...base, type: "cone", angle: CONFIG.MeasuredTemplate.defaults.angle, radius: size };
+      case "ray":
+      case "line": return { ...base, type: "line", length: size, width };
+      case "rect":
+      case "rectangle": return { ...base, type: "rectangle", width: size, height: size };
+      case "ring": return { ...base, type: "ring", radius: size, outerWidth: width, innerWidth: 0 };
+      default: return { ...base, type: "circle", radius: size };
+    }
+  };
+
+  const rollData = activity.getRollData?.() ?? {};
+  const levelId = (canvas as unknown as { level?: { id: string } }).level?.id;
+  const regionData = placements.map(({ x, y, direction, token }) => {
+    const shape = shapeFor(x, y, direction ?? 0, token);
+    const placed = templateElevation(activity, shape, levelId, shapeType === "emanation" ? token?.id ?? undefined : undefined);
+    return foundry.utils.mergeObject({
+    name: `${activity.item?.name ?? "Template"} [${game.user?.name}]`,
+    color: game.user?.color,
+    shapes: [shape],
+    elevation: placed?.elevation ?? { bottom: null, top: null },
+    levels: [levelId],
+    restriction: { enabled: true, type: "move" },
+    visibility: CONST.REGION_VISIBILITY.ALWAYS,
+    highlightMode: "coverage",
+    displayMeasurements: true,
+    flags: {
+      core: { MeasuredTemplate: true },
+      dnd5e: {
+        activity: activity.uuid,
+        item: activity.item?.uuid,
+        origin: activity.getUsageToken?.()?.uuid,
+        spellLevel: rollData?.item?.level
+      }
+    }
+  }, { flags: { [MODULE_ID]: { ...midiTemplateFlags(activity), ...extraFlags, ...(placed ? { band: true, area: placed.area ?? null, reach: placed.reach } : {}) } } });
+  });
+
+  return await scene.createEmbeddedDocuments("Region", regionData as unknown as RegionDocument.CreateData[]) as unknown as RegionDocument.Implementation[];
+}
+
 export function selectTargetsFromTemplates(
-  templates: (foundry.canvas.placeables.MeasuredTemplate.Implementation | MeasuredTemplateDocument | string)[],
+  templates: (foundry.canvas.placeables.MeasuredTemplate.Implementation | MeasuredTemplateDocument
+    | RegionDocument.Implementation | string)[],
   selfTokenRef: TokenOrDocument | string | null | undefined = "",
   ignoreSelf: boolean = false,
   AoETargetType: string = "any",
@@ -509,16 +806,36 @@ export function selectTargetsFromTemplates(
   return tokens;
 }
 
+/**
+ * The tokens an activity's templates target, by the activity's own settings: auto-target action,
+ * AoE target type, "-self" and target count. Undefined when the activity does not auto-target.
+ */
+export function computeActivityTemplateTargets(
+  activity: Activity | undefined,
+  templates: Parameters<typeof computeTargetsFromTemplates>[0]
+): Token.Implementation[] | undefined {
+  const autoTarget = getActivityAutoTargetAction(activity);
+  if (autoTarget === "none") return undefined;
+  const ignoreSelf = (activity?.target?.affects.special ?? "").split(";").includes("-self");
+  const tokens = computeTargetsFromTemplates(templates, getToken(activity?.actor), ignoreSelf,
+    activity ? getAoETargetType(activity) : "any", autoTarget);
+  const maxTargets = Number(activity?.target?.affects.count) || 0;
+  return maxTargets > 0 ? tokens.slice(0, maxTargets) : tokens;
+}
+
 
 /**
  * Returns tokens inside a template without modifying game.user.targets.
- * Accepts a MeasuredTemplate placeable, a MeasuredTemplateDocument, or a UUID string.
+ * Accepts a MeasuredTemplate placeable, a MeasuredTemplateDocument, a RegionDocument, or a UUID string.
+ * In v14, MeasuredTemplates are backed by Regions — when no placeable is available,
+ * falls back to Region-based targeting via testPoint().
  * Handles WalledTemplates, VolumetricTemplates, and standard template targeting.
  * Note: When VolumetricTemplates is active, game.user.targets may be modified as a
- * side effect of compute3Dtemplate — the returned array is still the authoritative result.
+ * side effect of computeRegion3d — the returned array is still the authoritative result.
  */
 export function computeTargetsFromTemplate(
-  template: foundry.canvas.placeables.MeasuredTemplate.Implementation | MeasuredTemplateDocument | string,
+  template: foundry.canvas.placeables.MeasuredTemplate.Implementation | MeasuredTemplateDocument
+    | RegionDocument.Implementation | string,
   selfTokenRef: TokenOrDocument | string | null | undefined = "",
   ignoreSelf: boolean = false,
   AoETargetType: string = "any",
@@ -527,30 +844,50 @@ export function computeTargetsFromTemplate(
   if (!autoTarget) autoTarget = configSettings.autoTarget;
   if (autoTarget === "none") return [];
 
-  // D&D 6 uses Regions, including multiple shapes and scene levels. Let the
-  // native document determine containment instead of rebuilding a legacy shape.
-  const document: any = typeof template === "string" ? fromUuidSync(template) : (template as any).document ?? template;
-  if (document?.documentName === "Region") {
-    const selfToken = getToken(selfTokenRef);
-    return (canvas.tokens?.placeables ?? []).filter(token =>
-      isAoETargetable(token, { selfToken, ignoreSelf, AoETargetType, autoTarget })
-      && (token.document as any).testInsideRegion(document)
-    );
-  }
-
-  // Resolve to a MeasuredTemplate placeable
+  // Resolve to a MeasuredTemplate placeable, falling back to RegionDocument for v14
   let mTemplate: foundry.canvas.placeables.MeasuredTemplate.Implementation | undefined;
+  let regionDoc: RegionDocument.Implementation | undefined;
+
   if (typeof template === "string") {
-    const tDoc = fromUuidSync(template) as MeasuredTemplateDocument | null;
-    mTemplate = tDoc?.object ?? undefined;
+    const doc = fromUuidSync(template);
+    if (doc?.documentName === "Region") {
+      // Region UUID (v14 native) — use Region targeting directly
+      regionDoc = doc as RegionDocument.Implementation;
+    } else if (doc) {
+      const mtDoc = doc as MeasuredTemplateDocument;
+      mTemplate = mtDoc.object ?? undefined;
+      if (!mTemplate && mtDoc._id) {
+        // v14 compat: proxy MeasuredTemplateDocument with no placeable — look up backing Region
+        regionDoc = canvas.scene?.regions.get(mtDoc._id) ?? undefined;
+      }
+    }
+  } else if ((template as { documentName?: string })?.documentName === "Region") {
+    /*
+     * A Region document passed directly — including an *unsaved* one. That is what
+     * `canvas.regions.placeRegions` hands to its `onChange` callback on every move during
+     * placement, and `testPoint` is pure geometry, so it answers correctly before the region is
+     * ever saved. This is the live targeting preview.
+     */
+    regionDoc = template as unknown as RegionDocument.Implementation;
   } else if (template instanceof MeasuredTemplateDocument) {
     mTemplate = template.object ?? undefined;
+    if (!mTemplate && template._id) {
+      regionDoc = canvas.scene?.regions.get(template._id) ?? undefined;
+    }
   } else {
-    mTemplate = template;
+    mTemplate = template as foundry.canvas.placeables.MeasuredTemplate.Implementation;
+  }
+
+  // v14: Region-based targeting when no placeable is available
+  if (!mTemplate && regionDoc) {
+    return computeTargetsFromRegion(regionDoc, selfTokenRef, ignoreSelf, AoETargetType, autoTarget);
   }
   if (!mTemplate) return [];
 
-  const useWalledTemplates = autoTarget === "walledtemplates" && game.modules.get("walledtemplates")?.active;
+  // v14 never draws MeasuredTemplates, so the walled shape is never computed and
+  // targetsWithinShape() returns nothing - fall through rather than targeting nobody.
+  const useWalledTemplates = autoTarget === "walledtemplates"
+    && !!game.modules.get("walledtemplates")?.active && !!mTemplate.shape;
   if (!useWalledTemplates) {
     // For cones/rays during preview, the shape may be stale (computed with old direction)
     const templateType = mTemplate.document.t;
@@ -563,13 +900,21 @@ export function computeTargetsFromTemplate(
   const selfToken = getToken(selfTokenRef);
   let targetTokens: Token.Implementation[] = [];
 
-  if (installedModules.get("levelsvolumetrictemplates")) {
-    const tokensToCheck = canvas.tokens?.placeables?.filter(tk =>
-      isAoETargetable(tk, { selfToken, ignoreSelf, AoETargetType, autoTarget })
-    );
-    //@ts-expect-error VolumetricTemplates
-    VolumetricTemplates.compute3Dtemplate(mTemplate, tokensToCheck);
-    targetTokens = Array.from(game.user?.targets ?? []);
+  const lvtCandidates = installedModules.get("levelsvolumetrictemplates") && !useWalledTemplates
+    ? (canvas.tokens?.placeables ?? []).filter(tk => isAoETargetable(tk, { selfToken, ignoreSelf, AoETargetType, autoTarget }))
+    : undefined;
+  const lvtInside = lvtCandidates
+    ? lvtContainedIds(getBackingRegion(mTemplate.document), lvtCandidates)
+    : undefined;
+
+  if (lvtInside) {
+    const wallsBlockTargeting = ["wallsBlock", "wallsBlockIgnoreDefeated", "wallsBlockIgnoreIncapacitated"].includes(autoTarget);
+    const regionDoc = getBackingRegion(mTemplate.document);
+    // lvt only sees the declared band, whose top is null - apply the derived top.
+    const band = regionDoc ? regionElevationBand(regionDoc) : templateElevationBand(mTemplate.document);
+    targetTokens = lvtCandidates!.filter(tk => tk.id && lvtInside.includes(tk.id)
+      && withinBand(band, tk)
+      && !(wallsBlockTargeting && regionDoc && regionWallBlocked(regionDoc, tk)));
   } else if (useWalledTemplates) {
     //@ts-expect-error walledtemplates
     targetTokens = (mTemplate.targetsWithinShape) ? mTemplate.targetsWithinShape() : [];
@@ -588,8 +933,236 @@ export function computeTargetsFromTemplate(
   return targetTokens;
 }
 
+/** Vertical extent of an AoE in scene units - core leaves the backing Region's elevation.top null. */
+function aoeHeight(shapeType: string, dims: { radius?: number, width?: number, angle?: number, curvature?: string }): number | undefined {
+  switch (shapeType) {
+    case "circle": case "sphere": case "radius":
+      return dims.radius === undefined ? undefined : dims.radius * 2;
+    case "ellipse":
+      return dims.radius === undefined ? undefined : dims.radius * 2;
+    case "rectangle": case "rect": case "line": case "ray": case "ring":
+      return dims.width;
+    case "cone": {
+      if (dims.radius === undefined) return undefined;
+      const angleRad = (dims.angle ?? 0) * (Math.PI / 180);
+      if (dims.curvature === "flat") return dims.radius * Math.tan(angleRad / 2) * 2;
+      if (dims.curvature === "semicircle") return dims.radius - (dims.radius / (1 + Math.tan(angleRad / 2))) * 2;
+      return dims.radius * Math.sin(angleRad / 2) * 2;
+    }
+  }
+  return undefined;
+}
+
+/** Vertical extent of a region shape (document or source data) in scene units. */
+function regionShapeHeight(shape: any): number | undefined {
+  if (!shape) return undefined;
+  const dp = canvas.scene?.dimensions?.distancePixels ?? 1;
+  return aoeHeight(shape.type, {
+    radius: (shape.radius ?? shape.radiusX ?? shape.outerWidth) / dp,
+    width: (shape.width ?? shape.outerWidth) / dp,
+    angle: shape.angle,
+    curvature: shape.curvature
+  });
+}
+
+/** Region elevation band, deriving top from the shape when core leaves it null. */
+function regionElevationBand(regionDoc: RegionDocument.Implementation): { bottom: number, top: number, topInclusive?: boolean } {
+  const declaredBottom = regionDoc.elevation?.bottom;
+  const bottom = Number.isFinite(declaredBottom) ? declaredBottom as number : -Infinity;
+  const declaredTop = regionDoc.elevation?.top;
+  const topInclusive = (regionDoc.elevation as { topInclusive?: boolean } | undefined)?.topInclusive;
+  if (Number.isFinite(declaredTop)) return { bottom, top: declaredTop as number, topInclusive };
+  const height = regionShapeHeight(regionDoc.shapes?.at?.(0));
+  /*
+   * A region with no declared bottom is unbounded below, and there is no base to measure a derived
+   * height from — `-Infinity + height` is still `-Infinity`, which collapsed the band to
+   * (-Infinity, -Infinity) and excluded every token. dnd5e 6.0's `TemplatePlacement` sets no
+   * elevation at all, so every template region placed through it targeted nobody.
+   */
+  if (height === undefined || !Number.isFinite(bottom)) return { bottom, top: Infinity };
+  return { bottom, top: bottom + height };
+}
+
+/** Template elevation band - used during preview, before a Region exists. */
+function templateElevationBand(templateDoc: any): { bottom: number, top: number } {
+  const bottom = templateDoc.elevation ?? 0;
+  const height = aoeHeight(templateDoc.t, {
+    radius: templateDoc.distance,
+    width: templateDoc.width ?? templateDoc.distance,
+    angle: templateDoc.angle,
+    curvature: "round"
+  });
+  return { bottom, top: height === undefined ? Infinity : bottom + height };
+}
+
+/** The token's feet are in the band, as core tests a region's elevation: an exclusive top leaves out a token standing on it. */
+function withinBand(band: { bottom: number, top: number, topInclusive?: boolean }, token: TokenOrDocument): boolean {
+  const elev = tokenSourcePosition(token).elevation;
+  if (elev < band.bottom) return false;
+  if (elev === band.bottom) return true;
+  return band.topInclusive === false ? elev < band.top : elev <= band.top;
+}
+
+/** As core: a region contains only tokens on its levels. */
+function onRegionLevel(regionDoc: RegionDocument.Implementation, token: TokenOrDocument): boolean {
+  const region = regionDoc as unknown as { includedInLevel?: (level: string | undefined) => boolean };
+  const document = getTokenDocument(token);
+  return region.includedInLevel && document ? region.includedInLevel(tokenLevel(document)) : true;
+}
+
+/** The Region backing a template - same id on v14. */
+function getBackingRegion(doc: any): RegionDocument.Implementation | undefined {
+  if (!doc) return undefined;
+  if (doc.documentName === "Region") return doc as RegionDocument.Implementation;
+  return (doc._id ? canvas.scene?.regions.get(doc._id) : undefined) ?? undefined;
+}
+
+/**
+ * Volumetric containment via levelsvolumetrictemplates. Undefined if it can't answer, so callers
+ * fall back to midi's own test. Sets game.user.targets as a side effect; midi writes the final set.
+ */
+function lvtContainedIds(regionDoc: RegionDocument.Implementation | undefined, candidates: Token.Implementation[]): string[] | undefined {
+  if (!regionDoc) return undefined;
+  const api = (game.modules.get("levelsvolumetrictemplates") as any)?.API;
+  if (typeof api?.computeRegion3d !== "function") return undefined;
+  return api.computeRegion3d(regionDoc, candidates.map(tk => tk.document), false) ?? [];
+}
+
+/** LOS from the region's shape origin to a token - lvt does no wall checking on v14. */
+/**
+ * The point a Region's area spreads from, for wall and cover checks. Not every shape has x/y: an emanation keeps
+ * its position on its base token (dnd5e 6's self-centred areas), a polygon in its points; reading them as 0 measured
+ * from the scene's corner.
+ */
+export function regionShapeOrigin(regionDoc: RegionDocument.Implementation): { x: number, y: number } | undefined {
+  const shape = regionDoc.shapes?.at?.(0) as any;
+  if (!shape) return undefined;
+  const gridSize = canvas.scene?.grid.size ?? 100;
+  switch (shape.type) {
+    case "emanation": {
+      // core moves an attached emanation's base with its token, so the base is where the token is
+      const base = shape.base ?? {};
+      if (base.type === "token") return { x: base.x + (base.width ?? 1) * gridSize / 2, y: base.y + (base.height ?? 1) * gridSize / 2 };
+      if (base.type === "rectangle") return { x: base.x + (base.width ?? 0) / 2, y: base.y + (base.height ?? 0) / 2 };
+      return { x: base.x ?? 0, y: base.y ?? 0 };
+    }
+    case "rectangle": {
+      const dx = (0.5 - (shape.anchorX ?? 0)) * (shape.width ?? 0);
+      const dy = (0.5 - (shape.anchorY ?? 0)) * (shape.height ?? 0);
+      const angle = Math.toRadians(shape.rotation ?? 0);
+      return { x: shape.x + dx * Math.cos(angle) - dy * Math.sin(angle), y: shape.y + dx * Math.sin(angle) + dy * Math.cos(angle) };
+    }
+    case "polygon": {
+      const points: number[] = shape.points ?? [];
+      const n = points.length / 2;
+      if (!n) return undefined;
+      let x = 0, y = 0;
+      for (let i = 0; i < points.length; i += 2) { x += points[i]; y += points[i + 1]; }
+      return { x: x / n, y: y / n };
+    }
+    default:
+      return { x: shape.x ?? 0, y: shape.y ?? 0 };
+  }
+}
+
+function regionWallBlocked(regionDoc: RegionDocument.Implementation, token: Token.Implementation): boolean {
+  const origin = regionShapeOrigin(regionDoc);
+  if (!origin) return false;
+  return !!CONFIG.Canvas.polygonBackends.sight.testCollision(
+    origin,
+    tokenSourceCenter(token),
+    // @ts-expect-error v14 collision level not in fvtt-types
+    { mode: "any", type: "move", level: collisionLevel(token) }
+  );
+}
+
+/**
+ * v14 Region-based targeting: returns tokens inside a Region using testPoint().
+ * Used when a MeasuredTemplate has been converted to a Region (v14 compat layer)
+ * and no MeasuredTemplate placeable is available.
+ * Does not support VolumetricTemplates or WalledTemplates (those modules need their own v14 updates).
+ */
+function computeTargetsFromRegion(
+  regionDoc: RegionDocument.Implementation,
+  selfTokenRef: TokenOrDocument | string | null | undefined,
+  ignoreSelf: boolean,
+  AoETargetType: string,
+  autoTarget: string
+): Token.Implementation[] {
+  const selfToken = getToken(selfTokenRef);
+  const wallsBlockTargeting = ["wallsBlock", "wallsBlockIgnoreDefeated", "wallsBlockIgnoreIncapacitated"].includes(autoTarget);
+  const candidates = (canvas.tokens?.placeables ?? []).filter(token =>
+    token.actor && isAoETargetable(token, { selfToken, ignoreSelf, AoETargetType, autoTarget }));
+
+  if (installedModules.get("levelsvolumetrictemplates")) {
+    const inside = lvtContainedIds(regionDoc, candidates);
+    if (inside) {
+      const band = regionElevationBand(regionDoc);
+      // LVT tests the region's own level; a creature on another level is reached only through an opening (midi's test)
+      return candidates.filter(tk => tk.id && (inside.includes(tk.id) && onRegionLevel(regionDoc, tk)
+        ? withinBand(band, tk) && withinAreaReach(regionDoc, tk.document) && lineOfEffectClear(regionDoc, tk.document)
+        : !onRegionLevel(regionDoc, tk) && isTokenInsideRegion(regionDoc, tk, wallsBlockTargeting))
+        && !(wallsBlockTargeting && regionWallBlocked(regionDoc, tk)));
+    }
+  }
+
+  return candidates.filter(token => isTokenInsideRegion(regionDoc, token, wallsBlockTargeting) && token.id);
+}
+
+/**
+ * v14 Region-based containment check: mirrors isTokenInside() but uses regionDoc.testPoint().
+ * Checks each grid square the token occupies, with optional wall-blocking.
+ */
+function isTokenInsideRegion(
+  regionDoc: RegionDocument.Implementation,
+  token: TokenOrDocument,
+  wallsBlockTargeting: boolean
+): boolean {
+  const grid = canvas.scene?.grid;
+  if (!grid) return false;
+
+  if (configSettings.optionalRules.wallsBlockRange !== "none" && hasWallBlockingCondition(token))
+    return false;
+  if (!isValidTarget(token)) return false;
+  if (!areaReachesToken(regionDoc, token)) return false;
+
+  const wallOrigin = regionShapeOrigin(regionDoc) ?? { x: 0, y: 0 };
+
+  const pos = tokenSourcePosition(token);
+  const startX = pos.width >= 1 ? 0.5 : (pos.width / 2);
+  const startY = pos.height >= 1 ? 0.5 : (pos.height / 2);
+  for (let x = startX; x < pos.width; x++) {
+    for (let y = startY; y < pos.height; y++) {
+      const testX = pos.x + x * grid.size!;
+      const testY = pos.y + y * grid.size!;
+
+      // Use polygonTree.testPoint with tolerance=1 to include boundary tokens.
+      // regionDoc.testPoint uses Clipper strict containment (boundary = outside),
+      // but MeasuredTemplate.shape.contains was boundary-inclusive. Tolerance of 1px matches that behavior.
+      // Note: Foundry v14's token.testInsideRegion() uses tolerance 0.75 — we intentionally use 1 here
+      // to maintain parity with the legacy isTokenInside() boundary-inclusive behavior.
+      // @ts-expect-error polygonTree.testPoint accepts optional distance param not in type defs
+      let contains = regionDoc.polygonTree.testPoint({ x: testX, y: testY }, 1);
+
+      if (contains && wallsBlockTargeting) {
+        // Always check - lvt does no wall checking on v14.
+        contains = !CONFIG.Canvas.polygonBackends.sight.testCollision(
+          wallOrigin,
+          { x: testX, y: testY },
+          // @ts-expect-error v14 collision level not in fvtt-types
+          { mode: "any", type: "move", level: collisionLevel(token) }
+        );
+      }
+
+      if (contains) return true;
+    }
+  }
+  return false;
+}
+
 export function computeTargetsFromTemplates(
-  templates: (foundry.canvas.placeables.MeasuredTemplate.Implementation | MeasuredTemplateDocument | string)[],
+  templates: (foundry.canvas.placeables.MeasuredTemplate.Implementation | MeasuredTemplateDocument
+    | RegionDocument.Implementation | string)[],
   selfTokenRef: TokenOrDocument | string | null | undefined = "",
   ignoreSelf: boolean = false,
   AoETargetType: string = "any",
@@ -602,17 +1175,6 @@ export function computeTargetsFromTemplates(
     tokens.forEach(t => allTargetTokens.add(t));
   }
   return Array.from(allTargetTokens);
-}
-
-// If we are blocking the roll let anyone waiting on the roll know it is complete
-function blockRoll(item, workflow) {
-  if (item) {
-    if (workflow) workflow.aborted = true;
-    let hookName = `midi-qol.RollComplete.${item?.uuid}`;
-    //@ts-expect-error
-    Hooks.callAll(hookName, workflow)
-  }
-  return false;
 }
 
 /**

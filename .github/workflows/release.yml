@@ -1,0 +1,26 @@
+name: Release
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate and publish package
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          version=$(jq -r .version package/module.json)
+          tag="v$version"
+          repo="https://github.com/$GITHUB_REPOSITORY"
+          zip="midi-qol-v$version.zip"
+          test "$(jq -r .manifest package/module.json)" = "$repo/releases/latest/download/module.json"
+          test "$(jq -r .download package/module.json)" = "$repo/releases/download/$tag/$zip"
+          test -f "package/$zip"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --verify-tag --title "Midi QOL Enhanced $version" --notes-file "docs/Release-$version.md"
+          gh release upload "$tag" package/module.json "package/$zip" --clobber

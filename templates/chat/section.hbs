@@ -1,0 +1,14 @@
+{{!--
+  One roll section of the usage card, with the card's notes placed around and inside it (`notes`, rendered).
+
+  `midi-qol-section-filled` marks a section with content; midi's CSS styles the two differently.
+--}}
+{{#each notes.before}}{{{ this }}}{{/each}}
+<div class="midi-qol-{{ name }}{{#if (or section.html notes.prepend notes.append) }} midi-qol-section-filled{{/if}}">
+    {{#each notes.prepend}}{{{ this }}}{{/each}}
+    {{#if section.label }}<div class="midi-roll-label">{{{ section.label }}}</div>{{/if}}
+    {{{ section.html }}}
+    {{#each notes.append}}{{{ this }}}{{/each}}
+    <div class="end-midi-qol-{{ name }}"></div>
+</div>
+{{#each notes.after}}{{{ this }}}{{/each}}

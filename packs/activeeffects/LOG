@@ -1,0 +1,5 @@
+2026/11/14-11:08:30.715 a3b0 Delete type=3 #1
+2026/11/14-11:08:30.717 69ac Level-0 table #5: started
+2026/11/14-11:08:30.719 69ac Level-0 table #5: 4936 bytes OK
+2026/11/14-11:08:30.720 69ac Delete type=0 #3
+2026/11/14-11:08:30.720 69ac Manual compaction at level-0 from '!effects!midiCrouchingFx0' @ 72057594037927935 : 1 .. '!folders!midiTokenFxFldr0' @ 0 : 0; will stop at (end)

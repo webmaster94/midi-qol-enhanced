@@ -8,7 +8,7 @@
       "chat": ""
     },
     "source": {
-      "custom": "Midi 11.4.23",
+      "custom": "midi-qol sample",
       "book": "SRD 5.1",
       "page": "",
       "license": "CC-BY-4.0",
@@ -130,7 +130,7 @@
         }
       }
     },
-    "identifier": "multiattack-automation-11423",
+    "identifier": "multiattack-automation",
     "enchant": {},
     "prerequisites": {
       "level": null,
@@ -144,26 +144,10 @@
     {
       "name": "Multiattack Automation",
       "origin": "Scene.VUTmnLQOHLsSo5lF.Token.0QV516zWRJWLOOeG.Actor.iNIPR1veVsbKUuXC.Item.cj8OhgNvNkGybtnT",
-      "duration": {
-        "rounds": null,
-        "startTime": 1699204363,
-        "seconds": null,
-        "combat": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
-      },
+      "duration": {},
       "transfer": true,
       "disabled": false,
       "_id": "uigNxYka2k5vTHIe",
-      "changes": [
-        {
-          "key": "flags.midi-qol.onUseMacroName",
-          "mode": 0,
-          "value": "ItemMacro, preCompleted",
-          "priority": 20
-        }
-      ],
       "description": "",
       "statuses": [],
       "flags": {
@@ -176,7 +160,6 @@
           "selfTargetAlways": false,
           "dontApply": false,
           "stackable": "noneName",
-          "showIcon": false,
           "durationExpression": "",
           "macroRepeat": "none",
           "specialDuration": []
@@ -199,7 +182,6 @@
         },
         "core": {}
       },
-      "tint": "#ffffff",
       "_stats": {
         "compendiumSource": "Scene.VUTmnLQOHLsSo5lF.Token.IyRV8LwSCk1FiSWh.Actor.K58INTSFII9dCu9i.Item.FXy68z4tsAoyYBv2.ActiveEffect.Eb9vz83kYdtdho2B",
         "duplicateSource": null,
@@ -213,9 +195,20 @@
       },
       "img": "icons/skills/melee/blade-tips-triple-steel.webp",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": [
+          {
+            "key": "flags.midi-qol.onUseMacroName",
+            "value": "ItemMacro, preCompleted",
+            "priority": 20,
+            "type": "custom"
+          }
+        ]
+      },
       "sort": 0,
-      "_key": "!items.effects!BtmYJunrUgd9fXao.uigNxYka2k5vTHIe"
+      "_key": "!items.effects!BtmYJunrUgd9fXao.uigNxYka2k5vTHIe",
+      "start": null,
+      "showIcon": 0
     }
   ],
   "folder": "fZIl4G4qj3C894LI",
@@ -274,7 +267,7 @@
         "img": "icons/skills/melee/blade-tips-triple-steel.webp",
         "type": "script",
         "scope": "global",
-        "command": "function pluralToSingular(plural) {\n  // Define common English plural suffixes and their corresponding singular forms\n  const pluralSuffixes = [\n    { suffix: 's', singular: '' },\n    { suffix: 'es', singular: '' },\n    { suffix: 'ies', singular: 'y' },\n  ];\n\n  // Iterate through the suffixes and attempt to remove them from the plural word\n  for (const suffixInfo of pluralSuffixes) {\n    const { suffix, singular } = suffixInfo;\n    if (plural.endsWith(suffix)) {\n      return plural.slice(0, -suffix.length) + singular;\n    }\n  }\n\n  // If no common suffix is found, return the input as is\n  return plural;\n}\nif (rolledItem.name === \"Multiattack\") {\n    let desc = rolledItem.system.description.value;\n    desc = desc.replaceAll(\" one \", \" 1 \");\n    desc = desc.replaceAll(\" once \", \" 1 \");\n    desc = desc.replaceAll(\" two times \", \" 2 \");\n    desc = desc.replaceAll(\" two \", \" 2 \");\n    desc = desc.replaceAll(\" twice \", \" 2 \");\n    desc = desc.replaceAll(\" three times \", \" 3 \");\n    desc = desc.replaceAll(\" three \", \" 3 \");\n    desc = desc.replaceAll(\" thrice \", \" 3 \");\n    desc = desc.replaceAll(\" four times \", \" 4 \")\n    desc = desc.replaceAll(\" four \", \" 4 \");\n    desc = desc.replaceAll(\" five \", \" 5 \");\n    desc = desc.replaceAll(\" five times \", \" 5 \");\n\n\n    matches = desc.matchAll(/(\\d+)\\s+with\\s+its\\s+([^\\d]+)/g)\n    // const regex = /.*(\\d+)\\s*([a-zA-Z]+)\\s*attacks?/;\n    const regex = /.*(\\d+)\\s*(\\b[a-zA-Z]+\\b(?:\\s+\\b[a-zA-Z]+\\b){0,3})\\s*attacks?/i;\n\n    let match = desc.match(regex);\n    if (match) {\n      matches = [[\"\", match[1], match[2]]];\n    }\n    for (let match of matches) {\n        let count = match[1].replace(\",\").trim();\n        let attack = match[2].replace(/,.*/, \"\").replace(\" and \", \"\").trim();\n        attack = attack.charAt(0).toUpperCase() + attack.slice(1);\n        attack = attack.replace(/\\..*/, \"\").replace(/,.*/,\"\");\n        attack = pluralToSingular(attack);\n        let attackItem = actor.items.getName(attack);\n        if (!attackItem) {\n          console.error(\"Could not find item \", attack);\n          continue;\n        }\n        let numericCount = Number(count);\n        for (let i = 0; i < numericCount; i++) {\n          await MidiQOL.completeItemUse(attackItem, {}, {});\n          await new Promise(resolve => setTimeout(resolve, game.settings.get(\"midi-qol\", \"DebounceInterval\")))\n        }\n    }\n\n}\nreturn true;",
+        "command": "function pluralToSingular(plural) {\n  // Define common English plural suffixes and their corresponding singular forms\n  const pluralSuffixes = [\n    { suffix: 's', singular: '' },\n    { suffix: 'es', singular: '' },\n    { suffix: 'ies', singular: 'y' },\n  ];\n\n  // Iterate through the suffixes and attempt to remove them from the plural word\n  for (const suffixInfo of pluralSuffixes) {\n    const { suffix, singular } = suffixInfo;\n    if (plural.endsWith(suffix)) {\n      return plural.slice(0, -suffix.length) + singular;\n    }\n  }\n\n  // If no common suffix is found, return the input as is\n  return plural;\n}\nif (rolledItem.name === \"Multiattack\") {\n    let desc = rolledItem.system.description.value;\n    desc = desc.replaceAll(\" one \", \" 1 \");\n    desc = desc.replaceAll(\" once \", \" 1 \");\n    desc = desc.replaceAll(\" two times \", \" 2 \");\n    desc = desc.replaceAll(\" two \", \" 2 \");\n    desc = desc.replaceAll(\" twice \", \" 2 \");\n    desc = desc.replaceAll(\" three times \", \" 3 \");\n    desc = desc.replaceAll(\" three \", \" 3 \");\n    desc = desc.replaceAll(\" thrice \", \" 3 \");\n    desc = desc.replaceAll(\" four times \", \" 4 \")\n    desc = desc.replaceAll(\" four \", \" 4 \");\n    desc = desc.replaceAll(\" five \", \" 5 \");\n    desc = desc.replaceAll(\" five times \", \" 5 \");\n\n\n    matches = desc.matchAll(/(\\d+)\\s+with\\s+its\\s+([^\\d]+)/g)\n    // const regex = /.*(\\d+)\\s*([a-zA-Z]+)\\s*attacks?/;\n    const regex = /.*(\\d+)\\s*(\\b[a-zA-Z]+\\b(?:\\s+\\b[a-zA-Z]+\\b){0,3})\\s*attacks?/i;\n\n    let match = desc.match(regex);\n    if (match) {\n      matches = [[\"\", match[1], match[2]]];\n    }\n    for (let match of matches) {\n        let count = match[1].replace(\",\").trim();\n        let attack = match[2].replace(/,.*/, \"\").replace(\" and \", \"\").trim();\n        attack = attack.charAt(0).toUpperCase() + attack.slice(1);\n        attack = attack.replace(/\\..*/, \"\").replace(/,.*/,\"\");\n        attack = pluralToSingular(attack);\n        let attackItem = actor.items.getName(attack);\n        if (!attackItem) {\n          console.error(\"Could not find item \", attack);\n          continue;\n        }\n        let numericCount = Number(count);\n        for (let i = 0; i < numericCount; i++) {\n          await MidiQOL.completeItemUse(attackItem, {}, {});\n        }\n    }\n\n}\nreturn true;",
         "author": "STcmc1QZ0hx024Tl",
         "ownership": {
           "default": 3
@@ -295,7 +288,7 @@
     },
     "itemacro": {
       "macro": {
-        "command": "function pluralToSingular(plural) {\n  // Define common English plural suffixes and their corresponding singular forms\n  const pluralSuffixes = [\n    { suffix: 's', singular: '' },\n    { suffix: 'es', singular: '' },\n    { suffix: 'ies', singular: 'y' },\n  ];\n\n  // Iterate through the suffixes and attempt to remove them from the plural word\n  for (const suffixInfo of pluralSuffixes) {\n    const { suffix, singular } = suffixInfo;\n    if (plural.endsWith(suffix)) {\n      return plural.slice(0, -suffix.length) + singular;\n    }\n  }\n\n  // If no common suffix is found, return the input as is\n  return plural;\n}\nif (rolledItem.name === \"Multiattack\") {\n    let desc = rolledItem.system.description.value;\n    desc = desc.replaceAll(\" one \", \" 1 \");\n    desc = desc.replaceAll(\" once \", \" 1 \");\n    desc = desc.replaceAll(\" two times \", \" 2 \");\n    desc = desc.replaceAll(\" two \", \" 2 \");\n    desc = desc.replaceAll(\" twice \", \" 2 \");\n    desc = desc.replaceAll(\" three times \", \" 3 \");\n    desc = desc.replaceAll(\" three \", \" 3 \");\n    desc = desc.replaceAll(\" thrice \", \" 3 \");\n    desc = desc.replaceAll(\" four times \", \" 4 \")\n    desc = desc.replaceAll(\" four \", \" 4 \");\n    desc = desc.replaceAll(\" five \", \" 5 \");\n    desc = desc.replaceAll(\" five times \", \" 5 \");\n\n\n    matches = desc.matchAll(/(\\d+)\\s+with\\s+its\\s+([^\\d]+)/g)\n    const regex = /.*(\\d+)\\s*([a-zA-Z]+)\\s*attacks?/;\n    let match = desc.match(regex);\n    if (match) {\n      matches = [[\"\", match[1], match[2]]];\n    }\n    for (let match of matches) {\n        let count = match[1].replace(\",\").trim();\n        let attack = match[2].replace(/,.*/, \"\").replace(\" and \", \"\").trim();\n        attack = attack.charAt(0).toUpperCase() + attack.slice(1);\n        attack = attack.replace(/\\..*/, \"\").replace(/,.*/,\"\");\n        attack = pluralToSingular(attack);\n        let attackItem = actor.items.getName(attack);\n        if (!attackItem) {\n          console.error(\"Could not find item \", attack);\n          continue;\n        }\n        let numericCount = Number(count);\n        for (let i = 0; i < numericCount; i++) {\n          await MidiQOL.completeItemUse(attackItem, {}, {});\n          await new Promise(resolve => setTimeout(resolve, game.settings.get(\"midi-qol\", \"DebounceInterval\")))\n        }\n    }\n\n}\nreturn true;",
+        "command": "function pluralToSingular(plural) {\n  // Define common English plural suffixes and their corresponding singular forms\n  const pluralSuffixes = [\n    { suffix: 's', singular: '' },\n    { suffix: 'es', singular: '' },\n    { suffix: 'ies', singular: 'y' },\n  ];\n\n  // Iterate through the suffixes and attempt to remove them from the plural word\n  for (const suffixInfo of pluralSuffixes) {\n    const { suffix, singular } = suffixInfo;\n    if (plural.endsWith(suffix)) {\n      return plural.slice(0, -suffix.length) + singular;\n    }\n  }\n\n  // If no common suffix is found, return the input as is\n  return plural;\n}\nif (rolledItem.name === \"Multiattack\") {\n    let desc = rolledItem.system.description.value;\n    desc = desc.replaceAll(\" one \", \" 1 \");\n    desc = desc.replaceAll(\" once \", \" 1 \");\n    desc = desc.replaceAll(\" two times \", \" 2 \");\n    desc = desc.replaceAll(\" two \", \" 2 \");\n    desc = desc.replaceAll(\" twice \", \" 2 \");\n    desc = desc.replaceAll(\" three times \", \" 3 \");\n    desc = desc.replaceAll(\" three \", \" 3 \");\n    desc = desc.replaceAll(\" thrice \", \" 3 \");\n    desc = desc.replaceAll(\" four times \", \" 4 \")\n    desc = desc.replaceAll(\" four \", \" 4 \");\n    desc = desc.replaceAll(\" five \", \" 5 \");\n    desc = desc.replaceAll(\" five times \", \" 5 \");\n\n\n    matches = desc.matchAll(/(\\d+)\\s+with\\s+its\\s+([^\\d]+)/g)\n    const regex = /.*(\\d+)\\s*([a-zA-Z]+)\\s*attacks?/;\n    let match = desc.match(regex);\n    if (match) {\n      matches = [[\"\", match[1], match[2]]];\n    }\n    for (let match of matches) {\n        let count = match[1].replace(\",\").trim();\n        let attack = match[2].replace(/,.*/, \"\").replace(\" and \", \"\").trim();\n        attack = attack.charAt(0).toUpperCase() + attack.slice(1);\n        attack = attack.replace(/\\..*/, \"\").replace(/,.*/,\"\");\n        attack = pluralToSingular(attack);\n        let attackItem = actor.items.getName(attack);\n        if (!attackItem) {\n          console.error(\"Could not find item \", attack);\n          continue;\n        }\n        let numericCount = Number(count);\n        for (let i = 0; i < numericCount; i++) {\n          await MidiQOL.completeItemUse(attackItem, {}, {});\n        }\n    }\n\n}\nreturn true;",
         "name": "Multiattack Automation",
         "img": "icons/skills/melee/blade-tips-triple-steel.webp",
         "type": "script",
@@ -332,10 +325,9 @@
       "section": "",
       "actionSection": ""
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.58"
+    "cat": {
+      "automation": {
+        "version": "14.6.9"
       }
     }
   },

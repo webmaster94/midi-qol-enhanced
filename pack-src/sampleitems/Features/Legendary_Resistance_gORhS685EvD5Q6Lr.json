@@ -5,30 +5,8 @@
   "effects": [
     {
       "_id": "FniO7deC5cNc9vuy",
-      "changes": [
-        {
-          "key": "flags.midi-qol.optional.LegRes.save.fail.all",
-          "mode": 5,
-          "value": "success",
-          "priority": 20
-        },
-        {
-          "key": "flags.midi-qol.optional.LegRes.count",
-          "mode": 5,
-          "value": "@resources.legres.value",
-          "priority": 20
-        }
-      ],
       "disabled": false,
-      "duration": {
-        "startTime": null,
-        "seconds": null,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
-      },
+      "duration": {},
       "origin": "Compendium.midi-qol.midiqol-sample-items.Item.dehZbfvDLvSUscOu",
       "transfer": true,
       "flags": {
@@ -41,8 +19,7 @@
           "selfTargetAlways": false,
           "durationExpression": "",
           "disableIncapacitated": false,
-          "dontApply": false,
-          "showIcon": false
+          "dontApply": false
         },
         "ActiveAuras": {
           "isAura": false,
@@ -62,7 +39,6 @@
         },
         "core": {}
       },
-      "tint": "#ffffff",
       "name": "Legendary Resistance",
       "description": "",
       "statuses": [],
@@ -79,9 +55,35 @@
       },
       "img": "icons/equipment/shield/kite-wooden-oak-glow.webp",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": [
+          {
+            "key": "flags.midi-qol.optional.LegRes.label",
+            "type": "custom",
+            "value": "Legendary Resistance",
+            "priority": 20,
+            "phase": "initial",
+            "_id": "mqLegResLabel000",
+            "conditions": "{}",
+            "replacement": ""
+          },
+          {
+            "key": "flags.midi-qol.optional.LegRes.save.fail.all",
+            "value": "success",
+            "priority": 20,
+            "type": "override"
+          },
+          {
+            "key": "flags.midi-qol.optional.LegRes.count",
+            "value": "@resources.legres.value",
+            "priority": 20,
+            "type": "override"
+          }
+        ]
+      },
       "sort": 0,
-      "_key": "!items.effects!gORhS685EvD5Q6Lr.FniO7deC5cNc9vuy"
+      "_key": "!items.effects!gORhS685EvD5Q6Lr.FniO7deC5cNc9vuy",
+      "showIcon": 0
     }
   ],
   "flags": {
@@ -227,10 +229,9 @@
     "crux": {
       "trayVisibility": "default"
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.58"
+    "cat": {
+      "automation": {
+        "version": "14.6.6"
       }
     }
   },
@@ -372,7 +373,7 @@
         }
       }
     },
-    "identifier": "legendary-resistance-10413",
+    "identifier": "legendary-resistance",
     "enchant": {},
     "prerequisites": {
       "level": null,

@@ -10,27 +10,22 @@
       "transfer": false,
       "_id": "ctBlockedHeal000",
       "type": "base",
-      "system": {},
-      "changes": [
-        {
-          "key": "system.traits.di.value",
-          "mode": 0,
-          "value": "healing",
-          "priority": 20
-        }
-      ],
+      "system": {
+        "changes": [
+          {
+            "key": "system.traits.di.value",
+            "value": "healing",
+            "priority": 20,
+            "type": "custom"
+          }
+        ]
+      },
       "disabled": false,
       "duration": {
-        "startTime": null,
-        "seconds": null,
-        "combat": null,
-        "rounds": 1,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+        "value": 1,
+        "units": "rounds"
       },
       "description": "<p>The target can't regain Hit Points until the end of your next turn.</p>",
-      "tint": "#ffffff",
       "statuses": [],
       "sort": 0,
       "flags": {
@@ -46,8 +41,7 @@
           "enableCondition": "",
           "disableCondition": "",
           "disableIncapacitated": false,
-          "dontApply": false,
-          "showIcon": true
+          "dontApply": false
         }
       },
       "_stats": {
@@ -61,7 +55,8 @@
         "lastModifiedBy": null,
         "exportSource": null
       },
-      "_key": "!items.effects!SNhuBXUyQNl1X0pe.ctBlockedHeal000"
+      "_key": "!items.effects!SNhuBXUyQNl1X0pe.ctBlockedHeal000",
+      "showIcon": 2
     }
   ],
   "flags": {
@@ -101,16 +96,15 @@
         "effect": []
       }
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.51"
+    "cat": {
+      "automation": {
+        "version": "14.6.5"
       }
     }
   },
   "system": {
     "description": {
-      "value": "<p>Channeling the chill of the grave, make a melee spell attack against a target within reach. On a hit, the target takes 1d10 Necrotic damage, and it can't regain Hit Points until the end of your next turn.</p><p><strong>Cantrip Upgrade.</strong> The damage increases by 1d10 when you reach levels 5 (2d10), 11 (3d10), and 17 (4d10).</p>\n<p><strong>midi-qol</strong>: No macros required. Melee spell attack deals 1d10 Necrotic (cantrip scaling). On hit, applies a Blocked Healing effect that grants immunity to healing damage type, expiring at end of caster's next turn via DAE specialDuration.</p>",
+      "value": "<p>Channeling the chill of the grave, make a melee spell attack against a target within reach. On a hit, the target takes 1d10 Necrotic damage, and it can't regain Hit Points until the end of your next turn.</p><p><strong>Cantrip Upgrade.</strong> The damage increases by 1d10 when you reach levels 5 (2d10), 11 (3d10), and 17 (4d10).</p><div class=\"cat-description\"><p><strong>midi-qol</strong>: No macros required. Melee spell attack deals 1d10 Necrotic (cantrip scaling). On hit, applies a Blocked Healing effect that grants immunity to healing damage type, expiring at end of caster's next turn via DAE specialDuration.</p></div>",
       "chat": "<p>Channeling the chill of the grave, make a melee spell attack against a target within reach. On a hit, the target takes 1d10 Necrotic damage, and it can't regain Hit Points until the end of your next turn.</p><p><strong>Cantrip Upgrade.</strong> The damage increases by 1d10 when you reach levels 5 (2d10), 11 (3d10), and 17 (4d10).</p>"
     },
     "source": {

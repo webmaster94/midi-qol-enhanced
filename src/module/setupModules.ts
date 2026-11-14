@@ -1,26 +1,24 @@
-import { error, warn, log, debugEnabled, i18n } from "../midi-qol.js";
+import { error, warn, log, debugEnabled, i18nFormat } from "../midi-qol.js";
 import { TroubleShooter } from "./apps/TroubleShooter.js";
-import { configSettings, pruneChatLog } from "./settings.js";
 
-export const DAE_REQUIRED_VERSION = "13.0.23";
+export const DAE_REQUIRED_VERSION = "14.6.7";
 export const USEFUL_MODULE_VERSIONS = {
   "about-time": "0.0",
   "ActiveAuras": "0.4.13",
   "anonymous": "0.0.0",
   "auraeffects": "1.3.4",
   "autoanimations": "3.2.991",
-  "chatlog-prune": "1.0.1",
-  "chris-premades": "1.3.0",
+  "cat": "0.0.8",
+  "chris-premades": "2.0.0",
   "condition-lab-triggler": "1.4",
   "dae": DAE_REQUIRED_VERSION,
-  "ddb-game-log": "0.0.0",
   "dfreds-convenient-effects": "5.0.4",
   "dice-so-nice": "4.1.1",
   "epic-rolls-5e": "3.1.1",
   "flash-rolls-5e": "1.13.1",
   "gambits-premades": "2.0.1",
   "levels": "6.0.0",
-  "levelsautocover": "1.4",
+  "levelsautocover": "5.0.1",
   "levelsvolumetrictemplates": "0.0.0",
   "lib-changelogs": "0.0.0",
   "lib-wrapper": "1.3.5",
@@ -29,12 +27,9 @@ export const USEFUL_MODULE_VERSIONS = {
   "monks-tokenbar": "1.0.55",
   "multilevel-tokens": "13.0.0",
   "perceptive": "3.2.1",
-  "ready-set-roll-5e": "3.4.3",
   "seasons-and-stars": "0.11.0",
-  "simbuls-cover-calculator":  "1.0.2",
   "simplecover5e": "1.3.1",
   "socketlib": "0.0",
-  "times-up": "13.0.0",
   "tokencover": "0.6.0",
   "vision-5e": "3.0.6",
   "walledtemplates": "0.0.0",
@@ -61,6 +56,11 @@ export let setupModules = () => {
         const message = `midi-qol requires ${name} to be of version ${USEFUL_MODULE_VERSIONS[name]} or later, but it is version ${game.modules.get(name)?.version}`;
         error(message);
         TroubleShooter.recordError(new Error(message), message);
+        // midi doesn't use it, so say so where the GM sees it
+        const title = game.modules.get(name)?.title ?? name;
+        Hooks.once("ready", () => {
+          if (game.user?.isGM) ui.notifications?.warn(i18nFormat("midi-qol.ModuleTooOld", { title, version: game.modules.get(name)?.version ?? "?", required: USEFUL_MODULE_VERSIONS[name] }));
+        });
       } else warn(`optional module ${name} not active - some features disabled`)
     }
   }
@@ -71,32 +71,13 @@ export let setupModules = () => {
 }
 
 export function dice3dEnabled() {
+  // DSN's own check: the user's setting and its world rules (e.g. Disabled during combat)
   // @ts-expect-error no dsn types
-  return Boolean(installedModules.get("dice-so-nice") && (game.dice3d?.config?.enabled || game.dice3d?.isEnabled()));
+  return Boolean(installedModules.get("dice-so-nice") && (game.dice3d?.isEnabled?.() ?? game.dice3d?.config?.enabled));
 }
 
 export function checkModules() { // this really should happen in TroubleShooter
   if (game.user?.isGM && !installedModules.get("socketlib")) {
     ui.notifications?.error("midi-qol.NoSocketLib", {permanent: true, localize: true});
-  }
-  // Warn about deprecated built-in chat log pruning
-  if (game.user?.isGM && pruneChatLog) {
-    const chatlogPruneModule = game.modules.get("chatlog-prune");
-    const chatlogPruneActive = chatlogPruneModule?.active;
-    const chatlogPruneEnabled = chatlogPruneActive && (game.settings as any).get("chatlog-prune", "enabled");
-    if (!chatlogPruneActive || !chatlogPruneEnabled) {
-      let message = `<h3>${i18n("midi-qol.chatlogPruneWarning")}</h3>`;
-      message += `<p>${i18n("midi-qol.chatlogPruneDeprecated")}</p>`;
-      if (!chatlogPruneActive) {
-        message += `<p>${i18n("midi-qol.chatlogPruneInstallHint")}</p>`;
-      } else if (!chatlogPruneEnabled) {
-        message += `<p>${i18n("midi-qol.chatlogPruneEnableHint")}</p>`;
-      }
-      ChatMessage.implementation.create({
-        content: message,
-        whisper: game.users?.filter(u => u.isGM).map(u => u.id),
-        speaker: { alias: "midi-qol" }
-      });
-    }
   }
 }

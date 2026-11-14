@@ -1,23 +1,96 @@
-import { GameSystemConfig, MESSAGE_TYPES, MODULE_ID, MQDamageRollTypes, debugEnabled, i18n, log } from "../../midi-qol.js";
-import { configSettings, safeGetGameSetting, saveToChatCard } from "../settings.js";
-import { getToken } from "../utils.js";
-import { setDamageRollMinTerms } from "../activities/activityHelpers.js";
-import { usesSystemChatData } from "../compatibility.js";
+import type { TokenDocumentSet } from "../lib/tokenDocumentSet.js";
+import { MESSAGE_TYPES, MODULE_ID, MQDamageRollTypes, debugEnabled, error, i18n, log } from "../../midi-qol.js";
+import { TroubleShooter } from "../apps/TroubleShooter.js";
+import { Dnd5eSystem } from "../../globals.js";
+import { configSettings, forceHideRoll, safeGetGameSetting } from "../settings.js";
+import { createDamageDetail, displayTokenName, getToken, isDnd5eRollMessage } from "../utils.js";
+import { damageDetailToObject, Workflow } from "../Workflow.js";
+import { renameMarkedTokens } from "../lib/tokenNames.js";
+import { attackRollOf, cardHitResult, cardHitsPending, cardMidi, rollsOfType, cardMidiState, cardSourceActor, recordList, storedMidiFlag } from "../lib/cardState.js";
+import { cardSaveRoll } from "./UsageCardMessage.js";
+import { canSeePlayerOutcome, canSeeSaveResult, cardActor, challengeVisible, saveDetail, saveDisplayMode } from "../lib/saveVisibility.js";
 
+// Damage is auto-applied by midi when autoApplyDamage is one of the "yes*" modes.
 const midiAutoAppliesDamage = () => !!configSettings.autoApplyDamage?.toLowerCase().includes("yes");
+
+// Each damage section's root element is its .dice-roll.
+const DAMAGE_ROLLS = ":is(.midi-damage-roll, .midi-other-damage-roll, .midi-bonus-damage-roll)";
 const removeAll = (html: HTMLElement, sel: string) => html.querySelectorAll(sel).forEach(el => el.remove());
 const hideAll = (html: HTMLElement, sel: string) => html.querySelectorAll<HTMLElement>(sel).forEach(el => el.style.display = "none");
 const stripHighlight = (html: HTMLElement, sel: string) => html.querySelectorAll<HTMLElement>(sel).forEach(
   el => el.classList.remove("success", "failure", "critical", "fumble")
 );
 
-/** rollType tag -> the flag it is rebuilt into. utilityRolls is absent: chatRolls merges them. */
-const MIDI_ROLL_FLAGS: Record<string, string> = {
-  attack: "attackRoll",
-  defaultDamage: "damageRolls",
-  bonusDamage: "bonusDamageRolls",
-  otherDamage: "otherDamageRolls"
+
+const tokenUuids = (tokens: TokenDocumentSet | undefined) => tokens?.uuids ?? [];
+/** The old `flags.midi-qol` keys of a usage card: the workflow property to use instead, and how the flag read it */
+const LEGACY_CARD_FLAGS: Record<string, [string, (workflow: Workflow) => unknown]> = {
+  targets: ["targets", w => w.targets.documents.map(document => ({ uuid: document.uuid, name: document.name }))],
+  hitTargetUuids: ["hitTargets", w => tokenUuids(w.hitTargets)],
+  hitECTargetUuids: ["hitTargetsEC", w => tokenUuids(w.hitTargetsEC)],
+  saveUuids: ["saves", w => tokenUuids(w.saves)],
+  failedSaveUuids: ["failedSaves", w => tokenUuids(w.failedSaves)],
+  superSaverUuids: ["superSavers", w => tokenUuids(w.superSavers)],
+  semiSuperSaverUuids: ["semiSuperSavers", w => tokenUuids(w.semiSuperSavers)],
+  criticalSaveUuids: ["criticalSaves", w => tokenUuids(w.criticalSaves)],
+  fumbleSaveUuids: ["fumbleSaves", w => tokenUuids(w.fumbleSaves)],
+  advantageSaveUuids: ["advantageSaves", w => tokenUuids(w.advantageSaves)],
+  otherDamageMatchUuids: ["otherDamageMatches", w => w.otherDamageMatches && tokenUuids(w.otherDamageMatches)],
+  ammunitionDamageMatchUuids: ["ammunitionDamageMatches", w => w.ammunitionDamageMatches && tokenUuids(w.ammunitionDamageMatches)],
+  isHit: ["isHit", w => w.isHit],
+  isHitEC: ["isHitEC", w => w.isHitEC],
+  isCritical: ["isCritical", w => w.isCritical],
+  isFumble: ["isFumble", w => w.isFumble],
+  templateUuids: ["templateUuids", w => w.templateUuids],
+  templateUuid: ["templateUuids[0]", w => w.templateUuids[0] ?? ""],
+  workflowOptions: ["workflowOptions", w => w.workflowOptions],
+  currentAction: ["currentAction", w => [w.constructor.name, w.currentAction?.name]],
+  saveAttribution: ["saveAttribution", w => w.saveAttribution],
+  damageDetail: ["damageDetail", w => damageDetailToObject(w.damageDetail)],
+  otherDamageDetail: ["otherDamageDetail", w => damageDetailToObject(w.otherDamageDetail)],
+  bonusDamageDetail: ["bonusDamageDetail", w => damageDetailToObject(w.bonusDamageDetail)],
+  otherDamageTotal: ["otherDamageTotal", w => w.otherDamageTotal || undefined],
+  bonusDamageTotal: ["bonusDamageTotal", w => w.bonusDamageTotal || undefined],
+  attackRoll: ["attackRoll", w => w.attackRoll],
+  damageRolls: ["damageRolls", w => w.damageRolls],
+  bonusDamageRolls: ["bonusDamageRolls", w => w.bonusDamageRolls],
+  otherDamageRolls: ["otherDamageRolls", w => w.otherDamageRolls],
+  utilityRolls: ["utilityRolls", w => w.utilityRolls]
 };
+// A workflow built for a getter must not read the flags it is building
+let readingLegacyFlag = false;
+
+const warnGMOnly = () => foundry.utils.logCompatibilityWarning("midi-qol | a usage card's flags.midi-qol.GMOnlyAttackRoll is deprecated: the attack is shown to the GM only while MidiQOL.Workflow.getWorkflow(card.uuid) checks hits.",
+  { since: "14.6.9", until: "14.8.0", once: true });
+
+/** The old keys as getters reading the card's workflow (Workflow.cardView), each read warning that it is deprecated */
+function defineLegacyCardFlags(flags: Record<string, unknown>, cardUuid: string) {
+  for (const [key, [name, read]] of Object.entries(LEGACY_CARD_FLAGS)) {
+    if (Object.prototype.hasOwnProperty.call(flags, key)) continue;
+    const warn = () => foundry.utils.logCompatibilityWarning(`midi-qol | a usage card's flags.midi-qol.${key} is deprecated: use MidiQOL.Workflow.getWorkflow(card.uuid).${name} (read-only for users other than the card's author).`,
+      { since: "14.6.9", until: "14.8.0", once: true });
+    Object.defineProperty(flags, key, {
+      configurable: true, enumerable: false,
+      get() {
+        // Read while building the workflow for another read: not a reader's
+        if (readingLegacyFlag) return undefined;
+        warn();
+        readingLegacyFlag = true;
+        try {
+          const workflow = Workflow.cardView(cardUuid);
+          return workflow ? read(workflow) : undefined;
+        } finally {
+          readingLegacyFlag = false;
+        }
+      },
+      // A write (a macro, setProperty, mergeObject) keeps its value here, as the flag did; midi doesn't read it
+      set(value) {
+        warn();
+        Object.defineProperty(flags, key, { configurable: true, enumerable: false, writable: true, value });
+      }
+    });
+  }
+}
 
 import Token = foundry.canvas.placeables.Token;
 let _highlighted: Token.Implementation | null = null;
@@ -68,61 +141,61 @@ export let ChatMessageMidi: ReturnType<typeof defineChatMessageMidiClass>;
 export function setupChatMessageMidi() {
   ChatMessageMidi = defineChatMessageMidiClass(globalThis.dnd5e.documents.ChatMessage5e);
   CONFIG.ChatMessage.batchSize = 25;
-  globalThis.dnd5e.documents.ChatMessage5e.TRAY_TYPES.push("midi-damage-application");
+  // Not pushed onto dnd5e's array as well — the `TRAY_TYPES` getter below already appends it, and
+  // doing both listed `midi-damage-application` twice (harmless, but it mutates the system's array).
 }
 
 export function defineChatMessageMidiClass(baseClass: ChatMessage.ImplementationClass) {
   return class ChatMessageMidi extends baseClass /*globalThis.dnd5e.documents.ChatMessage5e*/ {
-    #enrichmentPromises = new WeakMap<HTMLElement, Promise<void>>();
 
-    async renderHTML(options = {}) {
-      const html = await super.renderHTML(options);
-      // D&D 6's model starts enrichment without awaiting it. Await the work for
-      // this element before exposing it to callers or the chat log.
-      await this.#enrichmentPromises.get(html);
-      return html;
+    /**
+     * dnd5e's lookup, then a synthetic item rebuilt from the snapshot midi keeps on the card. Every
+     * dnd5e caller (card context, button actions, effects tray) and `getAssociatedActivity` go through
+     * this. midi does not use dnd5e's own snapshot slot, `system.deltas.deleted`: a refund recreates
+     * everything listed there on the actor.
+     */
+    getAssociatedItem(options: { scaled?: boolean } = {}): Item.Implementation | undefined {
+      // @ts-expect-error no dnd5e-types
+      const item = super.getAssociatedItem(options);
+      if (item) return item;
+      const data = this.getFlag(MODULE_ID, "itemData") as Item.CreateData | undefined;
+      // @ts-expect-error no dnd5e-types
+      const actor = this.getAssociatedActor();
+      if (!data || !actor) return undefined;
+      // @ts-expect-error no dnd5e-types
+      return new CONFIG.Item.documentClass(data, { parent: actor }).scaledClone(options.scaled ? this.system.scaling : null);
     }
 
     prepareDerivedData() {
       super.prepareDerivedData();
 
-      // Deserialize roll flags in-place from JSON to Roll instances (same pattern as Foundry core's ChatMessage.rolls)
+      // The workflow's state under its old flag names, deprecated: read from the card's workflow
+      const cardMidi = cardMidiState(this);
+      if (cardMidi) {
+        defineLegacyCardFlags((this.flags[MODULE_ID] ??= {}) as Record<string, unknown>, this.uuid);
+        // The card's own actor, for readers of the old flag (CAT's manual rolls); not a deprecated name, so no warning
+        const flags = this.flags[MODULE_ID] as Record<string, unknown>;
+        if (!Object.prototype.hasOwnProperty.call(flags, "sourceActorUuid"))
+          Object.defineProperty(flags, "sourceActorUuid", { configurable: true, enumerable: false, get: () => cardSourceActor(this)?.uuid });
+        // Read by crlngn-ui to hide the attack from players until the hits are checked
+        if (!Object.prototype.hasOwnProperty.call(flags, "GMOnlyAttackRoll"))
+          Object.defineProperty(flags, "GMOnlyAttackRoll", { configurable: true, enumerable: false, get: () => {
+            warnGMOnly();
+            return cardHitsPending(this, configSettings.autoCheckHit);
+          }, set: (value: unknown) => {
+            warnGMOnly();
+            Object.defineProperty(flags, "GMOnlyAttackRoll", { configurable: true, enumerable: false, writable: true, value });
+          } });
+      }
+
+      // Older cards stored copies of their rolls in the flags: made Rolls again (not the getters above)
       const midiFlags = this.flags?.[MODULE_ID];
       if (!midiFlags) return;
-
-      const attackData = midiFlags.attackRoll;
-      if (attackData && !(attackData instanceof Roll)) {
-        midiFlags.attackRoll = Roll.fromData(attackData) as Roll;
-      }
-
-      for (const field of ["damageRolls", "bonusDamageRolls", "otherDamageRolls",
-        "utilityRolls"] as const) {
-        const data = midiFlags[field];
-        if (data?.length) {
-          midiFlags[field] = data.map((r: any) => r instanceof Roll ? r : Roll.fromData(r));
-        }
-      }
-      this.deriveRollFlags(midiFlags);
-    }
-
-    /**
-     * Put the rolls back on the flags from `this.rolls`.
-     *
-     * They are no longer stored there - a roll on the flags was a second copy of one already in
-     * `message.rolls`, tagged with its `options["midi-qol"].rollType`. `flags` is a deep clone of
-     * the source (ObjectField#initialize), so nothing written here reaches the database.
-     * Only fills what is absent, leaving messages written before the change on their stored copies.
-     */
-    deriveRollFlags(midiFlags: Record<string, any>) {
-      if (!midiFlags.messageType) return;
-      const derived: Record<string, Roll[]> = {};
-      for (const roll of this.rolls) {
-        const field = MIDI_ROLL_FLAGS[foundry.utils.getProperty(roll, `options.${MODULE_ID}.rollType`) as string];
-        if (field) (derived[field] ??= []).push(roll);
-      }
-      for (const [field, rolls] of Object.entries(derived)) {
-        if (field === "attackRoll") midiFlags.attackRoll ??= rolls[0];
-        else if (!midiFlags[field]?.length) midiFlags[field] = rolls;
+      const attackData = storedMidiFlag(this, "attackRoll");
+      if (attackData && !(attackData instanceof Roll)) midiFlags.attackRoll = Roll.fromData(attackData) as Roll;
+      for (const field of ["damageRolls", "bonusDamageRolls", "otherDamageRolls", "utilityRolls"] as const) {
+        const data = storedMidiFlag(this, field);
+        if (data?.length) midiFlags[field] = data.map((r: any) => r instanceof Roll ? r : Roll.fromData(r));
       }
     }
 
@@ -134,14 +207,17 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
       return super.isRoll;
     }
 
-    get hasRolls() {
-      if ((this.flags?.[MODULE_ID]?.roll?.length ?? 0) > 0) return true;
-      return super.isRoll;
+    /**
+     * A midi card the GM rolled privately is shown to other players as a "rolled" stand-in when "GM attack/damage
+     * cards" is on, as core shows a private roll; midi's isRoll is false, so core would hide it entirely.
+     */
+    get visible() {
+      if (this.flags?.[MODULE_ID]?.messageType && configSettings.gmAttackDamageCards && this.author?.isGM && super.isRoll) return true;
+      return super.visible;
     }
-    // midi has it's own target handling so don't display the attack targets here (however, DO display the mastery)
-    _enrichAttackTargets(html) {
-      // This code borrowed from the start of the system's ChatMessage5e#_enrichAttackTargets method
-      const attackRoll = this.rolls[0];
+    /** The weapon mastery line dnd5e 6 renders on its own attack cards, added to midi's card. */
+    #addMasteryLine(html: HTMLElement) {
+      const attackRoll = attackRollOf(this) ?? this.rolls[0];
       // @ts-expect-error no dnd5e-types
       if (!(attackRoll instanceof dnd5e.dice.D20Roll)) return;
 
@@ -156,7 +232,7 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
         <a class="content-link" draggable="true" data-link data-uuid="${masteryConfig.reference}"
            data-tooltip="${mastery}" style="text-wrap: auto;">${mastery}</a>
       `;
-      p.innerHTML = `<string>${i18n("DND5E.WEAPON.Mastery.Flavor")}</string> ${mastery}`;
+      p.innerHTML = `<strong>${i18n("DND5E.WEAPON.Mastery.Flavor")}</strong> ${mastery}`;
       const condensedSection = html.querySelector(".midi-results > .flexrow");
       if (condensedSection) {
         condensedSection.after(p);
@@ -171,36 +247,31 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
       return super.canSelectTargets;
     }
 
+    /** A save or check rolled for a midi card shows its outcome as the card's saves section does. */
+    get shouldDisplayChallenge() {
+      const card = ["save", "check"].includes(this.type as string) ? midiCardOf(this) : undefined;
+      if (card) return this.speakerActor?.hasPlayerOwner ? canSeePlayerOutcome(cardActor(card), this.speakerActor) : canSeeSaveResult(cardActor(card), false);
+      // @ts-expect-error no dnd5e-types
+      return super.shouldDisplayChallenge;
+    }
+
     get canApplyDamage() {
-      if ((this.flags?.[MODULE_ID]?.damageDetail?.length ?? 0) > 0 && this.isContentVisible && !!canvas.tokens?.controlled.length) return true;
+      const damageRolled = (storedMidiFlag(this, "damageDetail")?.length ?? 0) > 0
+        || rollsOfType(this.rolls, MQDamageRollTypes).length > 0;
+      if (damageRolled && this.isContentVisible && !!canvas.tokens?.controlled.length) return true;
       // @ts-expect-error no dnd5e-types
       return super.canApplyDamage;
     }
 
-    // Patch for getAssociatedItem not preparing data on items recovered from item.data
-    getAssociatedItem() {
-      if (this.flags?.[MODULE_ID]?.syntheticItem) {
-        const storedData = this.flags.dnd5e?.item?.data;
-        //@ts-expect-error no dnd5e-types
-        const actor = super.getAssociatedActor();
-        if (storedData) return new Item.implementation(storedData, { parent: actor })
-      }
-      // @ts-expect-error no dnd5e-types
-      return super.getAssociatedItem();
-    }
-
-    /**
-  * Select the hit or missed targets.
-  * @param {HTMLElement} li    The chat entry which contains the roll data.
-  * @param {string} type       The type of selection ('hit' or 'miss').
-  */
-    selectTargets(li: HTMLElement, type: string) {
+    /** Select the hit or missed targets (dnd5e 6 calls this with the type only). */
+    selectTargets(type: "hit" | "miss") {
       if (!canvas?.ready) return;
       // @ts-expect-error no dnd5e-types
-      if (!this.flags?.[MODULE_ID]) return super.selectTargets(li, type);
-      const targetData = this.getFlag(MODULE_ID, "targets") || [];
-      const targetUuids: string[] = targetData.map(t => t.uuid);
-      let hitTargetUuids: string[] = this.getFlag(MODULE_ID, "hitTargetUuids") || [];
+      if (!this.flags?.[MODULE_ID]) return super.selectTargets(type);
+      const records = recordList(cardMidiState(this)?.records);
+      const targetUuids: string[] = records.length ? records.filter(r => r.targets).map(r => r.uuid)
+        : (storedMidiFlag(this, "targets") ?? []).map((t: { uuid: string }) => t.uuid);
+      const hitTargetUuids: string[] = records.length ? records.filter(r => r.hit).map(r => r.uuid) : storedMidiFlag(this, "hitTargetUuids") ?? [];
       let uuids: string[];
       if (type === "hit") uuids = hitTargetUuids
       else uuids = targetUuids.filter(uuid => !hitTargetUuids.includes(uuid));
@@ -223,177 +294,33 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
    * @returns {Promise}
    */
     applyChatCardDamage(li: HTMLElement, multiplier: number) {
-      const type = this.flags.dnd5e?.roll?.type;
+      const type = isDnd5eRollMessage(this) ? "roll" : undefined;
       // @ts-expect-error no dnd5e-types
       if (type !== undefined || !this.flags?.[MODULE_ID]) return super.applyChatCardDamage(li, multiplier);
-      const rollsToCheck = this.rolls.filter(r => MQDamageRollTypes.includes(foundry.utils.getProperty(r, "options.midi-qol.rollType") as string));
-      //@ts-expect-error no dnd5e-types
-      const damages = game.system.dice.aggregateDamageRolls(rollsToCheck, { respectProperties: true }).map(roll => ({
-        value: roll.total,
+      const rollsToCheck = rollsOfType(this.rolls, MQDamageRollTypes);
+      const damages = (game.system as Dnd5eSystem).dice.aggregateDamageRolls(rollsToCheck, { respectProperties: true }).map(roll => ({
+        // @ts-expect-error no dnd5e-types
+        value: Math.max(0, roll.total) * (roll.options.type in CONFIG.DND5E.healingTypes ? -1 : 1),
         type: roll.options.type,
         properties: new Set(roll.options.properties ?? [])
       }));
       if (canvas.tokens) {
         return Promise.all(canvas.tokens.controlled.map(t => {
           //@ts-expect-error no dnd5e-types
-          return t.actor?.applyDamage(damages, { multiplier, invertHealing: false, ignore: true });
+          return t.actor?.applyDamage(damages, { multiplier, isDelta: true, originatingMessage: this });
         }));
       }
     }
     
     applyChatCardTemp(li: HTMLElement) {
       if (!canvas.tokens) return;
-      const rollsToCheck = this.rolls.filter(r => MQDamageRollTypes.includes(foundry.utils.getProperty(r, "options.midi-qol.rollType") as string));
+      const rollsToCheck = rollsOfType(this.rolls, MQDamageRollTypes);
       const total = rollsToCheck.reduce((acc, roll) => acc + (roll.total ?? 0), 0);
 
       return Promise.all(canvas.tokens.controlled.map(t => {
         //@ts-expect-error no dnd5e-types
         return t.actor?.applyTempHP(total);
       }));
-    }
-
-    collectRolls(rollsToAccumulate: Roll[], multiRolls: boolean = false, options: { blind?: boolean }): any[] {
-      const returns: any[] = [];
-      setDamageRollMinTerms(rollsToAccumulate);
-      const formulaInToolTip = ["formula", "formulaadv"].includes(configSettings.rollAlternate);
-      const hideDetails = this.author?.isGM && !game.user?.isGM && ((configSettings.gmDamageDisplay ?? "full") !== "full");
-      const hideFormula = hideDetails || (options.blind && !game.user?.isGM);
-      const rollSets: Roll[][] = multiRolls ? rollsToAccumulate.map(r => [r]) : [rollsToAccumulate];
-      for (const rolls of rollSets) {
-        //@ts-expect-error
-        let { formula, total, breakdown } = game.system.dice.aggregateDamageRolls(rolls).reduce((obj: any, r) => {
-          obj.formula.push(r.formula);
-          obj.total += Math.max(0, r.total);
-          // @ts-expect-error no dnd5e-types
-          obj.breakdown.push(usesSystemChatData() ? r.aggregateTerms() : this._simplifyDamageRoll(r));
-          return obj;
-        }, { formula: [], total: 0, breakdown: [] });
-        formula = formula.join(" ");
-        formula = formula.replace(/^\s+\+\s+/, "");
-        formula = formula.replaceAll(/  /g, " ");
-        if (multiRolls) {
-          foundry.utils.setProperty(rolls[0], "flags.midi-qol.breakdown", breakdown);
-          foundry.utils.setProperty(rolls[0], "flags.midi-qol.total", total);
-        }
-        if (hideDetails && (configSettings.gmDamageDisplay ?? "full") === "hidden") {
-          total = "--";
-        }
-        if (options.blind && !game.user?.isGM) total = "--";
-        const roll = document.createElement("div");
-        roll.classList.add("dice-roll");
-        let tooltipContents = ""
-        if (!hideDetails) tooltipContents = breakdown.reduce((str, { type, total, constant, dice }) => {
-          const config = GameSystemConfig.damageTypes[type] ?? GameSystemConfig.healingTypes[type];
-          return `${str}
-              <section class="tooltip-part">
-                <div class="dice">
-                  <ol class="dice-rolls">
-                    ${dice.reduce((str, { result, classes }) => `
-                      ${str}<li class="roll ${classes}">${result}</li>
-                    `, "")}
-                    ${constant ? `
-                    <li class="constant"><span class="sign">${constant < 0 ? "-" : "+"}</span>${Math.abs(constant)}</li>
-                    ` : ""}
-                  </ol>
-                  <div class="total">
-                    ${config ? `<img src="${config.icon}" alt="${config.label}">` : ""}
-                    <span class="label">${config?.label ?? ""}</span>
-                    <span class="value">${total}</span>
-                  </div>
-                </div>
-              </section>
-            `;
-        }, "");
-
-        let diceFormula = "";
-        if (!hideFormula) diceFormula = `<div class="dice-formula">${formula}</div>`;
-        roll.innerHTML = `
-      <div class="dice-result">
-      ${formulaInToolTip ? "" : diceFormula}
-        <div class="dice-tooltip-collapser">
-          <div class="dice-tooltip midi-dice-tooltip">
-            ${formulaInToolTip ? diceFormula : ""}
-            ${tooltipContents}
-          </div>
-        </div>
-        <h4 class="dice-total"><span class="midi-roll-total">${total}</span>${this._buildDamageTypeIcons(breakdown)}</h4>
-      </div>
-    `;
-        returns.push(roll);
-      }
-      return returns;
-    }
-
-    _buildDamageTypeIcons(breakdown: { type: string }[]): string {
-      const uniqueTypes = [...new Set(breakdown.map(b => b.type).filter(Boolean))];
-      const icons = uniqueTypes.map(type => {
-        const config = GameSystemConfig.damageTypes[type] ?? GameSystemConfig.healingTypes?.[type];
-        if (!config?.icon) return "";
-        return `<dnd5e-icon class="midi-damage-type-icon" src="${config.icon}" aria-label="${config.label ?? ""}" data-tooltip="${config.label ?? ""}"></dnd5e-icon>`;
-      }).join("");
-      return icons ? `<span class="midi-damage-type-icons">${icons}</span>` : "";
-    }
-
-    // Removes the dnd5e effects tray from the rendered chat card when midi's
-    // autoItemEffects suppresses the apply button. dnd5e v5.x emits an
-    // <effect-application> custom element from usage-card.hbs which renders
-    // itself in connectedCallback — there's no longer a _enrichUsageEffects
-    // method to skip, so we strip the element from the DOM after super runs.
-    _maybeStripEffectsTray(html: HTMLElement) {
-      if (["applyNoButton", "applyRemove"].includes(configSettings.autoItemEffects)) {
-        html.querySelectorAll("effect-application").forEach(el => el.remove());
-      }
-    }
-
-    _enrichDamageTooltip(rolls: Roll[], html: HTMLElement) {
-      if (this.flags?.dnd5e?.roll?.type !== undefined || !this.flags?.[MODULE_ID])
-        // @ts-expect-error no dnd5e-types
-        return super._enrichDamageTooltip?.(rolls, html);
-      for (let rollType of MQDamageRollTypes) {
-        const rollsToCheck = this.rolls.filter(r => foundry.utils.getProperty(r, "options.midi-qol.rollType") === rollType);
-        let rType = "damage";
-        if (rollType === "otherDamage") rType = "other-damage";
-        else if (rollType === "bonusDamage") rType = "bonus-damage";
-        if (rollsToCheck?.length) {
-          html.querySelectorAll(`.midi-${rType}-roll`)?.forEach(el => el.remove());
-          for (let roll of this.collectRolls(rollsToCheck, configSettings.mergeCardMultiDamage, { blind: this.blind })) {
-            roll.classList.add(`midi-${rType}-roll`);
-            if (rType === "bonus-damage") {
-              const flavor = document.createElement("div");
-              // @ts-expect-error no dnd5e-types
-              const flavors = rollsToCheck.map(r => r.options.flavor ?? r.options.type);
-              const bonusDamageFlavor = flavors.join(", ");
-              flavor.classList.add("midi-bonus-damage-flavor");
-              flavor.innerHTML = bonusDamageFlavor;
-              html.querySelector(`.midi-qol-${rType}-roll`)?.appendChild(flavor);
-            }
-            html.querySelector(`.midi-qol-${rType}-roll`)?.appendChild(roll);
-          }
-        }
-      }
-
-      let shouldAddButtons = (configSettings.addChatDamageButtons === "both")
-        || ((configSettings.addChatDamageButtons === "gm") && game.user?.isGM)
-        || ((configSettings.addChatDamageButtons === "pc") && !game.user?.isGM);
-      if (game.user?.isGM && configSettings.autoApplyDamage === "none") shouldAddButtons = true;
-      if (shouldAddButtons) {
-        for (let dType of MQDamageRollTypes) {
-          rolls = this.rolls.filter(r => foundry.utils.getProperty(r, "options.midi-qol.rollType") === dType);
-          if (!rolls.length) continue;
-          let damageApplication = document.createElement("midi-damage-application");
-          //@ts-expect-error
-          damageApplication.damageType = dType;
-          //@ts-expect-error
-          damageApplication.damages = game.system.dice.aggregateDamageRolls(rolls, { respectProperties: true }).map(roll => ({
-            value: Math.max(0, roll.total),
-            type: roll.options.type,
-            properties: new Set(roll.options.properties ?? [])
-          }));
-          // Set open directly for connectedCallback; _trayStates collides on className/tagName.
-          damageApplication.toggleAttribute("open", !midiAutoAppliesDamage());
-          html.querySelector(".message-content")?.appendChild(damageApplication);
-        }
-      }
     }
 
     _collapseTrays(html: HTMLElement) {
@@ -407,74 +334,9 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
       });
     }
 
-    _highlightCriticalSuccessFailure(html: HTMLElement) {
-      // @ts-expect-error no dnd5e-types
-      super._highlightCriticalSuccessFailure(html);
-      // dnd5e only adds critical/fumble for attack and death saves.
-      // Add critical/fumble highlighting for other d20 rolls (saves, ability checks).
-      const totals = html.querySelectorAll(".dice-total");
-      for (let [index, d20Roll] of this.rolls.entries()) {
-        const total = totals[index];
-        if (!total || total.classList.contains("critical") || total.classList.contains("fumble")) continue;
-        const d0 = d20Roll?.dice?.[0];
-        if (!d0 || d0.faces !== 20 || d0.values?.length !== 1) continue;
-        // @ts-expect-error D20Roll not typed
-        const d20 = dnd5e.dice.D20Roll.fromRoll(d20Roll);
-        if (d20.isCritical) {
-          total.classList.add("critical");
-          if (!total.querySelector(".icons")) {
-            const icons = document.createElement("div");
-            icons.classList.add("icons");
-            const icon = document.createElement("i");
-            icon.classList.add("fas", "fa-check-double");
-            icon.setAttribute("inert", "");
-            icons.append(icon);
-            total.append(icons);
-          }
-        } else if (d20.isFumble) {
-          total.classList.add("fumble");
-          if (!total.querySelector(".icons")) {
-            const icons = document.createElement("div");
-            icons.classList.add("icons");
-            for (let i = 0; i < 2; i++) {
-              const icon = document.createElement("i");
-              icon.classList.add("fas", "fa-xmark");
-              icon.setAttribute("inert", "");
-              icons.append(icon);
-            }
-            total.append(icons);
-          }
-        }
-      }
-      this._applyMidiHighlightSettings(html);
-    }
-
-    /**
-     * Strip or adjust classes and icons based on midi highlight/visibility settings.
-     */
-    private _applyMidiHighlightSettings(html: HTMLElement) {
-      const isMidiMessage = !!this.flags?.[MODULE_ID]?.messageType;
-      const hideResult = isMidiMessage && !game.user?.isGM && (["whisper", "gmOnly"].includes(configSettings.autoCheckHit) || safeGetGameSetting("dnd5e", "attackRollVisibility") === "none");
-      const totals = html.querySelectorAll(".dice-total");
-      for (const total of Array.from(totals)) {
-        if (hideResult || !configSettings.highlightSuccess) {
-          total.classList.remove("success", "failure", "critical", "fumble");
-          total.querySelector(".icons")?.remove();
-        } else if (configSettings.highLightCriticalAttackOnly) {
-          const hadSuccessOrFailure = total.classList.contains("success") || total.classList.contains("failure");
-          total.classList.remove("success", "failure");
-          // Only remove icons if this total had success/failure but not critical/fumble
-          if (hadSuccessOrFailure && !total.classList.contains("critical") && !total.classList.contains("fumble")) {
-            total.querySelector(".icons")?.remove();
-          }
-        }
-      }
-    }
-
     /**
      * Add critical/fumble/success/failure classes and icons for midi messages.
-     * Used by _enrichChatCard for usage-type messages where _highlightCriticalSuccessFailure
-     * is not called by Foundry. Does not mutate document flags (safe during async super._enrichChatCard).
+     * Used by _enrichChatCard for midi's usage cards. Does not mutate document flags (safe during async super._enrichChatCard).
      */
     private _highlightMidiRolls(html: HTMLElement) {
       function makeIcon(cls: string) {
@@ -483,21 +345,32 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
         icon.setAttribute("inert", "");
         return icon;
       }
-      const totals = html.querySelectorAll(".dice-total");
-      for (let [index, d20Roll] of this.rolls.entries()) {
-        const total = totals[index];
+      // Each d20 roll with its own total: the rendered totals do not line up with `rolls` (damage is
+      // aggregated into one block, and save rolls render inside their target's row).
+      // A save can still fail on a natural 20 or succeed on a 1 (dnd5e's canCrit is false for saves): its natural 20 or 1
+      // is marked only where it agrees with the outcome.
+      const pairs: [Roll, Element | null | undefined, boolean][] = [];
+      const attack = attackRollOf(this);
+      if (attack) pairs.push([attack, html.querySelector(".midi-attack-roll .dice-total"), true]);
+      for (const name of Array.from(html.querySelectorAll<HTMLElement>(".midi-qol-saves-display .midi-qol-save-name[data-uuid]"))) {
+        const roll = cardSaveRoll(this, name.dataset.uuid ?? "");
+        if (roll) pairs.push([roll, name.closest("li")?.querySelector(".midi-qol-save-tooltip .dice-total"), false]);
+      }
+      for (const [d20Roll, total, canCrit] of pairs) {
         if (!total) continue;
         total.classList.remove("success", "failure", "critical", "fumble");
         total.querySelector(".icons")?.remove();
 
         const d0 = d20Roll?.dice?.[0];
-        if (!d0 || d0.faces !== 20 || d0.values?.length !== 1) continue;
-
+        if (!d0) continue;
         // @ts-expect-error D20Roll not typed
         const d20 = dnd5e.dice.D20Roll.fromRoll(d20Roll);
-        if (d20.isCritical) total.classList.add("critical");
-        if (d20.isFumble) total.classList.add("fumble");
-        if (d20.dice[0]?.options?.target) {
+        // A d20 (one kept die), or a die that replaces it, e.g. Custom D&D 5e's 2d10: dnd5e judges both.
+        if (!d20.validD20Roll || (d0.faces === 20 && d0.values?.length !== 1)) continue;
+        const hasTarget = !!d20.dice[0]?.options?.target;
+        if (d20.isCritical && (canCrit || !hasTarget || d20.isSuccess)) total.classList.add("critical");
+        if (d20.isFumble && (canCrit || !hasTarget || !d20.isSuccess)) total.classList.add("fumble");
+        if (hasTarget) {
           if (d20.isSuccess) total.classList.add("success");
           else total.classList.add("failure");
         }
@@ -512,28 +385,144 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
       }
     }
 
+    /**
+     * The attack roll's reasons and its terms' tooltip are drawn by its template (midiRenderTemplateRoll): leave the
+     * terms' labels out of the dice tooltip's formula too, and drop the icons and the tooltip wherever the attack's
+     * formula isn't shown (nothing the GM hides from players is revealed) or they are turned off (Workflow › Hits).
+     */
+    #addAttackReasons(html: HTMLElement) {
+      const formulas = html.querySelectorAll(".midi-attack-roll .dice-formula");
+      const total = html.querySelector<HTMLElement>(".midi-attack-roll .dice-total");
+      if (!total) return;
+      // Hidden from players by the GM's attack display, or turned off
+      if (!formulas.length || !configSettings.showAttackRollDetails) {
+        total.querySelector(".midi-attack-reasons")?.remove();
+        delete total.dataset.tooltipHtml;
+        return;
+      }
+      for (const formula of Array.from(formulas)) formula.textContent = (formula.textContent ?? "").replace(/\[[^\]]*\]/g, "");
+    }
+
+    /**
+     * Strip or adjust classes and icons based on midi highlight/visibility settings.
+     */
+    private _applyMidiHighlightSettings(html: HTMLElement) {
+      const isMidiMessage = !!this.flags?.[MODULE_ID]?.messageType;
+      const hideResult = isMidiMessage && !game.user?.isGM && (["whisper", "gmOnly"].includes(configSettings.autoCheckHit) || safeGetGameSetting("dnd5e", "attackRollVisibility") === "none");
+      // dnd5e 6's compact roll markup carries the classes on the roll button and keeps an icons span there.
+      const totals = html.querySelectorAll(".dice-total, button.dice-roll");
+      for (const total of Array.from(totals)) {
+        // Save/check summaries: colour only; whether the outcome shows is dnd5e's challenge visibility and maskSaveForPlayers.
+        if (total.closest(".card-summary")) {
+          if (!configSettings.highlightSuccess) total.classList.remove("success", "failure", "critical", "fumble");
+          continue;
+        }
+        if (hideResult || !configSettings.highlightSuccess) {
+          total.classList.remove("success", "failure", "critical", "fumble");
+          if (total.matches("button.dice-roll")) total.querySelector(".icons")?.replaceChildren();
+          else total.querySelector(".icons")?.remove();
+        } else if (configSettings.highLightCriticalAttackOnly) {
+          const hadSuccessOrFailure = total.classList.contains("success") || total.classList.contains("failure");
+          total.classList.remove("success", "failure");
+          if (hadSuccessOrFailure && !total.classList.contains("critical") && !total.classList.contains("fumble")) {
+            total.querySelector(".icons")?.remove();
+          }
+        }
+      }
+    }
+
+    /**
+     * dnd5e's enrichment, deliberately not awaited: dnd5e does not await `_enrichChatCard` for card
+     * models either, so waiting here would apply midi's masking only after the card is on screen.
+     * Nothing dnd5e does after its first await touches what midi masks or highlights.
+     */
+    #enrichSystemCard(html: HTMLElement, options: object): Promise<void> | undefined {
+      // @ts-expect-error no dnd5e-types
+      const enriched = super._enrichChatCard(html, options) as Promise<void> | undefined;
+      return enriched?.catch?.(err => {
+        const message = `${MODULE_ID} | dnd5e chat card enrichment failed`;
+        error(message, err);
+        TroubleShooter.recordError(err, message);
+      });
+    }
+
+    /**
+     * dnd5e's card face shows the item's icon and then the activity's. An activity whose image is the item's own (common in
+     * imported content) showed the same picture twice: the activity's is dropped. A different image, or dnd5e's activity
+     * type icon, stays.
+     */
+    #dropDuplicateActivityIcon(html: HTMLElement) {
+      for (const activityIcon of Array.from(html.querySelectorAll<HTMLElement>(".activity-icon"))) {
+        const itemSrc = activityIcon.parentElement?.querySelector(".item-icon img")?.getAttribute("src");
+        const activitySrc = activityIcon.querySelector("img, dnd5e-icon")?.getAttribute("src");
+        if (itemSrc && activitySrc === itemSrc) activityIcon.remove();
+      }
+    }
+
+    /**
+     * Mask the dice of a blind roll, and blank an obscured roll's result, for non-GMs.
+     *
+     * Lives here rather than on `renderChatMessageHTML` because core fires that hook inside
+     * `super.renderHTML()`, before dnd5e's subclass fills `.message-content` from the data model.
+     * Measured at hook time on a 6.0 card: `dice-roll=0`, `dice-total=0`; populated by the next
+     * frame. So the masking ran against an empty card and hid nothing — a blind roll's dice were
+     * visible to every player. `_enrichChatCard` runs on both render paths (the model's `getHTML`
+     * and dnd5e's own branch for messages without one) and after midi's highlighting, so this is
+     * the last word on the markup.
+     */
+    private maskHiddenRolls(html: HTMLElement) {
+      if (game.user?.isGM) return;
+      if (this.blind) {
+        html.querySelectorAll(".midi-attack-roll .dice-roll").forEach(el => el.replaceWith(rolledPlaceholder()));
+        // monks-tokenbar renders its own rolls and does its own hiding.
+        if (!this.flags?.["monks-tokenbar"]) {
+          html.querySelectorAll(".dice-roll").forEach(el => el.replaceWith(rolledPlaceholder()));
+          html.querySelectorAll(".roll-breakdown").forEach(el => el.remove());
+        }
+      }
+      if (foundry.utils.getProperty(this, `flags.${MODULE_ID}.obscureRoll`)) obscureRolls(html);
+      // A save on its own in the log, belonging to a midi card, shows what midi's save display allows.
+      const card = midiCardOf(this);
+      if (card) maskSaveForPlayers(html, this, card);
+      // dnd5e 6 draws a card's save and check messages inside it as summaries, whatever their own visibility; card notes
+      // draw their own messages (renderLinkedMessage).
+      html.querySelectorAll<HTMLElement>(".card-summary[data-message-id], .midi-qol-linked-message[data-message-id]").forEach(summary => {
+        const source = game.messages?.get(summary.dataset.messageId ?? "");
+        if (!source) return;
+        if (isMidiCard(this)) maskSaveForPlayers(summary, source, this);
+        const view = hiddenRollView(source);
+        if (view === "none") summary.remove();
+        else if (view === "placeholder") summary.replaceChildren(rolledPlaceholder());
+        else if (foundry.utils.getProperty(source, `flags.${MODULE_ID}.obscureRoll`)) obscureRolls(summary);
+      });
+    }
+
     maskAttackRolls(html: HTMLElement) {
       if (!this.author?.isGM || game.user?.isGM) return;
-      const hitFlag = this.flags?.[MODULE_ID]?.isHit;
+      const hitFlag = cardHitResult(this);
       const hitString = hitFlag === undefined ? "" : hitFlag ? i18n("midi-qol.hits") : i18n("midi-qol.misses");
-      const isCritical = this.flags?.[MODULE_ID]?.isCritical;
-      const isFumble = this.flags?.[MODULE_ID]?.isFumble;
+      const state = cardMidiState(this)?.state;
+      const isCritical = state ? !!state.isCritical : storedMidiFlag(this, "isCritical");
+      const isFumble = state ? !!state.isFumble : storedMidiFlag(this, "isFumble");
       const attackDisplay = configSettings.gmAttackDisplay ?? "full";
       const damageDisplay = configSettings.gmDamageDisplay ?? "full";
 
       // Attack roll masking
       let attackRollText: string | undefined;
       let hideCritFumble = false;
+      // Located by tag, not position: the card now also carries the save rolls, and a save-only card
+      // has no attack roll at index 0 at all.
+      const attackRoll = attackRollOf(this) ?? this.rolls[0];
       switch (attackDisplay) {
         case "full":
           break;
         case "hideFormula":
           break;
         case "d20Only":
-          attackRollText = `(d20) ${this.rolls[0]?.terms[0].total ?? "--"}`;
+          attackRollText = `(d20) ${attackRoll?.terms[0].total ?? "--"}`;
           break;
         case "attackTotal":
-          attackRollText = `${this.rolls[0]?.total ?? "--"}`;
+          attackRollText = `${attackRoll?.total ?? "--"}`;
           break;
         case "hitMiss":
           hideCritFumble = true;
@@ -541,8 +530,8 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
           break;
         case "hitMissCrit":
           attackRollText = hitString;
-          if (isCritical) attackRollText = i18n("midi-qol.criticalHit");
-          else if (isFumble) attackRollText = i18n("midi-qol.fumble");
+          if (isCritical) attackRollText = i18n("midi-qol.criticals");
+          else if (isFumble) attackRollText = i18n("midi-qol.fumbles");
           break;
         case "hidden":
           hideCritFumble = true;
@@ -564,30 +553,27 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
 
       // Damage roll masking
       if (damageDisplay === "totalOnly") {
-        removeAll(html, ".midi-damage-roll .dice-formula");
-        removeAll(html, ".midi-damage-roll .dice-tooltip");
-        html.querySelectorAll(".midi-damage-roll .dice-roll").forEach(el => el.addEventListener("click", this.noDiceClicks.bind(this)));
+        removeAll(html, `${DAMAGE_ROLLS} .dice-formula`);
+        removeAll(html, `${DAMAGE_ROLLS} .dice-tooltip`);
+        html.querySelectorAll(DAMAGE_ROLLS).forEach(el => el.addEventListener("click", this.noDiceClicks.bind(this)));
       } else if (damageDisplay === "hidden") {
-        removeAll(html, ".midi-damage-roll .dice-formula");
-        removeAll(html, ".midi-damage-roll .dice-tooltip");
-        html.querySelectorAll(".midi-damage-roll .dice-roll").forEach(el => el.addEventListener("click", this.noDiceClicks.bind(this)));
-        html.querySelectorAll(".midi-damage-roll .dice-total")?.forEach(el => el.innerHTML = "--");
+        removeAll(html, `${DAMAGE_ROLLS} .dice-formula`);
+        removeAll(html, `${DAMAGE_ROLLS} .dice-tooltip`);
+        html.querySelectorAll(DAMAGE_ROLLS).forEach(el => el.addEventListener("click", this.noDiceClicks.bind(this)));
+        html.querySelectorAll(`${DAMAGE_ROLLS} .dice-total`)?.forEach(el => el.innerHTML = "--");
       }
     }
 
     applyChatVisibility(html: HTMLElement) {
       if (html.style.display === "none") return; // Already hidden by hideStuffHandler (blind/gmHide)
-      const messageActor = (fromUuidSync(this.flags?.[MODULE_ID]?.["sourceActorUuid"]) as Actor.Implementation ?? this.speakerActor);
-      const messageActorOwner = messageActor?.isOwner;
-
       // Re-enable save/check buttons
-      if (foundry.utils.getProperty(this, "flags.midi-qol.type") === MESSAGE_TYPES.SAVES) {
+      if (cardMidi(this).sections?.saves || storedMidiFlag(this, "type") === MESSAGE_TYPES.SAVES) {
         html.querySelectorAll<HTMLButtonElement>('[data-action="rollSave"]').forEach(el => el.disabled = false);
         html.querySelectorAll<HTMLButtonElement>('[data-action="rollCheck"]').forEach(el => el.disabled = false);
       }
 
       // Hide attack/damage buttons for non-authors
-      if (!this.isAuthor && !(messageActorOwner && saveToChatCard)) {
+      if (!this.isAuthor) {
         hideAll(html, ".midi-qol-attack-buttons");
         hideAll(html, ".midi-qol-damage-buttons");
         hideAll(html, ".midi-qol-otherDamage-button");
@@ -601,11 +587,11 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
         el.addEventListener("contextmenu", onTargetShow);
       });
 
+      // Cards rendered before names were set on display carry a second, player copy of each name.
+      removeAll(html, ".midi-qol-playerTokenName");
       if (game.user?.isGM) {
-        removeAll(html, ".midi-qol-playerTokenName");
-        if (configSettings.hidePlayerDamageCard && foundry.utils.getProperty(this, "flags.midi-qol.playerDamageCard")) {
-          html.style.display = "none";
-        }
+        // Old separate player damage cards duplicate their GM card. Remove with dnd5e 6.2.
+        if (foundry.utils.getProperty(this, "flags.midi-qol.playerDamageCard")) html.style.display = "none";
         html.querySelectorAll<HTMLDivElement>(".midi-qol-hits-display").forEach(el => el.style.display = "");
         hideAll(html, ".midi-qol-target-npc-Player");
         if (!configSettings.highlightSuccess) {
@@ -613,11 +599,11 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
           stripHighlight(html, ".midi-qol-saves-display .midi-qol-save-class");
         }
       } else {
-        removeAll(html, ".midi-qol-gmTokenName");
+        applyPlayerNames(html);
         if (configSettings.autoCheckHit === "gmOnly") {
           hideAll(html, ".midi-qol-hits-display");
         }
-        this.applySaveVisibility(html, messageActor);
+        this.applySaveVisibility(html);
         this.applyAttackVisibility(html);
 
         // Confirm damage buttons
@@ -638,60 +624,95 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
             html.querySelectorAll<HTMLDivElement>(".midi-attack-roll .dice-tooltip").forEach(el => el.style.height = "0");
           }
           if (damageHidden) {
-            html.querySelectorAll(".midi-damage-roll .dice-roll").forEach(el => el.addEventListener("click", noDice));
-            html.querySelectorAll<HTMLDivElement>(".midi-damage-roll .dice-tooltip").forEach(el => el.style.height = "0");
+            html.querySelectorAll(DAMAGE_ROLLS).forEach(el => el.addEventListener("click", noDice));
+            html.querySelectorAll<HTMLDivElement>(`${DAMAGE_ROLLS} .dice-tooltip`).forEach(el => el.style.height = "0");
           }
         }
       }
     }
 
-    private applySaveVisibility(html: HTMLElement, messageActor: Actor.Implementation | undefined) {
-      const shouldDisplayChallenge = safeGetGameSetting("dnd5e", "challengeVisibility");
-      const autoCheckSaves = configSettings.autoCheckSaves;
-
-      if (autoCheckSaves === "gmOnly") {
-        hideAll(html, ".midi-qol-saves-display");
-        return;
-      }
+    private applySaveVisibility(html: HTMLElement) {
+      const mode = saveDisplayMode();
 
       // Strip save attribution tooltip and info icons when players can't see save details
-      if (!["all", "allShow"].includes(autoCheckSaves)) {
+      if (!["all", "allShow"].includes(mode)) {
         html.querySelectorAll(".midi-qol-target-name[data-tooltip-html]")?.forEach(el => el.removeAttribute("data-tooltip-html"));
         removeAll(html, ".midi-save-attribution-info");
       }
 
-      const dcHidden = shouldDisplayChallenge === "player" && !(messageActor as any)?.hasPlayerOwner;
-      const displayNPCSaves = shouldDisplayChallenge === "all" || (shouldDisplayChallenge === "player" && !dcHidden);
-      const displayPlayerSaves = shouldDisplayChallenge !== "none";
-
-      if (!displayPlayerSaves || autoCheckSaves === "whisper" || this.blind) {
-        removeAll(html, ".midi-qol-save-total");
-        removeAll(html, ".midi-qol-save-tooltip");
-        removeAll(html, ".midi-qol-save-symbol");
-        removeAll(html, ".midi-qol-saveDC");
+      // Player characters' rows are .midi-qol-save-*, NPCs' .midi-qol-npc-save-* (from the target's hasPlayerOwner).
+      // A player character's roll shows as dnd5e's summaries show its save message (as its whispers and roll mode allow
+      // this viewer); its outcome as the message's challenge (the save display, and to the target's owners).
+      const caster = cardActor(this);
+      const showNPCRows = !this.blind && canSeeSaveResult(caster, false);
+      const npcDetail = saveDetail(false);
+      const saveMessages = new Map<string, ChatMessage.Implementation>();
+      // @ts-expect-error no dnd5e types
+      for (const message of this.getAssociatedRolls?.() ?? []) {
+        if (!["save", "check"].includes(message.type as string)) continue;
+        const { scene, token } = message.speaker ?? {};
+        if (scene && token) saveMessages.set(`Scene.${scene}.Token.${token}`, message);
       }
-      if (!displayNPCSaves || autoCheckSaves === "whisper" || this.blind) {
-        if (!dcHidden) removeAll(html, ".midi-qol-npc-save-symbol");
+      html.querySelectorAll<HTMLElement>(".midi-qol-saves-display li.midi-qol-save-class:not(.midi-qol-npc-target)").forEach(row => {
+        const uuid = row.querySelector<HTMLElement>("[data-uuid]")?.dataset.uuid ?? "";
+        const message = saveMessages.get(uuid);
+        const target = (fromUuidSync(uuid, { strict: false }) as TokenDocument.Implementation | null)?.actor;
+        if (message && !this.blind && isObscured(message)) return obscureSaveRow(row);
+        const rollShown = !this.blind && (!message || (message.visible && message.isContentVisible));
+        if (!rollShown) row.querySelectorAll(".midi-qol-save-total, .midi-qol-save-tooltip").forEach(el => el.remove());
+        // @ts-expect-error no dnd5e types
+        const outcomeShown = message ? message.shouldDisplayChallenge : canSeePlayerOutcome(caster, target);
+        if (!rollShown || !outcomeShown) {
+          row.querySelectorAll(".midi-qol-save-symbol").forEach(el => el.remove());
+          row.classList.remove("success", "failure", "critical", "fumble");
+          // The roll's total, if shown, without the outcome's colour and icon
+          stripHighlight(row, ".dice-total");
+          row.querySelectorAll(".dice-total .icons").forEach(el => el.remove());
+        }
+      });
+      if (!showNPCRows) {
+        removeAll(html, ".midi-qol-npc-save-symbol");
         removeAll(html, ".midi-qol-npc-save-tooltip");
         removeAll(html, ".midi-qol-npc-save-total");
-        if (!displayNPCSaves && !messageActor?.hasPlayerOwner) {
-          removeAll(html, ".midi-qol-saveDC");
-        }
-      } else if (autoCheckSaves !== "allShow") {
-        removeAll(html, ".midi-qol-npc-save-tooltip");
-        if (autoCheckSaves === "allNoRoll") removeAll(html, ".midi-qol-npc-save-total");
+      } else {
+        if (npcDetail !== "dice") removeAll(html, ".midi-qol-npc-save-tooltip");
+        if (npcDetail === "outcome") removeAll(html, ".midi-qol-npc-save-total");
+        // A roll forced obscured (Which skill checks are rolled blind) shows its card's ?? here too.
+        html.querySelectorAll<HTMLElement>(".midi-qol-saves-display li.midi-qol-npc-target").forEach(row => {
+          const message = saveMessages.get(row.querySelector<HTMLElement>("[data-uuid]")?.dataset.uuid ?? "");
+          if (message && isObscured(message)) obscureSaveRow(row);
+        });
       }
 
-      if (!configSettings.highlightSuccess || !["all", "player"].includes(shouldDisplayChallenge) || ["whisper", "none"].includes(autoCheckSaves)) {
-        stripHighlight(html, ".midi-qol-saves-display .midi-qol-save-class");
-      }
-      if ((!displayNPCSaves && !dcHidden) || !configSettings.highlightSuccess) {
-        stripHighlight(html, ".midi-qol-save-class.midi-qol-npc-target");
-      }
+      // The single, activity-level DC follows the card's challenge visibility.
+      const dcRemoved = this.blind || ["whisper", "gmOnly"].includes(mode) || !challengeVisible(caster);
+      if (dcRemoved) removeAll(html, ".midi-qol-saveDC");
+
+      // The total's tooltip ("5 = 2 + 3 vs DC 11") carries the dice and the DC.
+      html.querySelectorAll<HTMLElement>(".midi-qol-save-total[data-tooltip]").forEach(el => {
+        const diceHidden = el.classList.contains("midi-qol-npc-save-total") && npcDetail !== "dice";
+        if (diceHidden || dcRemoved) el.removeAttribute("data-tooltip");
+      });
+
+      // An optional bonus's note on a save shows as much as that target's save row: no note without its result, the
+      // bonus alone for the outcome, plain totals for the total, expandable rolls for the dice
+      html.querySelectorAll<HTMLElement>(".midi-qol-saves-display [data-midi-save-target]").forEach(line => {
+        const target = (fromUuidSync(line.dataset.midiSaveTarget ?? "", { strict: false }) as TokenDocument.Implementation | null)?.actor;
+        const playerOwned = !!target?.hasPlayerOwner;
+        const owner = !!target?.isOwner;
+        const visible = !this.blind && (owner ? canSeePlayerOutcome(caster, target, game.user) : canSeeSaveResult(caster, playerOwned));
+        if (!visible) return line.closest(".midi-qol-card-note")?.remove();
+        const detail = owner ? "dice" : saveDetail(playerOwned);
+        if (detail === "outcome") line.replaceChildren(...Array.from(line.querySelectorAll("strong")));
+        else if (detail === "total") line.querySelectorAll<HTMLElement>("a.inline-result").forEach(a => a.replaceWith(a.textContent?.trim() ?? ""));
+      });
+
+      if (!configSettings.highlightSuccess) stripHighlight(html, ".midi-qol-saves-display .midi-qol-save-class:not(.midi-qol-npc-target)");
+      if (!configSettings.highlightSuccess || !showNPCRows) stripHighlight(html, ".midi-qol-save-class.midi-qol-npc-target");
     }
 
     private applyAttackVisibility(html: HTMLElement) {
-      if (!configSettings.optionalRules.ActiveDefenceDC) {
+      if (!configSettings.optionalRules.activeDefenceDC) {
         removeAll(html, ".midi-qol-active-defence-dc");
       }
 
@@ -705,46 +726,98 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
         removeAll(html, ".midi-attack-roll .dice-total .icons");
         removeAll(html, ".midi-qol-hits-display .midi-qol-hit-symbol");
         removeAll(html, ".midi-qol-hit-symbol");
-        removeAll(html, ".midi-qol-npc-ac");
+        removeUnownedAC(html);
       } else if (attackVisibility === "hideAC") {
-        removeAll(html, ".midi-qol-npc-ac");
+        removeUnownedAC(html);
       }
     }
 
-    _enrichChatCard(html: HTMLElement, options = {}) {
-      const enrichment = this._enrichMidiChatCard(html, options);
-      this.#enrichmentPromises.set(html, enrichment);
-      return enrichment;
-    }
-
-    private async _enrichMidiChatCard(html: HTMLElement, options = {}) {
+    /*
+     * `options` is not decoration — it carries the data model's rendering decisions, and dropping it
+     * changes what the system draws.
+     *
+     * dnd5e 6.0 calls this from `ChatMessageDataModel#getHTML` as
+     * `_enrichChatCard(element, this._getEnrichmentOptions())`, and every card model that wants no
+     * speaker portrait says so there: `ItemMessageData` and `RollMessageData` both return
+     * `{ avatar: false }`. Taking one parameter and calling `super` with one meant the flag never
+     * arrived, `_enrichHeader` saw `options.avatar !== false`, and drew an avatar the card had asked
+     * it not to. Compact cards have no rule sizing that image, so it rendered at its natural size —
+     * about two hundred and twenty pixels, on dnd5e's own cards as much as midi's, and only when
+     * midi was enabled.
+     */
+    _enrichChatCard(html: HTMLElement, options: object = {}): Promise<void> | void {
       if (!this.flags?.[MODULE_ID]?.messageType) {
         this.applyChatVisibility(html);
-        // @ts-expect-error no dnd5e-types
-        await super._enrichChatCard(html, options);
-        this._maybeStripEffectsTray(html);
+        const enriched = this.#enrichSystemCard(html, options);
+        this._applyMidiHighlightSettings(html);
         this._addMarkerClasses(html);
+        this._addLegacyCardDataset(html);
+        this.maskHiddenRolls(html);
+        this.#dropDuplicateActivityIcon(html);
+        // A card note shown on its own (its card can't draw it) names tokens as this user may see them.
+        if (!game.user?.isGM) renameMarkedTokens(html);
+        html.classList.toggle("midi-qol-undone", !!this.getFlag(MODULE_ID, "undone"));
+        return applySpeakerNameAfter(enriched, html);
+      }
+      // Another player's view of a private card; the author of a blind roll still gets the card, its dice masked below.
+      if (!this.isContentVisible && !this.isAuthor) {
+        html.querySelector(".message-content")?.replaceChildren(rolledPlaceholder());
+        applySpeakerName(html);
         return;
       }
       if (debugEnabled > 1) log("Enriching chat card", Date.now(), this.id);
-      if (usesSystemChatData()) {
-        this._enrichDamageTooltip(this.rolls, html);
-        this._enrichAttackTargets(html);
-      }
-      this.maskAttackRolls(html); // Apply visibility before the system binds roll interaction.
+      this.maskAttackRolls(html); // This has to run first to stop errors when dnd5e enriches the damage rolls
 
-      // @ts-expect-error no dnd5e-types
-      await super._enrichChatCard(html, options);
-      this._maybeStripEffectsTray(html);
-      this.applyChatVisibility(html);
+      const enriched = this.#enrichSystemCard(html, options);
       // For usage-type messages, Foundry skips _highlightCriticalSuccessFailure.
-      // Add classes + icons directly for midi messages, then apply midi settings.
+      // Add classes + icons directly for midi messages, then apply midi settings. Before the visibility pass, which removes
+      // what this viewer may not see, highlighting included.
       if (this.flags?.[MODULE_ID]?.messageType) {
         this._highlightMidiRolls(html);
       }
       this._applyMidiHighlightSettings(html);
+      this.applyChatVisibility(html);
+      this.#addAttackReasons(html);
+      this.#addMasteryLine(html);
       this._addMarkerClasses(html);
+      this._addLegacyCardDataset(html);
+      this.maskHiddenRolls(html);
+      this.#dropDuplicateActivityIcon(html);
+      html.classList.toggle("midi-qol-undone", !!this.getFlag(MODULE_ID, "undone"));
       if (debugEnabled > 1) log("Finished enriching chat card", Date.now(), this.id);
+      return applySpeakerNameAfter(enriched, html);
+    }
+
+    /**
+     * Restore the `data-*` attributes midi's own card carried on its root element.
+     *
+     * They were on `activity-card.hbs`, which is gone — the card root is now `dnd5e.card-face`, a
+     * system partial midi cannot add attributes to. The information is all on `message.system` in
+     * 6.0, but macros and other modules select on these attributes, so they are stamped back on
+     * after render rather than left to break silently.
+     */
+    _addLegacyCardDataset(html: HTMLElement) {
+      const card = html.querySelector<HTMLElement>(".chat-card");
+      if (!card) return;
+      const system = this.system as unknown as Record<string, any> | undefined;
+      const item = system?.item?.uuid ? fromUuidSync(system.item.uuid) as Item.Implementation | null : null;
+      const actor = this.speakerActor ?? item?.actor;
+      // Not system.origin: on dnd5e 6 that is the originating chat message.
+      const tokenUuid = this.speaker?.scene && this.speaker?.token
+        ? `Scene.${this.speaker.scene}.Token.${this.speaker.token}` : undefined;
+      const set = (name: string, value: unknown) => {
+        if (value !== undefined && value !== null && value !== "") card.setAttribute(name, String(value));
+      };
+      set("data-actor-id", actor?.id);
+      set("data-actor-uuid", actor?.uuid);
+      set("data-item-id", item?.id ?? system?.item?.id);
+      set("data-item-uuid", system?.item?.uuid);
+      set("data-token-id", this.speaker?.token);
+      set("data-token-uuid", tokenUuid);
+      // @ts-expect-error no dnd5e types for item.system.level
+      const level = item?.system?.level;
+      // "power" is a sub-type some systems/modules add; compare as a string so fvtt-types' narrower union does not reject it.
+      if (level !== undefined) set(String(item?.type) === "power" ? "data-power-level" : "data-spell-level", level);
     }
 
     /** Add CSS marker classes to avoid expensive :has() selectors during layout */
@@ -766,3 +839,149 @@ export function defineChatMessageMidiClass(baseClass: ChatMessage.Implementation
     }
   }
 }
+
+/** The "rolled" stand-in for a roll the viewer may not see. */
+function rolledPlaceholder(): HTMLElement {
+  const span = document.createElement("span");
+  span.classList.add("midi-qol-dice-rolled");
+  span.innerHTML = i18n("midi-qol.DiceRolled"); // the localised string carries its own markup
+  return span;
+}
+
+/**
+ * What a non-GM sees of a roll message: all of it when they can read it; nothing when it was forced blind or
+ * ForceHideRoll is on; otherwise a stand-in saying a roll was made.
+ */
+export function hiddenRollView(message: ChatMessage.Implementation): "show" | "placeholder" | "none" {
+  if (game.user?.isGM || message.isContentVisible) return "show";
+  if (foundry.utils.getProperty(message, `flags.${MODULE_ID}.forcedBlind`) || forceHideRoll) return "none";
+  return "placeholder";
+}
+
+/** A roll midi forced obscured: players see its card with ?? for the result. */
+export function isObscured(message: ChatMessage.Implementation): boolean {
+  return !game.user?.isGM && !!foundry.utils.getProperty(message, `flags.${MODULE_ID}.obscureRoll`);
+}
+
+/** A save row whose roll is obscured: ?? for the total, no dice, DC or outcome. */
+function obscureSaveRow(row: HTMLElement) {
+  row.querySelectorAll<HTMLElement>(".midi-qol-save-total").forEach(el => {
+    el.removeAttribute("data-tooltip");
+    el.replaceChildren("??");
+  });
+  row.querySelectorAll(".midi-qol-save-tooltip, .midi-qol-save-symbol").forEach(el => el.remove());
+  row.classList.remove("success", "failure", "critical", "fumble");
+}
+
+/**
+ * Public roll, hidden result: replace the totals and strip the breakdown, in both dnd5e's compact roll markup
+ * (roll-compact.hbs) and the classic one. The colouring classes go too - a nat 1 or 20 would give it away.
+ */
+function obscureRolls(html: HTMLElement) {
+  const HIGHLIGHT = ["critical", "fumble", "success", "failure", "min", "max"];
+  html.querySelectorAll<HTMLElement>(".dice-total, .dice-roll .total, .d20die .roll").forEach(el => {
+    el.textContent = "??";
+    el.classList.remove(...HIGHLIGHT);
+  });
+  html.querySelectorAll(".dice-tooltip, .roll-breakdown").forEach(el => el.remove());
+  // The compact markup's success/failure icons
+  html.querySelectorAll(".dice-roll .icons").forEach(el => el.replaceChildren());
+  html.querySelectorAll<HTMLElement>(".critical, .fumble, .success, .failure, .min, .max")
+    .forEach(el => el.classList.remove(...HIGHLIGHT));
+  HIGHLIGHT.forEach(c => html.classList.remove(c));
+}
+
+/**
+ * As dnd5e hides target AC from players short of "all", except that a player sees the AC of a token they own. The AC's
+ * modifier icons go with it: their tooltips carry the amounts (with several targets, a target's attack penalty too).
+ */
+function removeUnownedAC(html: HTMLElement) {
+  html.querySelectorAll<HTMLElement>(".midi-qol-hits-display li[data-uuid]").forEach(row => {
+    const target = fromUuidSync(row.dataset.uuid ?? "");
+    const actor = target instanceof TokenDocument ? target.actor : target instanceof Actor ? target : null;
+    if (!actor?.isOwner) row.querySelectorAll(".midi-qol-ac, .midi-qol-ac-icons").forEach(el => el.remove());
+  });
+}
+
+/**
+ * Names on a card as the viewing player is shown them: the speaker (header and card text), midi's hit and save rows
+ * (also named per viewer by their templates; older cards stored theirs), dnd5e's summaries, a card note's messages and
+ * names marked with `data-midi-token-uuid` (lib/tokenNames.ts).
+ */
+function applyPlayerNames(html: HTMLElement) {
+  const rename = (el: Element | null, uuid: string | undefined) => {
+    if (el) el.textContent = displayTokenName(uuid, el.textContent?.trim() ?? "");
+  };
+  applySpeakerName(html);
+  html.querySelectorAll<HTMLElement>(".midi-qol-hits-display li[data-uuid], .midi-qol-save-name[data-uuid]")
+    .forEach(el => rename(el.querySelector(".midi-qol-target-name"), el.dataset.uuid));
+  html.querySelectorAll<HTMLElement>(".card-summary[data-target-uuid], .midi-qol-linked-message[data-target-uuid]")
+    .forEach(el => rename(el.querySelector(".pill.target"), el.dataset.targetUuid));
+  renameMarkedTokens(html);
+}
+
+/**
+ * The speaker's name in the header and the card text, as the viewing player is shown it. dnd5e draws its avatar header
+ * after an await, so this runs again once dnd5e's enrichment is done; it is a no-op on a name already shown.
+ */
+function applySpeakerName(html: HTMLElement) {
+  if (game.user?.isGM) return;
+  // The header is the plain sender (with data-token-uuid) or dnd5e's avatar and name stack.
+  const sender = html.querySelector<HTMLElement>(".message-sender");
+  const senderName = sender?.querySelector(".name-stacked .title") ?? sender;
+  const speakerUuid = sender?.dataset.tokenUuid ?? sender?.querySelector<HTMLElement>(".avatar[data-uuid]")?.dataset.uuid;
+  const speakerName = senderName?.textContent?.trim();
+  if (!senderName || !speakerName) return;
+  const shown = displayTokenName(speakerUuid, speakerName);
+  if (shown === speakerName) return;
+  senderName.textContent = shown;
+  sender?.querySelector("img[alt]")?.setAttribute("alt", shown);
+  replaceName(html.querySelector(".message-content"), speakerName, shown);
+}
+
+/** Once dnd5e's (possibly async) enrichment of `html` is done, set the speaker's name again. */
+function applySpeakerNameAfter(enriched: unknown, html: HTMLElement): Promise<void> {
+  return Promise.resolve(enriched).then(() => applySpeakerName(html), err => {
+    error(`${MODULE_ID} | dnd5e chat card enrichment failed`, err);
+  });
+}
+
+/** Replace whole-word occurrences of `name` in the text under `root`. */
+function replaceName(root: Element | null, name: string, replacement: string) {
+  if (!root) return;
+  const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${RegExp.escape(name)}(?![\\p{L}\\p{N}])`, "gu");
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.textContent?.includes(name)) node.textContent = node.textContent.replace(pattern, replacement);
+  }
+}
+
+function isMidiCard(message: ChatMessage.Implementation | undefined): boolean {
+  return !!message?.flags?.[MODULE_ID]?.messageType;
+}
+
+/** The midi card a save or check message was rolled for (dnd5e 6 links it through `system.origin`). */
+function midiCardOf(message: ChatMessage.Implementation): ChatMessage.Implementation | undefined {
+  const origin = foundry.utils.getProperty(message, "system.origin");
+  const card = typeof origin === "string" ? game.messages?.get(origin) : origin as ChatMessage.Implementation | undefined;
+  return card instanceof ChatMessage && isMidiCard(card) ? card : undefined;
+}
+
+/**
+ * What a player sees of a save rolled for a midi card, as midi's own saves section shows it: who saved is always
+ * shown, and a player character's roll; the outcome, and an NPC's total and dice, only as far as midi's save display
+ * and dnd5e's challenge visibility both allow.
+ */
+function maskSaveForPlayers(element: HTMLElement, save: ChatMessage.Implementation, card: ChatMessage.Implementation) {
+  const playerOwned = !!save.speakerActor?.hasPlayerOwner;
+  const visible = playerOwned ? canSeePlayerOutcome(cardActor(card), save.speakerActor) : canSeeSaveResult(cardActor(card), false);
+  if (!visible) {
+    element.querySelectorAll<HTMLElement>(".success, .failure").forEach(el => el.classList.remove("success", "failure"));
+    element.querySelectorAll(".dice-roll .icons").forEach(el => el.replaceChildren());
+  }
+  if (playerOwned) return;
+  const detail = visible ? saveDetail(false) : "none";
+  if (detail !== "dice") element.querySelectorAll(".roll-breakdown, .d20die, .dice-tooltip").forEach(el => el.remove());
+  if (detail === "outcome" || detail === "none") element.querySelectorAll(".dice-roll .total, .dice-total").forEach(el => el.remove());
+}
+

@@ -5,29 +5,21 @@
   "effects": [
     {
       "_id": "stormDeafenedEf0",
-      "changes": [],
       "disabled": false,
       "duration": {
-        "startTime": null,
-        "seconds": 60,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+        "value": 60,
+        "units": "seconds"
       },
       "transfer": false,
       "flags": {
         "dae": {
-          "stackable": false,
+          "stackable": "none",
           "macroRepeat": "none",
           "specialDuration": [],
           "transfer": false,
-          "dontApply": false,
-          "showIcon": true
+          "dontApply": false
         }
       },
-      "tint": "#ffffff",
       "name": "Storm of Vengeance (Deafened)",
       "description": "<p>Deafened by the initial thunderclap of the Storm of Vengeance for the spell's duration.</p>",
       "statuses": [
@@ -46,44 +38,32 @@
       },
       "img": "icons/magic/lightning/bolt-cloud-sky-white.webp",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": []
+      },
       "sort": 0,
-      "_key": "!items.effects!StormVengeance00.stormDeafenedEf0"
+      "_key": "!items.effects!StormVengeance00.stormDeafenedEf0",
+      "showIcon": 2
     },
     {
       "_id": "stormTrackerEff0",
-      "changes": [
-        {
-          "key": "macro.itemMacro",
-          "mode": 0,
-          "value": "",
-          "priority": 20
-        }
-      ],
       "disabled": false,
       "duration": {
-        "startTime": null,
-        "seconds": 60,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+        "value": 60,
+        "units": "seconds"
       },
       "transfer": false,
       "flags": {
         "dae": {
-          "stackable": false,
+          "stackable": "none",
           "macroRepeat": "startEveryTurn",
           "specialDuration": [],
           "transfer": false,
           "dontApply": false,
-          "showIcon": false,
           "selfTarget": true,
           "selfTargetAlways": true
         }
       },
-      "tint": "#ffffff",
       "name": "Storm of Vengeance (Tracker)",
       "description": "<p>Tracks the current round of the Storm of Vengeance spell and triggers the appropriate activity at the start of each caster turn.</p>",
       "statuses": [],
@@ -100,9 +80,19 @@
       },
       "img": "icons/magic/lightning/bolt-cloud-sky-white.webp",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": [
+          {
+            "key": "macro.itemMacro",
+            "value": "",
+            "priority": 20,
+            "type": "custom"
+          }
+        ]
+      },
       "sort": 100,
-      "_key": "!items.effects!StormVengeance00.stormTrackerEff0"
+      "_key": "!items.effects!StormVengeance00.stormTrackerEff0",
+      "showIcon": 0
     }
   ],
   "flags": {
@@ -141,19 +131,13 @@
         "activity": []
       }
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.51"
-      }
-    },
     "itemacro": {
       "macro": {
         "name": "Storm of Vengeance",
         "type": "script",
         "img": "icons/svg/dice-target.svg",
         "scope": "global",
-        "command": "// Storm of Vengeance — DAE macro (startEveryTurn)\n// \"on\": Initialize round counter to 1 (round 1 already resolved by the Create Storm activity)\n// \"each\": Increment counter, trigger the appropriate round's activity\n// \"off\": Clean up the round counter flag\n\nconst FLAG = \"stormOfVengeanceRound\";\n\nif (args[0] === \"on\") {\n  await actor.setFlag(\"midi-qol\", FLAG, 1);\n} else if (args[0] === \"each\") {\n  const current = actor.getFlag(\"midi-qol\", FLAG) ?? 1;\n  const round = current + 1;\n  await actor.setFlag(\"midi-qol\", FLAG, round);\n  // Map round number to activity identifier\n  let identifier;\n  if (round === 2) identifier = \"acid-rain\";\n  else if (round === 3) identifier = \"lightning-bolts\";\n  else if (round === 4) identifier = \"hailstones\";\n  else if (round >= 5 && round <= 10) identifier = \"gusts-and-rain\";\n  else return; // Past round 10, no effect\n  const theItem = actor.items.find(i => i.system?.identifier === \"storm-of-vengeance\");\n  if (!theItem) return;\n  const activity = theItem.system.activities.find(a => a.identifier === identifier);\n  if (!activity) return;\n  const roundLabel = round >= 5 ? `Round ${round} (5+)` : `Round ${round}`;\n  // Find the storm template placed during round 1 and auto-target creatures under it\n  const templates = canvas.scene.templates.filter(t => {\n    const origin = t.flags?.dnd5e?.origin ?? \"\";\n    return origin.startsWith(theItem.uuid);\n  });\n  let targetUuids;\n  if (templates.length > 0) {\n    MidiQOL.selectTargetsFromTemplates(templates);\n    targetUuids = Array.from(game.user.targets).map(t => t.document.uuid);\n  }\n  ChatMessage.create({\n    content: `<strong>Storm of Vengeance</strong>: ${roundLabel} — ${activity.name}.`,\n    speaker: ChatMessage.getSpeaker({actor}),\n    whisper: game.users.filter(u => actor.testUserPermission(u, \"OWNER\")).map(u => u.id)\n  });\n  await MidiQOL.completeActivityUse(activity, {\n    midiOptions: {\n      targetUuids,\n      workflowOptions: {\n        autoConsumeResource: \"both\"\n      },\n      proceedChecks: {\n        checkReaction: false,\n        checkBonusAction: false\n      }\n    }\n  });\n} else if (args[0] === \"off\") {\n  if (actor.getFlag(\"midi-qol\", FLAG) !== undefined) {\n    await actor.unsetFlag(\"midi-qol\", FLAG);\n  }\n}",
+        "command": "// Storm of Vengeance — DAE macro (startEveryTurn)\n// \"on\": Initialize round counter to 1 (round 1 already resolved by the Create Storm activity)\n// \"each\": Increment counter, trigger the appropriate round's activity\n// \"off\": Clean up the round counter flag\n\nconst FLAG = \"stormOfVengeanceRound\";\n\nif (args[0] === \"on\") {\n  await actor.setFlag(\"midi-qol\", FLAG, 1);\n} else if (args[0] === \"each\") {\n  const current = actor.getFlag(\"midi-qol\", FLAG) ?? 1;\n  const round = current + 1;\n  await actor.setFlag(\"midi-qol\", FLAG, round);\n  // Map round number to activity identifier\n  let identifier;\n  if (round === 2) identifier = \"acid-rain\";\n  else if (round === 3) identifier = \"lightning-bolts\";\n  else if (round === 4) identifier = \"hailstones\";\n  else if (round >= 5 && round <= 10) identifier = \"gusts-and-rain\";\n  else return; // Past round 10, no effect\n  const theItem = actor.items.find(i => i.system?.identifier === \"storm-of-vengeance\");\n  if (!theItem) return;\n  const activity = theItem.system.activities.find(a => a.identifier === identifier);\n  if (!activity) return;\n  const roundLabel = round >= 5 ? `Round ${round} (5+)` : `Round ${round}`;\n  // Find the storm template placed during round 1 and auto-target creatures under it\n  const templates = canvas.scene.templates.filter(t => {\n    const origin = t.flags?.dnd5e?.origin ?? \"\";\n    return origin.startsWith(theItem.uuid);\n  });\n  let targetUuids;\n  if (templates.length > 0) {\n    targetUuids = MidiQOL.selectTargetsFromTemplates(templates).map(t => t.document.uuid);\n  }\n  ChatMessage.create({\n    content: `<strong>Storm of Vengeance</strong>: ${roundLabel} — ${activity.name}.`,\n    speaker: ChatMessage.getSpeaker({actor}),\n    whisper: game.users.filter(u => actor.testUserPermission(u, \"OWNER\")).map(u => u.id)\n  });\n  await MidiQOL.completeActivityUse(activity, {\n    midiOptions: {\n      targetUuids,\n      workflowOptions: {\n        autoConsumeResource: \"both\"\n      },\n      proceedChecks: {\n        checkReaction: false,\n        checkBonusAction: false\n      }\n    }\n  });\n} else if (args[0] === \"off\") {\n  if (actor.getFlag(\"midi-qol\", FLAG) !== undefined) {\n    await actor.unsetFlag(\"midi-qol\", FLAG);\n  }\n}",
         "sort": 0,
         "ownership": {
           "default": 3
@@ -170,11 +154,16 @@
         "_id": null,
         "folder": null
       }
+    },
+    "cat": {
+      "automation": {
+        "version": "14.6.9"
+      }
     }
   },
   "system": {
     "description": {
-      "value": "<p>A churning storm cloud forms for the duration, centered on a point within range and spreading to a radius of 300 feet. Each creature under the cloud when it appears must succeed on a Constitution saving throw or take 2d6 Thunder damage and have the Deafened condition for the duration.</p>\n<p>At the start of each of your later turns, the storm produces different effects, as detailed below.</p>\n<p><strong>Turn 2.</strong> Acidic rain falls. Each creature and object under the cloud takes 4d6 Acid damage.</p>\n<p><strong>Turn 3.</strong> You call six bolts of lightning from the cloud to strike six different creatures or objects beneath it. Each target makes a Dexterity saving throw, taking 10d6 Lightning damage on a failed save or half as much damage on a successful one.</p>\n<p><strong>Turn 4.</strong> Hailstones rain down. Each creature under the cloud takes 2d6 Bludgeoning damage.</p>\n<p><strong>Turns 5–10.</strong> Gusts and freezing rain assail the area under the cloud. Each creature there takes 1d6 Cold damage. Until the spell ends, the area is Difficult Terrain and Heavily Obscured, ranged attacks with weapons are impossible there, and strong wind blows through the area.</p>\n<p><strong>midi-qol</strong>: Fully automated via DAE macroRepeat. Round 1 (Create Storm) is the initial cast — CON save, 2d6 thunder, Deafened on failure. Rounds 2–10 trigger automatically at the start of the caster's turn: Round 2 (4d6 acid, no save), Round 3 (10d6 lightning, DEX save, half), Round 4 (2d6 bludgeoning, no save), Rounds 5–10 (1d6 cold, no save). The caster selects targets under the cloud each round. Concentration ending removes the tracker effect and stops further rounds.</p>",
+      "value": "<p>A churning storm cloud forms for the duration, centered on a point within range and spreading to a radius of 300 feet. Each creature under the cloud when it appears must succeed on a Constitution saving throw or take 2d6 Thunder damage and have the Deafened condition for the duration.</p>\n<p>At the start of each of your later turns, the storm produces different effects, as detailed below.</p>\n<p><strong>Turn 2.</strong> Acidic rain falls. Each creature and object under the cloud takes 4d6 Acid damage.</p>\n<p><strong>Turn 3.</strong> You call six bolts of lightning from the cloud to strike six different creatures or objects beneath it. Each target makes a Dexterity saving throw, taking 10d6 Lightning damage on a failed save or half as much damage on a successful one.</p>\n<p><strong>Turn 4.</strong> Hailstones rain down. Each creature under the cloud takes 2d6 Bludgeoning damage.</p>\n<p><strong>Turns 5–10.</strong> Gusts and freezing rain assail the area under the cloud. Each creature there takes 1d6 Cold damage. Until the spell ends, the area is Difficult Terrain and Heavily Obscured, ranged attacks with weapons are impossible there, and strong wind blows through the area.</p><div class=\"cat-description\"><p><strong>midi-qol</strong>: Fully automated via DAE macroRepeat. Round 1 (Create Storm) is the initial cast — CON save, 2d6 thunder, Deafened on failure. Rounds 2–10 trigger automatically at the start of the caster's turn: Round 2 (4d6 acid, no save), Round 3 (10d6 lightning, DEX save, half), Round 4 (2d6 bludgeoning, no save), Rounds 5–10 (1d6 cold, no save). The caster selects targets under the cloud each round. Concentration ending removes the tracker effect and stops further rounds.</p></div>",
       "chat": "<p>A churning storm cloud forms for the duration, centered on a point within range and spreading to a radius of 300 feet. Each creature under the cloud when it appears must succeed on a Constitution saving throw or take 2d6 Thunder damage and have the Deafened condition for the duration.</p>\n<p>At the start of each of your later turns, the storm produces different effects, as detailed below.</p>\n<p><strong>Turn 2.</strong> Acidic rain falls. Each creature and object under the cloud takes 4d6 Acid damage.</p>\n<p><strong>Turn 3.</strong> You call six bolts of lightning from the cloud to strike six different creatures or objects beneath it. Each target makes a Dexterity saving throw, taking 10d6 Lightning damage on a failed save or half as much damage on a successful one.</p>\n<p><strong>Turn 4.</strong> Hailstones rain down. Each creature under the cloud takes 2d6 Bludgeoning damage.</p>\n<p><strong>Turns 5–10.</strong> Gusts and freezing rain assail the area under the cloud. Each creature there takes 1d6 Cold damage. Until the spell ends, the area is Difficult Terrain and Heavily Obscured, ranged attacks with weapons are impossible there, and strong wind blows through the area.</p>"
     },
     "source": {

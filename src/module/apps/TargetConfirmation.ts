@@ -23,8 +23,9 @@ export class TargetConfirmationDialog extends HandlebarsApplicationMixin(Applica
     maxTargets: number | null | undefined;
   };
   notAllowedTexture: PIXI.Texture | null = null;
-  hookId: number;
-  hoverHookId: number;
+  hookId: number | undefined;
+  hoverHookId: number | undefined;
+  moveHookId: number | undefined;
 
   constructor(actor: Actor.Implementation, activity: Activity, user: User.Implementation, options: TargetConfirmationOptions = {}) {
     super(options);
@@ -41,7 +42,6 @@ export class TargetConfirmationDialog extends HandlebarsApplicationMixin(Applica
       maxTargets = 1;
     }
     this.data = { actor, activity, user, targets: [], options, maxTargets };
-    const keys = {}; // TODO see if this needs to be set from the workflow event or let it get processed later
     // Handle alt/ctrl etc keypress when completing the dialog
     this.callback = function (value) {
       foundry.utils.setProperty(options, "workflowOptions.advantage", options.workflowOptions?.advantage);
@@ -59,27 +59,6 @@ export class TargetConfirmationDialog extends HandlebarsApplicationMixin(Applica
         for (let target of game.user?.targets)
           markFlanking(token, target)
     }
-    // this.callback = options.callback;
-    this.hookId = Hooks.on("targetToken", (user, token, targeted) => {
-      if (user !== game.user) return;
-      if (game.user.targets) {
-        this.validateAndUpdateTargets();
-      }
-      // Validate max number of targets after target validation, so that invalid targets can be removed without triggering a warning
-      if (this.data.maxTargets && game.user.targets?.size > this.data.maxTargets)
-        ui.notifications?.warn(i18nFormat("midi-qol.wrongNumberTargets", { allowedTargets: this.data.maxTargets }));
-
-      const newTargets = Array.from(game.user.targets ?? []);
-      // Do not re-render if the targets have not changed
-      if (!newTargets.equals(this.data.targets ?? [])) {
-        this.data.targets = newTargets;
-        this.render();
-      }
-    });
-
-    this.hoverHookId = Hooks.on("hoverToken", (token, hovered) => {
-      this.hoverToken(token, hovered);
-    });
     return this;
   }
 
@@ -154,8 +133,7 @@ export class TargetConfirmationDialog extends HandlebarsApplicationMixin(Applica
     updateUserTargets(validTargets);
   }
 
-  /** Remove the "not allowed" overlay from a single token, if present. Destroys the sprite but
-   *  keeps the shared texture (this.notAllowedTexture) intact. */
+  /** Remove a token's overlay sprite; the shared texture is kept. */
   removeNotAllowedOverlay(token: Token.Implementation | undefined) {
     const overlay = token?.mesh?.getChildByName(OVERLAY_NAME);
     if (overlay) {
@@ -164,8 +142,7 @@ export class TargetConfirmationDialog extends HandlebarsApplicationMixin(Applica
     }
   }
 
-  /** Remove any lingering overlays from every token. Called on close so an overlay left on the
-   *  token under the cursor isn't orphaned once the hoverToken hook is removed. */
+  /** Clear all overlays on close, so the hovered token isn't left with an orphan. */
   removeAllNotAllowedOverlays() {
     for (const token of canvas?.tokens?.placeables ?? []) this.removeNotAllowedOverlay(token);
   }
@@ -175,13 +152,12 @@ export class TargetConfirmationDialog extends HandlebarsApplicationMixin(Applica
       this.removeNotAllowedOverlay(token);
       return;
     }
-    // Only apply the overlay when the current control and tool are set for targeting tokens
+    // Only when the control/tool are set for targeting
     if (ui.controls?.control?.name !== "tokens" || ui.controls?.tool?.name !== "target") return;
 
     // Skip invalid targets, we don't want to give any indication about these tokens
     if (!isValidTarget(token)) return;
 
-    // Do nothing if the token is selectable
     if (this.isTargetSelectable(token)) return;
 
     // Prevent adding multiple copies of the texture
@@ -191,12 +167,12 @@ export class TargetConfirmationDialog extends HandlebarsApplicationMixin(Applica
       return;
     }
     const sprite = new PIXI.Sprite(this.notAllowedTexture);
-
+    
     // Configure sprite size, opacity, and name anchor
     sprite.name = OVERLAY_NAME;
     sprite.alpha = OVERLAY_ALPHA;
     sprite.tint = 0xFF0000; // Red tint for "not allowed" indication
-
+    
     // Align sprite center with token center
     sprite.anchor.set(0.5);
     sprite.x = 0;
@@ -208,7 +184,7 @@ export class TargetConfirmationDialog extends HandlebarsApplicationMixin(Applica
 
     // Prevent texture from rotating with token
     sprite.rotation = -Math.toRadians(token.mesh.angle);
-
+  
     // Add the texture layer directly to the token container
     token.mesh.addChild(sprite);
   }
@@ -242,6 +218,8 @@ export class TargetConfirmationDialog extends HandlebarsApplicationMixin(Applica
         icon?: string;
         label?: string;
         action?: string;
+        default?: boolean;
+        hidden?: boolean;
       }[]
       targets: (Token.Implementation | {
         name: string;
@@ -344,9 +322,9 @@ export class TargetConfirmationDialog extends HandlebarsApplicationMixin(Applica
       else context.blurb = i18n("midi-qol.TargetConfirmation.BlurbAny");
     }
     context.buttons = [
-      { type: "button", icon: "fa-solid fa-dice-d20", label: "DND5E.Roll", action: "roll" },
+      { type: "button", icon: "fa-solid fa-dice-d20", label: "DND5E.Roll", action: "roll", default: true },
       { type: "button", icon: "fa-solid fa-stop", label: "Cancel", action: "cancel" },
-      { type: "hidden", icon: "fa-solid fa-check", label: "Clear", action: "clearTargets" }
+      { type: "button", icon: "fa-solid fa-check", label: "midi-qol.TargetConfirmation.Clear", action: "clearTargets", hidden: true }
     ];
     return context;
   }
@@ -374,8 +352,7 @@ export class TargetConfirmationDialog extends HandlebarsApplicationMixin(Applica
   async _onRender(context, options) {
     await super._onRender(context, options);
 
-    // Load the overlay texture once — _onRender runs on every re-render (loadTexture is cache-backed,
-    // but this avoids the redundant await and reassignment each time the target list changes).
+    // Load once - _onRender runs on every re-render.
     if (!this.notAllowedTexture) {
       const NOT_ALLOWED_TEXTURE_PATH = "icons/svg/cancel.svg";
       const texture = await foundry.canvas.loadTexture(NOT_ALLOWED_TEXTURE_PATH);
@@ -384,17 +361,6 @@ export class TargetConfirmationDialog extends HandlebarsApplicationMixin(Applica
     }
 
     if (canvas) {
-      // TODO: This doing anything? 
-      let targetNames = this.element.getElementsByClassName("content-link midi-qol");
-      for (let targetName of Array.from(targetNames)) {
-        targetName.addEventListener("click", async (event) => {
-          event.stopPropagation();
-          // @ts-expect-error
-          const doc = await fromUuid(event.currentTarget?.dataset.uuid) as Actor | null;
-          //@ts-expect-error render not updated for v2 parameters
-          return doc?.sheet?.render({ force: true });
-        });
-      }
       let imgs = this.element.getElementsByTagName("img");
       for (let i of Array.from(imgs)) {
         i.style.border = 'none';
@@ -425,12 +391,58 @@ export class TargetConfirmationDialog extends HandlebarsApplicationMixin(Applica
         });
       }
     }
+    this.#keepOnScreen();
+  }
+
+  /** The dialog grows with its targets: keep its bottom edge on screen (it opens near the bottom by default). */
+  #keepOnScreen() {
+    const height = this.element?.offsetHeight ?? 0;
+    const top = this.position.top ?? 0;
+    const maxTop = Math.max(0, window.innerHeight - height - 10);
+    if (height && top > maxTop) this.setPosition({ top: maxTop });
+  }
+
+  /** Hooks are added once shown and removed on any close, so a dialog that never renders leaves none behind. */
+  async _onFirstRender(context, options) {
+    await super._onFirstRender(context, options);
+    this.hookId = Hooks.on("targetToken", (user, token, targeted) => {
+      if (user !== game.user) return;
+      if (game.user.targets) {
+        this.validateAndUpdateTargets();
+      }
+      // Validate max number of targets after target validation, so that invalid targets can be removed without triggering a warning
+      if (this.data.maxTargets && game.user.targets?.size > this.data.maxTargets)
+        ui.notifications?.warn(i18nFormat("midi-qol.wrongNumberTargets", { allowedTargets: this.data.maxTargets }));
+
+      const newTargets = Array.from(game.user.targets ?? []);
+      // Do not re-render if the targets have not changed
+      if (!newTargets.equals(this.data.targets ?? [])) {
+        this.data.targets = newTargets;
+        this.render();
+      }
+    });
+
+    this.hoverHookId = Hooks.on("hoverToken", (token, hovered) => {
+        this.hoverToken(token, hovered);
+    });
+    // The cover and range shown depend on where the attacker and targets are.
+    const refresh = foundry.utils.debounce(() => { if (this.rendered) this.render(); }, 100);
+    this.moveHookId = Hooks.on("updateToken", (tokenDocument, changed) => {
+      if (!("x" in changed || "y" in changed || "elevation" in changed)) return;
+      const attacker = tokenForActor(this.data.actor);
+      if (tokenDocument.id === attacker?.id || [...(game.user?.targets ?? [])].some(t => t.id === tokenDocument.id)) refresh();
+    });
+  }
+
+  async _onClose(options) {
+    if (this.hookId !== undefined) Hooks.off("targetToken", this.hookId);
+    if (this.hoverHookId !== undefined) Hooks.off("hoverToken", this.hoverHookId);
+    if (this.moveHookId !== undefined) Hooks.off("updateToken", this.moveHookId);
+    this.removeAllNotAllowedOverlays();
+    return super._onClose(options);
   }
 
   close(options = {}) {
-    Hooks.off("targetToken", this.hookId);
-    Hooks.off("hoverToken", this.hoverHookId);
-    this.removeAllNotAllowedOverlays();
     this.doCallback(false);
     return super.close(options);
   }

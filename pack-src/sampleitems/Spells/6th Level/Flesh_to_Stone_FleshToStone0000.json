@@ -10,27 +10,22 @@
       "transfer": false,
       "_id": "ftsRestrained000",
       "type": "base",
-      "system": {},
-      "changes": [
-        {
-          "key": "flags.midi-qol.OverTime",
-          "mode": 5,
-          "value": "turn=end,\nsaveDC=@attributes.spell.dc,\nsaveAbility=con,\nsaveCount=3-,\nfailCount=2-petrified,\nrollAs=origin,\nlabel=Flesh to Stone (CON save)",
-          "priority": 20
-        }
-      ],
+      "system": {
+        "changes": [
+          {
+            "key": "flags.midi-qol.OverTime",
+            "value": "turn=end,\nsaveDC=@attributes.spell.dc,\nsaveAbility=con,\nsaveCount=3-,\nfailCount=2-petrified,\nrollAs=origin,\nlabel=Flesh to Stone (CON save)",
+            "priority": 20,
+            "type": "override"
+          }
+        ]
+      },
       "disabled": false,
       "duration": {
-        "startTime": null,
-        "seconds": 60,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+        "value": 60,
+        "units": "seconds"
       },
       "description": "<p>The target has the Restrained condition. At the end of each turn it makes a Constitution saving throw. Three failed saves (including the initial): Petrified. Three successful saves: spell ends. The successes and failures needn't be consecutive.</p>",
-      "tint": "#ffffff",
       "statuses": [
         "restrained"
       ],
@@ -47,7 +42,7 @@
           "disableCondition": "",
           "disableIncapacitated": false,
           "dontApply": false,
-          "showIcon": true
+          "applicationMode": "legacy"
         }
       },
       "_stats": {
@@ -61,7 +56,8 @@
         "lastModifiedBy": null,
         "exportSource": null
       },
-      "_key": "!items.effects!FleshToStone0000.ftsRestrained000"
+      "_key": "!items.effects!FleshToStone0000.ftsRestrained000",
+      "showIcon": 2
     }
   ],
   "flags": {
@@ -101,16 +97,15 @@
         "effect": []
       }
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.51"
+    "cat": {
+      "automation": {
+        "version": "14.6.5"
       }
     }
   },
   "system": {
     "description": {
-      "value": "<p>You attempt to turn one creature that you can see within range into stone. The target makes a Constitution saving throw. On a failed save, it has the Restrained condition for the duration. On a successful save, its Speed is 0 until the start of your next turn. Constructs automatically succeed on the save.</p><p>A Restrained target makes another Constitution saving throw at the end of each of its turns. If it successfully saves against this spell three times, the spell ends. If it fails its saves three times, it is turned to stone and has the Petrified condition for the duration. The successes and failures needn't be consecutive; keep track of both until the target collects three of a kind.</p><p>If you maintain your Concentration on this spell for the entire possible duration, the target is Petrified until the condition is ended by Greater Restoration or similar magic.</p>\n<p><strong>midi-qol</strong>: No macros required. Save activity applies Restrained (on fail) or speed 0 (on success). The Restrained effect includes an OverTime end-of-turn CON save with <code>saveCount=3-</code> (3 saves removes the effect) and <code>failCount=2-petrified</code> (2 more fails applies Petrified status and removes the effect). The initial failed save counts as the first of three failures.</p>",
+      "value": "<p>You attempt to turn one creature that you can see within range into stone. The target makes a Constitution saving throw. On a failed save, it has the Restrained condition for the duration. On a successful save, its Speed is 0 until the start of your next turn. Constructs automatically succeed on the save.</p><p>A Restrained target makes another Constitution saving throw at the end of each of its turns. If it successfully saves against this spell three times, the spell ends. If it fails its saves three times, it is turned to stone and has the Petrified condition for the duration. The successes and failures needn't be consecutive; keep track of both until the target collects three of a kind.</p><p>If you maintain your Concentration on this spell for the entire possible duration, the target is Petrified until the condition is ended by Greater Restoration or similar magic.</p><div class=\"cat-description\"><p><strong>midi-qol</strong>: No macros required. Save activity applies Restrained (on fail) or speed 0 (on success). The Restrained effect includes an OverTime end-of-turn CON save with <code>saveCount=3-</code> (3 saves removes the effect) and <code>failCount=2-petrified</code> (2 more fails applies Petrified status and removes the effect). The initial failed save counts as the first of three failures.</p></div>",
       "chat": "<p>You attempt to turn one creature that you can see within range into stone. The target makes a Constitution saving throw. On a failed save, it has the Restrained condition for the duration. On a successful save, its Speed is 0 until the start of your next turn. Constructs automatically succeed on the save.</p><p>A Restrained target makes another Constitution saving throw at the end of each of its turns. If it successfully saves against this spell three times, the spell ends. If it fails its saves three times, it is turned to stone and has the Petrified condition for the duration. The successes and failures needn't be consecutive; keep track of both until the target collects three of a kind.</p><p>If you maintain your Concentration on this spell for the entire possible duration, the target is Petrified until the condition is ended by Greater Restoration or similar magic.</p>"
     },
     "source": {

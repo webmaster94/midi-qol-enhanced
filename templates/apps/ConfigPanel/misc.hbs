@@ -30,6 +30,19 @@
         configSettings.conditionEditorEnabled}} />
         <div class="notes midi-qol-faint">{{{localize "midi-qol.ConditionEditorEnabled.Hint"}}}</div>
     </div>
+    <div class="form-group rulesTextFill">
+        <label>{{localize "midi-qol.RulesText.Setting.Name"}}</label>
+        <input id="rulesTextFill" type="checkbox" name="rulesTextFill" data-dtype="Boolean" {{checked
+        configSettings.rulesTextFill}} />
+        <div class="notes midi-qol-faint">{{{localize "midi-qol.RulesText.Setting.Hint"}}}</div>
+    </div>
+    <div class="form-group rulesTextCompendium">
+        <label>{{localize "midi-qol.RulesText.Compendium.Name"}}</label>
+        <select name="rulesTextCompendium" data-dtype="String">
+            {{selectOptions rulesTextCompendiumOptions selected=configSettings.rulesTextCompendium localize=true}}
+        </select>
+        <div class="notes midi-qol-faint">{{{localize "midi-qol.RulesText.Compendium.Hint"}}}</div>
+    </div>
     <div class="form-group midiPropertiesTab">
         <label>{{localize "midi-qol.MidiPropertiesTab.Name"}}</label>
         <select name="midiPropertiesTabRole" data-dtype="String">
@@ -83,13 +96,6 @@
           configSettings.addSheetButtons}} />
           <div class="notes midi-qol-faint">{{{localize "midi-qol.AddSheetButtons.Hint"}}}</div>
       </div>
-      <!--
-      <div class="form-group">
-          <label>{{localize "midi-qol.MergeCardMultiDamage.Name"}}multi damage</label>
-          <input type="checkbox" name="mergeCardMultiDamage" data-dtype="Boolean" {{checked
-          configSettings.mergeCardMultiDamage}} />
-      </div>
-      -->
       <div class="form-group">
           <label>{{localize "midi-qol.MergeCardMulti.Name"}}</label>
           <input type="checkbox" name="mergeCardMulti" data-dtype="Boolean" {{checked configSettings.mergeCardMulti}} />
@@ -142,6 +148,11 @@
           <label>{{localize "midi-qol.UseTokenNames.Name"}}</label>
           <input type="checkbox" name="useTokenNames" data-dtype="Boolean" {{checked configSettings.useTokenNames}} />
           <div class="notes midi-qol-faint">{{{localize "midi-qol.UseTokenNames.Hint"}}}</div>
+      </div>
+      <div class="form-group">
+          <label>{{localize "midi-qol.HideNPCNames.Name"}}</label>
+          <input type="text" name="hideNPCNames" value="{{configSettings.hideNPCNames}}" />
+          <div class="notes midi-qol-faint">{{{localize "midi-qol.HideNPCNames.Hint"}}}</div>
       </div>
       <div class="form-group">
           <label>{{localize "midi-qol.UsePlayerPortrait.Name"}}</label>

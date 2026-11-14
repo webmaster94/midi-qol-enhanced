@@ -5,29 +5,13 @@
   "effects": [
     {
       "_id": "ksFos60cgn0TWTFP",
-      "changes": [
-        {
-          "key": "flags.midi-qol.uncanny-dodge",
-          "mode": 5,
-          "value": "1",
-          "priority": 20
-        }
-      ],
       "disabled": false,
-      "duration": {
-        "startTime": null,
-        "seconds": null,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
-      },
+      "duration": {},
       "origin": "Item.eEmSsq7xE3i0EyBS",
       "transfer": false,
       "flags": {
         "dae": {
-          "stackable": false,
+          "stackable": "none",
           "macroRepeat": "none",
           "specialDuration": [
             "1Reaction"
@@ -47,7 +31,6 @@
           "onlyOnce": false
         }
       },
-      "tint": "#ffffff",
       "name": "1/2 Damage",
       "description": "",
       "statuses": [],
@@ -64,7 +47,16 @@
       },
       "img": "icons/skills/movement/feet-winged-boots-brown.webp",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": [
+          {
+            "key": "flags.midi-qol.uncanny-dodge",
+            "value": "1",
+            "priority": 20,
+            "type": "override"
+          }
+        ]
+      },
       "sort": 0,
       "_key": "!items.effects!SMFTP5tQhwZyObph.ksFos60cgn0TWTFP"
     }
@@ -209,10 +201,9 @@
       "section": "",
       "actionSection": ""
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.58"
+    "cat": {
+      "automation": {
+        "version": "14.6.2"
       }
     }
   },
@@ -350,7 +341,7 @@
         }
       }
     },
-    "identifier": "uncanny-dodge-11441",
+    "identifier": "uncanny-dodge",
     "enchant": {},
     "advancement": [],
     "cover": null,

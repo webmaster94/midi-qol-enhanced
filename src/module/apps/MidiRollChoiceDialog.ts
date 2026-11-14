@@ -1,6 +1,7 @@
+import { RollModifierTracker } from "../lib/RollModifierTracker.js";
+import { AnyMutableObject } from "fvtt-types/utils";
 import { i18n, i18nFormat, GameSystemConfig } from "../../midi-qol.js";
 import { PreComputedAdvantageData } from "../../globals.js";
-import { RollModifierTracker } from "../lib/RollModifierTracker.js";
 import { getToolLabel } from "../utils.js";
 
 /**
@@ -37,12 +38,13 @@ export class MidiRollChoiceDialog extends D20RollConfigurationDialog {
   get rolls(): any { return super.rolls; }
 
   /** Typed access to our custom options (ApplicationV2 options are untyped) */
-  get midiOptions(): { rollChoices: RollChoice[], choiceType: string, advantageByChoice?: Record<string, PreComputedAdvantage> } {
+  get midiOptions(): { rollChoices: RollChoice[], choiceType: string, advantageByChoice?: Record<string, PreComputedAdvantage>, abilityForChoice?: (id: string) => string | undefined } {
     const opts = (this as any).options;
     return {
       rollChoices: opts.rollChoices ?? [],
       choiceType: opts.choiceType ?? "ability",
-      advantageByChoice: opts.advantageByChoice
+      advantageByChoice: opts.advantageByChoice,
+      abilityForChoice: opts.abilityForChoice
     };
   }
 
@@ -131,8 +133,17 @@ export class MidiRollChoiceDialog extends D20RollConfigurationDialog {
 
   /** @override */
   _onChangeForm(formConfig, event) {
+    const { choiceType, advantageByChoice, abilityForChoice } = this.midiOptions;
+    // A check activity's skill or tool brings its ability, before the rolls are rebuilt from the form
+    if ((choiceType === "skill" || choiceType === "tool") && event.target?.name === choiceType) {
+      const ability = abilityForChoice?.(event.target.value);
+      const select = event.target.form?.elements.namedItem("ability");
+      if (ability && select instanceof HTMLSelectElement) {
+        select.value = ability;
+        this.config.ability = ability;
+      }
+    }
     super._onChangeForm(formConfig, event);
-    const { choiceType, advantageByChoice } = this.midiOptions;
 
     // Handle ability change on skill/tool rolls (replicates SkillToolRollConfigurationDialog)
     if ((choiceType === "skill" || choiceType === "tool") && event.target?.name === "ability") {
@@ -198,16 +209,20 @@ export class MidiRollChoiceDialog extends D20RollConfigurationDialog {
    */
   static applyPreComputedAdvantage(rollConfig: any, preComputed: PreComputedAdvantage | undefined): void {
     if (!preComputed) return;
+    // The live tracker (with any held keys), else the values computed before the roll
+    const tracker = preComputed.tracker instanceof RollModifierTracker ? preComputed.tracker : undefined;
+    const hasAdvantage = tracker ? !!tracker.hasAdvantage : preComputed.hasAdvantage;
+    const hasDisadvantage = tracker ? !!tracker.hasDisadvantage : preComputed.hasDisadvantage;
     // Only override advantageMode if pre-computed flags grant advantage or disadvantage.
     // If neither, don't set anything - let keyboard modifiers (shift/ctrl) work.
-    if (!preComputed.hasAdvantage && !preComputed.hasDisadvantage) return;
+    if (!hasAdvantage && !hasDisadvantage) return;
 
     rollConfig.options ??= {};
     // @ts-expect-error CONFIG.Dice.D20Roll not typed
     const ADV_MODE: { DISADVANTAGE: number, NORMAL: number, ADVANTAGE: number } = CONFIG.Dice.D20Roll.ADV_MODE;
-    if (preComputed.hasAdvantage && !preComputed.hasDisadvantage) {
+    if (hasAdvantage && !hasDisadvantage) {
       rollConfig.options.advantageMode = ADV_MODE.ADVANTAGE;
-    } else if (!preComputed.hasAdvantage && preComputed.hasDisadvantage) {
+    } else if (!hasAdvantage && hasDisadvantage) {
       rollConfig.options.advantageMode = ADV_MODE.DISADVANTAGE;
     }
     // Note: If both hasAdvantage and hasDisadvantage are true, they cancel out - don't override
@@ -268,23 +283,26 @@ export class MidiRollChoiceDialog extends D20RollConfigurationDialog {
           const abilityData = actor.system.abilities?.[formAbility];
           if (!abilityData) return;
 
-          const rollData = actor.getRollData();
-          const profKey = `${rollType}Prof` as "saveProf" | "checkProf";
-          const typeCapitalized = rollType.charAt(0).toUpperCase() + rollType.slice(1);
+          // As dnd5e 6 builds an ability check or save (Actor5e#rollD20Test).
+          const prof = abilityData[rollType]?.prof;
+          //@ts-expect-error no dnd5e-types
+          const rollData: AnyMutableObject = actor.getRollData({ roll: true });
+          foundry.utils.mergeObject(rollData, { roll: { ability: formAbility, proficient: prof?.multiplier >= 1, type: "ability" } });
+          const { bonus } = globalThis.dnd5e.dataModels.shared.D20RollModificationField.combineFields(actor.system, [
+            `abilities.${formAbility}.${rollType}.roll`, `rolls.ability.${rollType}`
+          ], { rules: { category: rollType, actor, rollData } });
 
           //@ts-expect-error no dnd5e-types
           const { parts, data } = CONFIG.Dice.D20Roll.constructParts({
             mod: abilityData.mod,
-            prof: abilityData[profKey]?.hasProficiency ? abilityData[profKey].term : null,
-            [`${formAbility}${typeCapitalized}Bonus`]: abilityData.bonuses?.[rollType],
-            //@ts-expect-error no dnd5e-types
-            [`${rollType}Bonus`]: actor.system.rolls?.ability?.[rollType]?.bonus ?? actor.system.bonuses?.abilities?.[rollType],
+            prof: prof?.hasProficiency ? prof.term : null,
+            ruleBonus: bonus,
             //@ts-expect-error no dnd5e-types
             cover: (formAbility === "dex" && rollType === "save") ? actor.system.attributes?.ac?.cover : null
           }, rollData);
 
           //@ts-expect-error no dnd5e-types
-          actor.addRollExhaustion?.(parts, data);
+          actor.addConditionRollReduction(parts, data);
           rollConfig.parts = parts;
           rollConfig.data = data;
           processConfig.ability = formAbility;
@@ -292,7 +310,8 @@ export class MidiRollChoiceDialog extends D20RollConfigurationDialog {
       }
 
       // Apply midi's pre-computed advantage (midi-specific, not in dnd5e)
-      MidiRollChoiceDialog.applyPreComputedAdvantage(rollConfig, advantageByChoice?.[choiceId]);
+      // Only for the open dialog's choice: a fast forwarded roll has its mode from dnd5e, with the held keys
+      if (formData) MidiRollChoiceDialog.applyPreComputedAdvantage(rollConfig, advantageByChoice?.[choiceId]);
     };
   }
 

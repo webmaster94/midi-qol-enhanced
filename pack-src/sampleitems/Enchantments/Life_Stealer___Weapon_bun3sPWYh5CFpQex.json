@@ -235,13 +235,13 @@
       "value": "<p><em>Weapon (Any Simple or Martial), Rare</em></p><p><span style=\"font-family:'Roboto Condensed', sans-serif\">When you attack a creature with this magic weapon and roll a 20 on the attack roll, that target takes an extra 3d6 necrotic damage, provided that the target isn't a construct or an undead. You gain temporary hit points equal to the extra damage dealt.</span></p><p>Midi: To use the item simply drag the Life Stealer effect to any weapon and it will do extra damage when a natural 20 is rolled.</p><p>This is based on a idea from the new Dungeons Master's Guide foundry premium content which has lots of clever ideas in it.</p>",
       "chat": ""
     },
-    "identifier": "dragon-slayer",
+    "identifier": "life-stealer-weapon",
     "source": {
       "revision": 1,
       "rules": "2024",
       "book": "",
       "page": "",
-      "custom": "Midi 12.4.25",
+      "custom": "midi-qol sample",
       "license": ""
     },
     "identified": true,
@@ -323,51 +323,43 @@
       "img": "systems/dnd5e/icons/spell-tiers/spell3.webp",
       "disabled": true,
       "_id": "ZveR6kPKafjcwQdY",
-      "system": {},
-      "changes": [
-        {
-          "key": "name",
-          "mode": 5,
-          "value": "{} of Life Stealing",
-          "priority": 50
-        },
-        {
-          "key": "system.properties",
-          "mode": 2,
-          "value": "mgc",
-          "priority": 20
-        },
-        {
-          "key": "system.magicalBonus",
-          "mode": 4,
-          "value": "1",
-          "priority": 40
-        },
-        {
-          "key": "flags.midi-qol.onUseMacroName",
-          "mode": 0,
-          "value": "ActivityMacro.life-stealer, postActiveEffects",
-          "priority": 50
-        },
-        {
-          "key": "system.attunement",
-          "mode": 5,
-          "value": "required",
-          "priority": 20
-        }
-      ],
-      "duration": {
-        "startTime": null,
-        "seconds": null,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+      "system": {
+        "changes": [
+          {
+            "key": "name",
+            "value": "{} of Life Stealing",
+            "priority": 50,
+            "type": "override"
+          },
+          {
+            "key": "system.properties",
+            "value": "mgc",
+            "priority": 20,
+            "type": "add"
+          },
+          {
+            "key": "system.magicalBonus",
+            "value": "1",
+            "priority": 40,
+            "type": "upgrade"
+          },
+          {
+            "key": "flags.midi-qol.onUseMacroName",
+            "value": "ActivityMacro.life-stealer, postActiveEffects",
+            "priority": 50,
+            "type": "custom"
+          },
+          {
+            "key": "system.attunement",
+            "value": "required",
+            "priority": 20,
+            "type": "override"
+          }
+        ]
       },
+      "duration": {},
       "description": "",
       "origin": null,
-      "tint": "#ffffff",
       "transfer": false,
       "statuses": [],
       "sort": 0,
@@ -376,7 +368,6 @@
           "enableCondition": "",
           "disableCondition": "",
           "stackable": "multi",
-          "showIcon": false,
           "durationExpression": "",
           "macroRepeat": "none",
           "specialDuration": []
@@ -412,7 +403,8 @@
         "lastModifiedBy": null,
         "exportSource": null
       },
-      "_key": "!items.effects!bun3sPWYh5CFpQex.ZveR6kPKafjcwQdY"
+      "_key": "!items.effects!bun3sPWYh5CFpQex.ZveR6kPKafjcwQdY",
+      "showIcon": 0
     }
   ],
   "folder": "Rcyn9RLxkqLeYlIN",
@@ -450,12 +442,6 @@
       "idi": false,
       "idv": false,
       "ida": false
-    },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.51"
-      }
     }
   },
   "_stats": {

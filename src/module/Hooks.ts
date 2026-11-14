@@ -1,19 +1,21 @@
-import { warn, error, debug, i18n, debugEnabled, overTimeEffectsToDelete, savedOverTimeEffectsToDelete, log, gameStats, GameSystemConfig, MODULE_ID } from "../midi-qol.js";
-import { colorChatMessageHandler, nsaMessageHandler, hideStuffHandler, hideRollUpdate, hideRollRender, obscureRollRender, processCreateDDBGLMessages, ddbglPendingHook, checkOverTimeSaves } from "./chatMessageHandling.js";
-import { preferredActiveGM, processUndoDamageCard, queueConditionUpdateFromCreate, queueConditionUpdateFromDelete } from "./GMAction.js";
-import { untargetDeadTokens, untargetAllTokens, midiCustomEffect, removeReactionUsed, removeBonusActionUsed, chackFlanking as checkFlanking, expireRollEffect, removeActionUsed, expirePerTurnBonusActions, getCachedDocument, getUpdatesCache, clearUpdatesCache, expireEffects, createConditionData, processConcentrationRequestMessage, evalAllConditions, doConcentrationCheck, _processOverTime, getCEEffectByName, setRollMaxDiceTerm, setRollMinDiceTerm, _processActivityOverTime, completeActivityUse, isAutoFastForward, areMidiKeysPressed, throttledScrollBottom, getVitalityItem, tokenForActor, resolveItemMacro, resolveActivityMacro, resolveDAEItemData, doSyncRoll, getTokenPerimeterPolygon, closestPointOnPerimeter, measurePointDistance, getActivityAutoTargetAction, getAoETargetType, updateFlankingHighlight, onUserManualTarget, rangeToSceneUnits } from "./utils.js";
-import { checkMechanic, checkRule, configSettings, dragDropTargeting, isDnd5e53, setDnd5e53 } from "./settings.js";
-import { checkWounded, checkDeleteTemplate, preUpdateItemActorOnUseMacro, zeroHPExpiry, deathSaveHook, getTemplateSourceToken } from "./patching.js";
+import { warn, error, debug, i18n, debugEnabled, overTimeEffectsToDelete, savedOverTimeEffectsToDelete, log, gameStats, GameSystemConfig, MODULE_ID, getStaticID, MIDI_IMPLYING_STATUSES } from "../midi-qol.js";
+import { excludeRegionSourceEffect, moveRegionsOnTurnChange } from "./regionBehaviors/MidiRegionActivityBehaviorType.js";
+import { colorChatMessageHandler, nsaMessageHandler, hideStuffHandler, hideRollUpdate, hideRollRender, checkOverTimeSaves } from "./chatMessageHandling.js";
+import { queueConditionUpdateFromCreate, queueConditionUpdateFromDelete, preferredActiveGM, processUndoDamageCard, whisperRollToPlayer } from "./GMAction.js";
+import { addViewAsPlayerOption } from "./ChatClasses/DamageCardMessage.js";
+import { untargetDeadTokens, untargetAllTokens, midiCustomEffect, removeReactionUsed, removeBonusActionUsed, chackFlanking as checkFlanking, expireRollEffect, removeActionUsed, expirePerTurnBonusActions, getUpdatesCache, clearUpdatesCache, expireEffects, processConcentrationRequestMessage, doConcentrationCheck, completeActivityUse, isAutoFastForward, areMidiKeysPressed, throttledScrollBottom, getVitalityItem, tokenForActor, resolveItemMacro, resolveActivityMacro, doSyncRoll, getTokenPerimeterPolygon, closestPointOnPerimeter, measurePointDistance, updateFlankingHighlight, onUserManualTarget, toggleStatus, videoThumbnail } from "./utils.js";
+import { releaseForcedNormalKeys } from "./lib/rollKeys.js";
+import { computeAdvantageFlagsSync } from "./lib/RollModifierTracker.js";
+import { checkRule, configSettings, dragDropTargeting } from "./settings.js";
+import { checkWounded, checkDeleteTemplate, preUpdateItemActorOnUseMacro, zeroHPExpiry, deathSaveHook } from "./patching.js";
 import { TroubleShooter } from "./apps/TroubleShooter.js";
 import { Workflow } from "./Workflow.js";
 import { ActorOnUseMacrosConfig } from "./apps/ActorOnUseMacroConfig.js";
-import { installedModules } from "./setupModules.js";
-import { preActivityConsumptionHook, activityConsumptionHook, selectTargetsFromTemplates, isAoETargetable } from "./activities/activityHelpers.js";
+import { preActivityConsumptionHook, activityConsumptionHook, midiTemplateFlags, isTemplateRegion, templateElevation, clampTemplateElevation, attachedRegionBand } from "./activities/activityHelpers.js";
 import { ItemOnUseMacrosConfig } from "./apps/ItemOnUseMacrosConfig.js";
 import { Activity, DamageApplicationOptions, DamageDescription } from "../globals.js";
-import { MidiDependentsRegistry } from "./lib/MidiDependentsRegistry.js";
+import { MidiDependentsRegistry, repointCopiedDependents, tokenHasDependents } from "./lib/MidiDependentsRegistry.js";
 
-export const concentrationCheckItemName = "Concentration Check - Midi QOL";
 export var concentrationCheckItemDisplayName = "Concentration Check";
 
 export let readyHooks = async () => {
@@ -24,15 +26,10 @@ export let readyHooks = async () => {
     const actor = tokenDocument.actor;
     const expiredEffects = actor?.effects.filter(ef => {
       const specialDuration = ef.flags?.dae?.specialDuration;
-      return !!specialDuration?.includes("isMoved");
+      return !ef.disabled && !!specialDuration?.includes("isMoved");
     }) ?? [];
     if (expiredEffects.length > 0) expireEffects(actor!, expiredEffects, { "expiry-reason": "midi-qol:isMoved" });
 
-  });
-
-  //@ts-expect-error
-  Hooks.on("template3dUpdatePreview", (at, t) => {
-    globalThis.VolumetricTemplates?.compute3Dtemplate(t);
   });
 
   Hooks.on("targetToken", foundry.utils.debounce(checkFlanking, 150));
@@ -44,120 +41,12 @@ export let readyHooks = async () => {
   Hooks.on("targetToken", debouncedFlankingHighlight);
   Hooks.on("refreshToken", debouncedFlankingHighlight);
 
-  //@ts-expect-error
-  Hooks.on("ddb-game-log.pendingRoll", (data) => {
-    ddbglPendingHook(data);
+  // v14: deleteMeasuredTemplate hook does NOT fire — only deleteRegion fires.
+  Hooks.on("deleteRegion", async (regionDoc, options, userId) => {
+    if (!isTemplateRegion(regionDoc)) return;
+    await checkDeleteTemplate(regionDoc, options, userId);
   });
 
-  //@ts-expect-error
-  Hooks.on("ddb-game-log.fulfilledRoll", (data) => {
-    ddbglPendingHook(data);
-  });
-
-  Hooks.on("preUpdateChatMessage", (message, update, options, user) => {
-    try {
-      const cachedUpdates = foundry.utils.flattenObject(getUpdatesCache(message.uuid));
-      if (cachedUpdates) {
-        // console.error("preUpdateChatMessage cached updates for", message.uuid, update);
-        // clearUpdatesCache(message.uuid);
-        // hideStuffHandler(message, $(message.content), user);
-        if (!foundry.utils.isEmpty(cachedUpdates) && false) {
-          const insertedUpdates = {};
-          Object.keys(cachedUpdates).forEach(key => {
-            if (cachedUpdates[key] !== undefined && foundry.utils.getProperty(update, key) === undefined) {
-              if (debugEnabled) insertedUpdates[key] = cachedUpdates[key];
-              foundry.utils.setProperty(update, key, cachedUpdates[key])
-            }
-          });
-          if (debugEnabled && !foundry.utils.isEmpty(insertedUpdates)) warn("preUpdateChatMessage inserting updates", message.uuid, insertedUpdates);
-        }
-      }
-      return true;
-    } finally {
-      return true;
-    }
-  });
-
-  Hooks.on("deleteMeasuredTemplate", checkDeleteTemplate);
-  Hooks.on("deleteRegion", checkDeleteTemplate);
-  Hooks.on("updateRegion", (region, changes, options, userId) => {
-    if (userId !== game.user?.id || !foundry.utils.getProperty(region, "flags.dnd5e.activity")) return;
-    const workflow = Array.from(Workflow.workflows.values())
-      .map(entry => entry instanceof WeakRef ? entry.deref() : entry)
-      .find(workflow => workflow?.templateUuids.includes(region.uuid));
-    workflow?.selectAllTemplateTargets();
-  });
-
-  // Auto-target tokens when a template is refreshed (moved/reshaped during preview or after placement)
-  // Only the user who placed the template should update targeting, otherwise all clients
-  // would set their own game.user.targets causing every player to target the AoE tokens.
-  // @ts-expect-error fvtt-types missing flags parameter on refreshMeasuredTemplate hook
-  Hooks.on("refreshMeasuredTemplate", (template: foundry.canvas.placeables.MeasuredTemplate.Implementation, flags: Record<string, boolean>) => {
-    if (!flags.refreshPosition && !flags.refreshShape) return;
-    if (!canvas?.tokens) return;
-    if (template.document.author?.id !== game.user?.id) return;
-
-    // Only auto-target for templates created by dnd5e activities (midi or native).
-    // template.activity is set during preview; flags.dnd5e.origin is set after placement.
-    // Skip manually placed or non-activity templates entirely.
-    // @ts-expect-error no dnd5e-types
-    if (!template.activity && !template.document.flags?.dnd5e?.origin) return;
-
-    // @ts-expect-error no dnd5e-types
-    const autoTarget = getActivityAutoTargetAction(template.activity);
-    if (autoTarget === "none") return;
-
-    if (installedModules.get("levelsvolumetrictemplates") && autoTarget !== "walledtemplates") {
-      //@ts-expect-error CONFIG.Levels
-      const levelsTemplateData = CONFIG.Levels.handlers.TemplateHandler.getTemplateData(false);
-      if (template.document.elevation !== levelsTemplateData.elevation) {
-        template.document.elevation = levelsTemplateData.elevation;
-      }
-      // Resolve the activity and source token for disposition filtering
-      // @ts-expect-error no dnd5e-types
-      const activity = template.activity
-        ?? (template.document.flags?.dnd5e?.origin ? fromUuidSync(template.document.flags.dnd5e.origin) : undefined);
-      const sourceToken = getTemplateSourceToken(template.document);
-      const selfToken = sourceToken ?? undefined;
-      const AoETargetType = activity ? getAoETargetType(activity) : "any";
-      const ignoreSelf = activity
-        ? (activity?.target.affects.special ?? "").split(";").some((spec: string) => ["-self"].includes(spec))
-        : false;
-
-      // Filter which tokens to pass - not too far; wall blocking is left to levels.
-      let distance = template.document.distance;
-      const dimensions = canvas.dimensions || { size: 1, distance: 1 };
-      distance *= dimensions.size / dimensions.distance;
-      const tokensToCheck = canvas.tokens.placeables?.filter(tk => {
-        const r = new foundry.canvas.geometry.Ray(
-          { x: template.document?.x ?? template.x, y: template.document?.y ?? template.y },
-          { x: tk.x + tk.document.width * dimensions.size, y: tk.y + tk.document.height * dimensions.size }
-        );
-        const maxExtension = (1 + Math.max(tk.document.width, tk.document.height)) * dimensions.size;
-        if (r.distance > distance + maxExtension) return false;
-        if (!isAoETargetable(tk, { selfToken, ignoreSelf, AoETargetType, autoTarget })) return false;
-        return true;
-      });
-      if (tokensToCheck && tokensToCheck.length > 0) {
-        //@ts-expect-error VolumetricTemplates
-        VolumetricTemplates.compute3Dtemplate(template, tokensToCheck);
-      }
-    } else {
-      // template.activity is set by dnd5e on AbilityTemplate during preview, but not on
-      // the standard MeasuredTemplate created after placement. Fall back to looking up
-      // the activity from the template's dnd5e.origin flag (the activity UUID).
-      // @ts-expect-error no dnd5e-types
-      const activity = template.activity
-        ?? (template.document.flags?.dnd5e?.origin ? fromUuidSync(template.document.flags.dnd5e.origin) : undefined);
-      const sourceToken = getTemplateSourceToken(template.document);
-      if (activity && sourceToken) {
-        const ignoreSelf = (activity?.target.affects.special ?? "").split(";").some((spec: string) => ["-self"].includes(spec));
-        selectTargetsFromTemplates([template], sourceToken, ignoreSelf, getAoETargetType(activity), autoTarget);
-      } else {
-        selectTargetsFromTemplates([template]);
-      }
-    }
-  });
 
   // Handle updates to the characters HP
   // Note: Wounded/dead status is now handled by _onUpdate wrapper in patching.ts
@@ -256,33 +145,47 @@ export let readyHooks = async () => {
     }
   })
 
-  //@ts-expect-error
-  Hooks.on("renderActorArmorConfig", (app: never, html: HTMLElement, data) => {
-    if (!["none", undefined, false].includes(checkRule("challengeModeArmor") as string | boolean | undefined)) {
-      const ac = data.ac;
-      const element = html.querySelector(".card");
-      const arTemplate = document.createElement("template");
-      arTemplate.innerHTML = `<div>EC: ${ac.EC}</div><div>AR: ${ac.AR}</div>`;
-      element?.append(...Array.from(arTemplate.content.children));
+  // Challenge mode armor: show EC and AR in dnd5e's armor class dialog.
+  //@ts-expect-error not in fvtt-types
+  Hooks.on("renderArmorClassConfig", (app: { document?: Actor.Implementation }, html: HTMLElement) => {
+    if (["none", undefined, false].includes(checkRule("challengeModeArmor") as string | boolean | undefined)) return;
+    // @ts-expect-error no dnd5e-types
+    const ac = app.document?.system?.attributes?.ac;
+    const card = html.querySelector("fieldset.card");
+    if (!ac || !card) return;
+    card.querySelectorAll("[data-midi-challenge-armor]").forEach(el => el.remove());
+    for (const [label, value] of [["EC", ac.EC], ["AR", ac.AR]]) {
+      const row = document.createElement("div");
+      row.classList.add("form-group");
+      row.dataset.midiChallengeArmor = label;
+      row.innerHTML = `<label>${label}</label><div class="form-fields">${value ?? ""}</div>`;
+      card.append(row);
     }
   });
 
+  Hooks.on("preDeleteActiveEffect", deleteStatusWithCarriers);
+
   // Handle removal of concentration
+  Hooks.on("createActiveEffect", (effect, options) => {
+    if (foundry.utils.getProperty(options, "undo") || !preferredActiveGM()?.isSelf || effect.disabled || !(effect.parent instanceof CONFIG.Actor.documentClass)) return;
+    void queueConditionUpdateFromCreate(effect, options);
+  });
+
   Hooks.on("deleteActiveEffect", (deletedEffect, options: any, user) => {
     if (options.undo) return; // TODO check that this is right
     if (debugEnabled > 0) console.warn("deleteActiveEffect", deletedEffect, options, user);
     if (!preferredActiveGM()?.isSelf) return;
     if (!(deletedEffect.parent instanceof CONFIG.Actor.documentClass)) return;
     if (debugEnabled > 0) warn("deleteActiveEffectHook", deletedEffect, deletedEffect.parent.name, options);
+    void queueConditionUpdateFromDelete(deletedEffect, options);
     async function changeFunc() {
       try {
-        await queueConditionUpdateFromDelete(deletedEffect, options);
         let origin = fromUuidSync(deletedEffect.origin as any);
         if (origin instanceof ActiveEffect && !options.noConcentrationCheck && configSettings.removeConcentrationEffects !== "none") {
           // @ts-expect-error no dnd5e-types
           if (origin.statuses?.has(CONFIG.specialStatusEffects.CONCENTRATING) && origin.getDependents()?.length === 0) {
             // @ts-expect-error duration.remaining
-            if (!installedModules.get("times-up") || (origin?.duration?.remaining ?? 1) > 0) {
+            if ((origin?.duration?.remaining ?? 1) > 0) { // an expired origin is DAE's to remove
               await origin.delete();
             }
           }
@@ -354,25 +257,6 @@ export let readyHooks = async () => {
     return changeFunc();
   })
 
-  Hooks.on("createActiveEffect", (createdEffect, options: any, user) => {
-    if (options.undo) return;
-    if (debugEnabled > 0) console.warn("createActiveEffect", createdEffect, options, user);
-    if (!preferredActiveGM()?.isSelf) return;
-    if (!(createdEffect.parent instanceof CONFIG.Actor.documentClass)) return;
-    if (createdEffect.disabled) return;
-    if (debugEnabled > 0) warn("createActiveEffectHook", createdEffect, createdEffect.parent.name, options);
-    async function changeFunc() {
-      try {
-        await queueConditionUpdateFromCreate(createdEffect, options);
-        return true;
-      } catch (err) {
-        console.warn("Error in createActiveEffect", err, createdEffect, options);
-        return true;
-      }
-    }
-    return changeFunc();
-  })
-
   // Handle deletion of Actors - cascade delete dependents via MidiDependentsRegistry
   Hooks.on("deleteActor", (deletedActor: Actor.Implementation, options: any, user) => {
     if (!preferredActiveGM()?.isSelf) return;
@@ -401,11 +285,27 @@ export let readyHooks = async () => {
     MidiDependentsRegistry.deleteDependents(deletedToken.uuid);
   });
 
-  // Handle deletion of Regions - cascade delete dependents via MidiDependentsRegistry
+  // Handle deletion of non-template Regions — cascade delete dependents via MidiDependentsRegistry.
+  // Template-backed regions are handled by checkDeleteTemplate above (which also cascades under
+  // the MeasuredTemplate UUID for v14 compat — see checkDeleteTemplate).
   Hooks.on("deleteRegion", (deletedRegion: any, options: any, user) => {
     if (!preferredActiveGM()?.isSelf) return;
     if (options.undo) return;
+    if (isTemplateRegion(deletedRegion)) return;
     MidiDependentsRegistry.deleteDependents(deletedRegion.uuid);
+  });
+
+  // A pasted, teleported or duplicated token, actor or scene keeps its embedded ids: re-point dependentOn flags that
+  // still point into the original.
+  Hooks.on("createToken", (token: TokenDocument.Implementation, options, userId: string) => {
+    if (userId === game.user?.id && tokenHasDependents(token)) repointCopiedDependents(token.actor);
+  });
+  Hooks.on("createActor", (actor: Actor.Implementation, options, userId: string) => {
+    if (userId === game.user?.id) repointCopiedDependents(actor);
+  });
+  Hooks.on("createScene", (scene: Scene.Implementation, options, userId: string) => {
+    if (userId !== game.user?.id) return;
+    for (const token of scene.tokens) if (tokenHasDependents(token)) repointCopiedDependents(token.actor);
   });
 
   // Hooks.on("restCompleted", restManager); I think this means 1.6 is required.
@@ -413,19 +313,6 @@ export let readyHooks = async () => {
   Hooks.on("dnd5e.preActivityConsumption", preActivityConsumptionHook);
   Hooks.on("dnd5e.activityConsumption", activityConsumptionHook);
   Hooks.on("dnd5e.rollDeathSave", deathSaveHook);
-  Hooks.on("updateCombat", (combat, update, options, userId) => {
-    if (userId != preferredActiveGM()?.id) return;
-    if (!update.hasOwnProperty("round")) return;
-    if (!checkMechanic("autoRerollInitiative")) return;
-    let combatantIds: any = combat.combatants.map(c => c.id);
-    if (combat.combatants?.size > 0 && combat.id) {
-      const combatId = combat.id;
-      combat.rollInitiative(combatantIds, { updateTurn: true }).then(() => {
-        // Check if combat was deleted during async operation
-        if (game.combats?.get(combatId)) combat.update({ turn: 0 });
-      }).catch(err => TroubleShooter.recordError(err, "autoRerollInitiative"));
-    }
-  });
 }
 
 export async function restManager(actor: Actor.Implementation, result: { longRest: boolean; newDay: boolean }) {
@@ -433,7 +320,9 @@ export async function restManager(actor: Actor.Implementation, result: { longRes
     return;
   const specialDuration = (effect): string[] | undefined => { return foundry.utils.getProperty(effect, "flags.dae.specialDuration") as string[] };
   const effectsToExpire = (actorRef) => {
-    const effects = actorRef.appliedEffects;
+    // the reaction/bonus action markers are removed below, through the actor's effect queue
+    const markers = [getStaticID("reaction"), getStaticID("bonusaction")];
+    const effects = actorRef.appliedEffects.filter(effect => !markers.includes(effect.id));
     const validEffects = effects.filter(effect => (specialDuration(effect) ?? []).length > 0);
     return {
       newDay: validEffects.filter(ef => result.newDay && specialDuration(ef)?.includes(`newDay`)),
@@ -447,26 +336,25 @@ export async function restManager(actor: Actor.Implementation, result: { longRes
   if (!result.longRest && myExpiredEffects.shortRest.length) await expireEffects(actor, myExpiredEffects.shortRest, { "expiry-reason": "midi-qol:shortRest" });
   if (result.newDay && myExpiredEffects.newDay.length) await expireEffects(actor, myExpiredEffects.newDay, { "expiry-reason": "midi-qol:newDay" });
   if (foundry.utils.getProperty(actor, "flags.midi-qol.actions.reactionsReset") !== "never") await removeReactionUsed(actor, true); // remove reaction used for a rest
-  if (foundry.utils.getProperty(actor, "flags.midi-qol.actions.bonusActionsReset") !== "never")
+  if (foundry.utils.getProperty(actor, "flags.midi-qol.actions.bonusActionsReset") !== "never") {
     await removeActionUsed(actor);
+    await removeBonusActionUsed(actor, true);
+  }
 }
 
 export function initHooks() {
+  Hooks.on("getChatMessageContextOptions", addViewAsPlayerOption);
   if (debugEnabled > 0) warn("Init Hooks processing");
   Hooks.on("preCreateChatMessage", (message, data, options, user) => {
     if (debugEnabled > 1) debug("preCreateChatMessage entering", message, data, options, user)
     nsaMessageHandler(message, data, options, user);
     checkOverTimeSaves(message, data, options, user);
-    return true;
-  });
-
-  Hooks.on("createChatMessage", (message, options, user) => {
-    if (debugEnabled > 1) debug("Create Chat Message ", message.id, message, options, user)
-    processCreateDDBGLMessages(message, options, user);
+    whisperRollToPlayer(message);
     return true;
   });
 
   Hooks.on("updateChatMessage", (message, update, options, user) => {
+    Workflow.dropReadOnlyCopy(message.uuid);
     hideRollUpdate(message, update, options, user);
     if (!update.content) return;
     const updateChatMessageStart = Date.now();
@@ -478,15 +366,12 @@ export function initHooks() {
   });
 
 
+  Hooks.on("combatTurnChange", moveRegionsOnTurnChange);
+
   Hooks.on("updateCombat", (combat, data, options, user) => {
     if (data.round === undefined && data.turn === undefined) return;
     untargetAllTokens(combat);
     untargetDeadTokens();
-    if (preferredActiveGM()?.isSelf) {
-      _processOverTime(combat, data, options, user);
-      _processActivityOverTime(combat, data, options, user);
-    }
-    // updateReactionRounds(combat, data, options, user); This is handled in processOverTime
   });
 
   Hooks.on("renderChatMessageHTML", (message, html, data) => {
@@ -496,25 +381,20 @@ export function initHooks() {
     resolveTokenThumbnails(html);
     colorChatMessageHandler(message, html, data);
     hideRollRender(message, html, data);
-    obscureRollRender(message, html, data);
     hideStuffHandler(message, html, data);
     processConcentrationRequestMessage(message, html, data);
   });
 
   /**
-   * Put a still frame in the <img> for an animated token.
-   *
-   * The card stores the video's path rather than a rendered thumbnail: createThumbnail returns a
-   * base64 data URI, and writing that into the message content persisted ~27KB per animated target
-   * for the life of the world. Generating it here costs nothing after the first card — Foundry
-   * caches thumbnails per source in game.video.thumbs.
+   * Put a still frame in the <img> for an animated token. The card carries the video's path rather
+   * than a base64 thumbnail; Foundry caches what this generates in game.video.thumbs.
    */
   async function resolveTokenThumbnails(html: HTMLElement) {
     for (const img of Array.from(html.querySelectorAll<HTMLImageElement>("img[data-midi-video-src]"))) {
       const src = img.dataset.midiVideoSrc;
       if (!src) continue;
       try {
-        const thumb = game.video?.thumbs?.get(src) ?? await game.video?.createThumbnail(src, { width: 100, height: 100 });
+        const thumb = await videoThumbnail(src);
         if (thumb) img.src = thumb;
       } catch (err) {
         // the placeholder portrait already in the src is a fine outcome
@@ -525,6 +405,7 @@ export function initHooks() {
 
   Hooks.on("deleteChatMessage", (message, options, user) => {
     Workflow.deleteWorkflow(message.uuid);
+    Workflow.dropReadOnlyCopy(message.uuid);
     clearUpdatesCache(message.uuid);
   });
 
@@ -558,7 +439,7 @@ export function initHooks() {
       const statusEffect = CONFIG.statusEffects.find(se => se.id === effectIdOrUuid);
       if (statusEffect) {
         // Apply as status effect using toggleStatusEffect
-        await actor.toggleStatusEffect(effectIdOrUuid, { active: true, overlay });
+        await toggleStatus(actor, effectIdOrUuid, { active: true, overlay });
       } else {
         // Assume it's an effect UUID - fetch and apply
         const sourceEffect = await fromUuid(effectIdOrUuid) as ActiveEffect.Implementation | undefined;
@@ -578,7 +459,6 @@ export function initHooks() {
   //           "ActivityMacro", "ActivityMacro.uuid"
   async function executeMacroSpec(macroSpec: string, actor: Actor.Implementation, effect?: ActiveEffect.Implementation): Promise<any> {
     let macro: Macro.Implementation | undefined;
-    let macroData: Macro.CreateData | undefined;
     let macroItem: Item.Implementation | undefined;
     let macroActivity: Activity | undefined;
 
@@ -592,7 +472,6 @@ export function initHooks() {
         // @ts-expect-error no dnd5e-types
         originActivity = origin.system.activities?.contents[0];
       } else if ((origin as any)?.item) {
-        // It's an activity
         originActivity = origin as unknown as Activity;
         originItem = (origin as any).item;
       }
@@ -600,23 +479,15 @@ export function initHooks() {
 
     try {
       if (macroSpec.startsWith("function.")) {
-        // Create a script macro that calls the named function
         const funcName = macroSpec.replace("function.", "").trim();
-        macroData = {
-          name: "replacement effect function call",
-          type: "script",
-          command: `return await ${funcName}({ speaker, actor, token, character, item, args, scope })`
-        };
+        macro = DAE.createSyntheticMacro(
+          `return await ${funcName}({ speaker, actor, token, character, item, args, scope })`,
+          "replacement effect function call"
+        );
         macroItem = originItem;
       } else if (macroSpec.startsWith("Macro.")) {
-        // Get macro by name from game.macros
         const macroName = macroSpec.replace("Macro.", "").trim();
-        macro = game.macros?.getName(macroName);
-        if (!macro) {
-          // Try as UUID
-          const macroEntity = await fromUuid(macroName);
-          if (macroEntity instanceof Macro) macro = macroEntity;
-        }
+        macro = await DAE.resolveWorldMacro(macroName);
         if (!macro) {
           warn(`applyReplacementEffect | Could not find macro ${macroName}`);
           return;
@@ -627,25 +498,23 @@ export function initHooks() {
         }
         macroItem = originItem;
       } else if (macroSpec.startsWith("ItemMacro")) {
-        // Use helper function to resolve ItemMacro
         const resolved = await resolveItemMacro(macroSpec, { actor, originItem });
         if (resolved) {
           macroItem = resolved.item;
-          macroData = resolved.macroData;
-        } else if (effect?.origin) {
-          // DAE itemData fallback - look for item data stored in effect flags
-          const itemData = resolveDAEItemData(actor, effect.origin);
+          macro = DAE.createSyntheticMacro(resolved.macroData.command as string, String(resolved.macroData.name));
+        } else if (effect) {
+          const itemData = DAE.getEffectItemData(effect);
           if (itemData) {
             macroItem = itemData as unknown as Item.Implementation;
-            macroData = itemData.flags?.dae?.macro ?? itemData.flags?.itemacro?.macro;
+            const command = DAE.getItemMacroCommand(itemData);
+            if (command) macro = DAE.createSyntheticMacro(command);
           }
         }
-        if (!macroData) {
+        if (!macro) {
           warn(`applyReplacementEffect | Could not resolve ItemMacro: ${macroSpec}`);
           return;
         }
       } else if (macroSpec.startsWith("ActivityMacro")) {
-        // Use helper function to resolve ActivityMacro
         const resolved = await resolveActivityMacro(macroSpec, { originItem, originActivity });
         if (!resolved) {
           warn(`applyReplacementEffect | Could not resolve ActivityMacro: ${macroSpec}`);
@@ -656,28 +525,11 @@ export function initHooks() {
         macro = resolved.macro;
       }
 
-      // Create macro if we have macroData but no macro
-      if (macroData && !macro) {
-        const OWNER = CONST.DOCUMENT_OWNERSHIP_LEVELS.OWNER;
-        macroData.ownership = { default: OWNER };
-        macroData.author = game.user?.id;
-        macro = new CONFIG.Macro.documentClass(macroData);
-      }
-
       if (!macro?.command) return;
 
-      // Build execution context
       const token = tokenForActor(actor);
-      const speaker = ChatMessage.getSpeaker({ actor, token: token?.document });
       const args = [{ actor, token, effect, item: macroItem, activity: macroActivity, reason: "replacementEffect" }];
-
-      const scope: Macro.UnknownScope = {};
-      scope.actor = actor;
-      scope.token = token;
-      scope.effect = effect;
-      scope.item = macroItem;
-      scope.activity = macroActivity;
-      scope.args = args;
+      const scope: Macro.UnknownScope = { actor, token, effect, item: macroItem, activity: macroActivity, args };
 
       return macro.execute(scope);
     } catch (err) {
@@ -693,8 +545,8 @@ export function initHooks() {
       let effect = fromUuidSync(effectData.uuid) as ActiveEffect.Implementation | undefined;
 
       if (effect) {
-        const saved = workflow.saves.size === 1;
-        const failed = workflow.failedSaves.size === 1;
+        const saved = workflow.saves.count === 1;
+        const failed = workflow.failedSaves.count === 1;
         const { saveCount, saveCountAction, saveConsecutive,
                 failCount, failCountAction, failConsecutive } = effectData;
         const actor = effect.parent as Actor.Implementation;
@@ -795,6 +647,7 @@ export function initHooks() {
   });
 
   Hooks.on("applyActiveEffect", midiCustomEffect);
+  Hooks.on("preCreateActiveEffect", excludeRegionSourceEffect);
   // Hooks.on("preCreateActiveEffect", checkImmunity); Disabled in lieu of having effect marked suppressed
   Hooks.on("preUpdateItem", preUpdateItemActorOnUseMacro);
   Hooks.on("preUpdateActor", preUpdateItemActorOnUseMacro);
@@ -842,7 +695,11 @@ export function initHooks() {
           // await unTimedExecuteAsGM("completeActivityUse", { activityUuid: activity.uuid, actorUuid: actor.uuid, usage: {}, dialog: {}, message: {} });
         }
       }
-      processActivations();
+      processActivations().catch(err => {
+        const errMessage = "Activation Automation | processActivations error";
+        error(errMessage, err);
+        TroubleShooter.recordError(err, errMessage);
+      });
     } catch (err) {
       const errMessage = "Activation Automation | preCreateChatMessage error";
       error(errMessage, err);
@@ -858,7 +715,7 @@ export function initHooks() {
     Hooks.on('tidy5e-sheet.getActivitiesForPlay', (parent, data) => {
       if (data.activities && data.activities instanceof Array) {
         // Filter out automationOnly activities and rider activities
-        // Also filter by canUse to preserve dnd5e visibility settings (level limits, etc.) - fixes #1548
+        // Also filter by canUse to preserve dnd5e visibility settings (level limits, etc.) - fixes https://gitlab.com/tposney/midi-qol/-/issues/1548
         data.activities = data.activities.filter(activity =>
           activity?.canUse !== false &&
           !activity?.midiProperties?.automationOnly &&
@@ -978,8 +835,7 @@ export function initHooks() {
   Hooks.on('dropCanvasData', function (canvas, dropData: any) {
     if (!dragDropTargeting) return true;
     if (dropData.type !== "Item") return true;
-    if (!canvas.grid?.grid) return;
-    let grid_size = canvas.scene?.grid.size ?? 100;
+    if (!canvas.grid) return true;
     // This will work for all grids except gridless
     // TODO: swap to `getTopLeftPoint` - should simplify some
     let coords = { x: dropData.x, y: dropData.y };
@@ -1007,15 +863,8 @@ export function initHooks() {
     return true;
   })
 
-  // Set dnd5e version flag and register version-appropriate damage hooks
-  setDnd5e53(foundry.utils.isNewerVersion(game.system.version, "5.2.99"));
-  if (isDnd5e53) {
-    Hooks.on("dnd5e.preCalculateDamage", preCalculateDamageHandler_53);
-    Hooks.on("dnd5e.calculateDamage", calculateDamageHandler_53);
-  } else {
-    Hooks.on("dnd5e.preCalculateDamage", preCalculateDamageHandler);
-    Hooks.on("dnd5e.calculateDamage", calculateDamageHandler);
-  }
+  Hooks.on("dnd5e.preCalculateDamage", preCalculateDamageHandler);
+  Hooks.on("dnd5e.calculateDamage", calculateDamageHandler);
 }
 
 export function setupHooks() {
@@ -1146,32 +995,30 @@ const CUSTOM_RESISTANCE_MATCHERS: Record<string, { match: DamagePredicate; label
   },
 };
 
+/** A DR key's matcher: a custom type above, else an activity type (save, other, util…) matching damage from such activities. */
+function drMatcher(special: string): { match: DamagePredicate; label: string } | undefined {
+  if (CUSTOM_RESISTANCE_MATCHERS[special]) return CUSTOM_RESISTANCE_MATCHERS[special];
+  const actionTypes = GameSystemConfig.itemActionTypes as Record<string, string>;
+  if (special === "heal" || !actionTypes?.[special]) return undefined;
+  return { match: (d) => d.properties?.has(special) ?? false, label: actionTypes[special] };
+}
+
 function isDRType(type: string): boolean {
   return ["none", "midi-none"].includes(type);
 }
 
 /**
- * Set a boolean flag on damage.active in the version-appropriate structure.
- * On dnd5e 5.3+, flags are nested under `type` or `all` (e.g., `active.type.resistance`).
- * On dnd5e 5.2.x, flags are flat (e.g., `active.resistance`).
- * `multiplier` and `threshold` remain flat in both versions — do NOT use this for those.
+ * Set a boolean flag on damage.active, nested under `type` or `all` (e.g. `active.type.resistance`).
+ * `multiplier` and `threshold` are flat — do NOT use this for those.
  */
 function setDamageActiveFlag(damage: DamageDescription, flag: string, scope: "type" | "all" = "type"): void {
   damage.active ??= {};
-  if (isDnd5e53) {
-    damage.active[scope] ??= {};
-    damage.active[scope]![flag] = true;
-  } else {
-    damage.active[flag] = true;
-  }
+  damage.active[scope] ??= {};
+  damage.active[scope]![flag] = true;
 }
 
-/** Read a boolean flag from damage.active in the version-appropriate structure. */
 function getDamageActiveFlag(damage: DamageDescription, flag: string): boolean {
-  if (isDnd5e53) {
-    return !!(damage.active?.type?.[flag] || damage.active?.all?.[flag]);
-  }
-  return !!damage.active?.[flag];
+  return !!(damage.active?.type?.[flag] || damage.active?.all?.[flag]);
 }
 
 function shouldDowngrade(options: DamageApplicationOptions, type: string): boolean {
@@ -1245,38 +1092,42 @@ function computeSourceIgnores({ actor, sourceActor, damages, options }: DamageCa
   options.midiIgnoreComputed = true;
 }
 
+/** Other damage applies only where its source's condition matched the target (set by midi's tray, which lists it for all). */
+function dropUnmatchedOtherDamage({ damages, options }: DamageCalcParams): void {
+  const mo = options.midi;
+  if (!mo) return;
+  for (const damage of damages) {
+    if ((damage.midiAmmunition ? mo.ammunitionApplies : mo.otherApplies) === false) damage.value = 0;
+  }
+}
+
 function applySaves({ damages, options }: DamageCalcParams): void {
   const mo = options.midi;
   if (!mo || options.ignore === true) return;
 
   for (const damage of damages) {
     if (isDRType(damage.type)) continue;
-    // Other damage carries its own multiplier - all categories share one calculateDamage call.
-    const entrySaveMultiplier = damage.midiSaveMultiplier ?? mo.saveMultiplier;
+    // What a successful save does to this damage; other and ammunition damage carry their own.
+    const onSave = damage.midiSaveMultiplier ?? (damage.midiAmmunition ? mo.ammunitionSaveMultiplier : undefined) ?? mo.saveMultiplier ?? 1;
+    // Super Saver (Evasion) and Semi Super Saver change only damage the save halves.
+    const halvedBySave = onSave === configSettings.defaultSaveMult;
+    const saved = mo.saved && !shouldIgnore(options, "saved", damage.type);
+    const superSaver = mo.superSaver && halvedBySave && !shouldIgnore(options, "superSaver", damage.type);
+    const semiSuperSaver = !superSaver && mo.semiSuperSaver && halvedBySave && !shouldIgnore(options, "semiSuperSaver", damage.type);
 
-    const ignoringSuperSaver = mo.superSaver && shouldIgnore(options, "superSaver", damage.type);
-    const ignoringSemiSuperSaver = mo.semiSuperSaver && shouldIgnore(options, "semiSuperSaver", damage.type);
-    const ignoringSaved = mo.saved && shouldIgnore(options, "saved", damage.type);
-
-    if (mo.superSaver && !ignoringSuperSaver) {
+    let multiplier = 1;
+    if (superSaver) {
       setDamageActiveFlag(damage, "superSaver");
-    }
-    if (mo.semiSuperSaver && !ignoringSemiSuperSaver && (entrySaveMultiplier ?? 1) !== 1) {
+      multiplier = saved ? 0 : configSettings.defaultSaveMult;
+    } else if (semiSuperSaver) {
       setDamageActiveFlag(damage, "semiSuperSaver");
-    }
-    if (mo.saved && !ignoringSaved && (entrySaveMultiplier ?? 1) !== 1) {
-      setDamageActiveFlag(damage, "saved");
-    }
+      multiplier = saved ? 0 : 1;
+    } else if (saved) multiplier = onSave;
+    if (saved && onSave !== 1) setDamageActiveFlag(damage, "saved");
 
-    if (mo.saved && !ignoringSaved) {
-      const multiplier = ignoringSuperSaver
-        ? configSettings.defaultSaveMultiplier
-        : (mo.superSaver ? 0 : (entrySaveMultiplier ?? 1));
+    if (multiplier !== 1) {
       damage.value = damage.value * multiplier;
       foundry.utils.setProperty(damage, "active.multiplier", (damage.active?.multiplier ?? 1) * multiplier);
-    } else if (mo.superSaver && !ignoringSuperSaver) {
-      damage.value = damage.value * configSettings.defaultSaveMultiplier;
-      foundry.utils.setProperty(damage, "active.multiplier", (damage.active?.multiplier ?? 1) * configSettings.defaultSaveMultiplier);
     }
   }
 }
@@ -1290,97 +1141,11 @@ function applyUncannyDodge({ actor, damages, options }: DamageCalcParams): void 
 
   for (const damage of damages) {
     if (shouldIgnore(options, "uncannyDodge", damage.type, actorTraits, true)) continue;
+    if (isAbsorbed(actorTraits, damage, options)) continue;
     setDamageActiveFlag(damage, "uncannyDodge");
     //@ts-expect-error multiplier exists
     foundry.utils.setProperty(damage, "multiplier", (damage.multiplier ?? 1) * 0.5);
     damage.value = damage.value * 0.5;
-  }
-}
-
-function applyTraitMultipliers({ actor, damages, options }: DamageCalcParams): void {
-  if (options.midi?.noCalc) return;
-
-  //@ts-expect-error no dnd5e types
-  const actorTraits = actor.system?.traits ?? {};
-
-  for (const damage of damages) {
-    if (damage.active?.resistance) {
-      damage.value = damage.value * 2 * configSettings.damageResistanceMultiplier;
-      damage.active.multiplier = (damage.active.multiplier ?? 1) * 2 * configSettings.damageResistanceMultiplier;
-    }
-    if (damage.active?.vulnerability) {
-      damage.active.multiplier = (damage.active.multiplier ?? 1) / 2 * configSettings.damageVulnerabilityMultiplier;
-      damage.value = damage.value / 2 * configSettings.damageVulnerabilityMultiplier;
-    }
-    const absorptionValue = actorTraits.da?.[damage.type];
-    if (absorptionValue !== undefined && !shouldIgnore(options, "absorption", damage.type, actorTraits)) {
-      const multiplier = Number(absorptionValue) ?? -1;
-      damage.active ??= {};
-      damage.active.multiplier = (damage.active.multiplier ?? 1) * multiplier;
-      damage.value *= multiplier;
-      damage.damage = damage.value;
-      damage.active.absorption = true;
-    }
-  }
-}
-
-function applyCustomResistances({ actor, damages, options }: DamageCalcParams): void {
-  const categories = { di: "immunity", dr: "resistance", dv: "vulnerability", da: "absorption" };
-  const traitMultipliers = {
-    dr: configSettings.damageResistanceMultiplier,
-    di: configSettings.damageImmunityMultiplier,
-    da: -1,
-    dv: configSettings.damageVulnerabilityMultiplier,
-  };
-
-  //@ts-expect-error no dnd5e types
-  const actorTraits = actor.system?.traits ?? {};
-
-  for (const trait of ["da", "dv", "di", "dr"] as const) {
-    const traitData = actorTraits[trait];
-    if (!traitData) continue;
-
-    const bypasses = traitData.bypasses ?? new Set();
-    const customs = [
-      ...((traitData.custom ?? "").split(";").map((s: string) => s.trim())),
-      ...Object.keys(traitData.midi ?? {}),
-    ].filter((c: string) => c !== "");
-
-    for (let custom of customs) {
-      const normalizedCustom = Object.keys(GameSystemConfig.customDamageResistanceTypes ?? {})
-        .find(key => (GameSystemConfig.customDamageResistanceTypes[key] as string).toLowerCase() === custom.toLowerCase()) ?? custom;
-
-      const matcher = CUSTOM_RESISTANCE_MATCHERS[custom] ?? CUSTOM_RESISTANCE_MATCHERS[normalizedCustom];
-
-      for (const damage of damages) {
-        if (damage.type === "midi-none") continue;
-        if (GameSystemConfig.healingTypes[damage.type]) continue;
-        if (damage.active?.[categories[trait]]) continue;
-        if (damage.active?.[custom]) continue;
-        if (shouldIgnore(options, categories[trait], damage.type, actorTraits)) continue;
-        if (shouldIgnore(options, custom, damage.type, actorTraits)) continue;
-
-        const matches = matcher
-          ? matcher.match(damage, bypasses)
-          : damage.properties?.has(custom);
-
-        if (!matches) continue;
-
-        damage.active ??= {};
-        damage.active[GameSystemConfig.customDamageResistanceTypes?.[normalizedCustom] ?? custom] = true;
-        damage.active[categories[trait]] = true;
-
-        let multiplier = traitMultipliers[trait];
-        const daOverride = actorTraits.da?.midi?.[custom] ?? actorTraits.da?.midi?.all;
-        if (daOverride && Number.isNumeric(daOverride)) {
-          multiplier = Number(daOverride);
-        }
-
-        damage.active.multiplier = (damage.active.multiplier ?? 1) * multiplier;
-        damage.value = damage.value * multiplier;
-        damage.damage = damage.value;
-      }
-    }
   }
 }
 
@@ -1405,7 +1170,7 @@ function applyDamageReduction({ actor, damages, options }: DamageCalcParams): bo
   const selectDamages = (predicate: (d: DamageDescription, bypasses?: Set<string>) => boolean): number => {
     const bypasses = actorTraits.dm?.bypasses ?? new Set();
     return damages.reduce((total, damage) => {
-      if (damage.value === 0 || isDRType(damage.type)) return total;
+      if (damage.value === 0 || isDRType(damage.type) || isAbsorbed(actorTraits, damage, options)) return total;
       return total + (predicate(damage, bypasses) ? damage.value : 0);
     }, 0);
   };
@@ -1420,7 +1185,7 @@ function applyDamageReduction({ actor, damages, options }: DamageCalcParams): bo
 
     if (!dm) continue;
 
-    const matcher = CUSTOM_RESISTANCE_MATCHERS[special];
+    const matcher = drMatcher(special);
     let selectedDamage: number;
     let dmActive = "";
 
@@ -1451,7 +1216,7 @@ function applyDamageReduction({ actor, damages, options }: DamageCalcParams): bo
 
   const { totalDamage } = damages.reduce((acc, d) => {
     if (d.type === "temphp") acc.temp += d.value;
-    else if (d.type !== "midi-none" && d.type !== "vitality") acc.totalDamage += d.value;
+    else if (d.type !== "midi-none" && d.type !== "vitality" && !isAbsorbed(actorTraits, d, options)) acc.totalDamage += d.value;
     return acc;
   }, { totalDamage: 0, temp: 0 });
 
@@ -1499,7 +1264,7 @@ function applyDamageReductionInline(
   function distributeProportionally(drLabel: string, drAmount: number, predicate: (d: DamageDescription, bypasses?: Set<string>) => boolean): number {
     const bypasses = actorTraits.dm?.bypasses ?? new Set();
     const matching = damages.filter(d =>
-      d.value > 0 && !isDRType(d.type) && !GameSystemConfig.healingTypes[d.type] && predicate(d, bypasses)
+      d.value > 0 && !isDRType(d.type) && !GameSystemConfig.healingTypes[d.type] && !isAbsorbed(actorTraits, d, options) && predicate(d, bypasses)
     );
     const totalMatching = matching.reduce((sum, d) => sum + d.value, 0);
     if (totalMatching <= 0 || drAmount >= 0) return 0;
@@ -1534,12 +1299,12 @@ function applyDamageReductionInline(
     for (const special of specificSpecials) {
       const dm = computeDR(special);
       if (!dm) continue;
-      const matcher = CUSTOM_RESISTANCE_MATCHERS[special];
+      const matcher = drMatcher(special);
       if (!matcher) continue;
 
       const bypasses = actorTraits.dm?.bypasses ?? new Set();
       const selectedDamage = damages
-        .filter(d => d.value > 0 && !isDRType(d.type) && !GameSystemConfig.healingTypes[d.type] && matcher.match(d, bypasses))
+        .filter(d => d.value > 0 && !isDRType(d.type) && !GameSystemConfig.healingTypes[d.type] && !isAbsorbed(actorTraits, d, options) && matcher.match(d, bypasses))
         .reduce((sum, d) => sum + d.value, 0);
 
       const effectiveImpact = Math.min(Math.abs(dm), selectedDamage);
@@ -1560,7 +1325,7 @@ function applyDamageReductionInline(
     for (const special of specificSpecials) {
       const dm = computeDR(special);
       if (!dm) continue;
-      const matcher = CUSTOM_RESISTANCE_MATCHERS[special];
+      const matcher = drMatcher(special);
       if (!matcher) continue;
 
       const applied = distributeProportionally(special, dm, (d, bypasses) => matcher.match(d, bypasses));
@@ -1578,7 +1343,7 @@ function applyDamageReductionInline(
       if (useMaxDR) {
         // Compare effective impact of "all" against already-applied specific DR
         const remaining = damages
-          .filter(d => d.value > 0 && !isDRType(d.type) && !GameSystemConfig.healingTypes[d.type])
+          .filter(d => d.value > 0 && !isDRType(d.type) && !GameSystemConfig.healingTypes[d.type] && !isAbsorbed(actorTraits, d, options))
           .reduce((sum, d) => sum + d.value, 0);
         const allImpact = Math.min(Math.abs(dm), remaining);
 
@@ -1620,53 +1385,51 @@ function applyDamageReductionInline(
   return true;
 }
 
-function recalculateTotals({ damages }: DamageCalcParams): void {
-  //@ts-expect-error amount exists on damages array
-  damages.amount = 0;
-  //@ts-expect-error temp exists on damages array
-  damages.temp = 0;
+// --- dnd5e calculateDamage hooks ---
 
+/** Whether the Damage Absorption trait's types (or "ALL", which excludes healing) cover this damage, unless bypassed. */
+function absorbsType(absorption: { value?: Set<string>, bypasses?: Set<string> } | undefined, damage: DamageDescription): boolean {
+  const types = absorption?.value;
+  if (!(types instanceof Set)) return false;
+  if (!types.has(damage.type) && !(types.has("ALL") && !GameSystemConfig.healingTypes[damage.type])) return false;
+  const bypasses = absorption?.bypasses;
+  return !(GameSystemConfig.damageTypes[damage.type]?.isPhysical && bypasses?.size
+    && [...(damage.properties ?? [])].some(property => bypasses.has(property)));
+}
+
+/** Whether the actor's Damage Absorption trait heals this damage (and the source doesn't ignore absorption). */
+type AbsorptionTraits = { da?: { value?: Set<string>; bypasses?: Set<string>; [type: string]: unknown } };
+function isAbsorbed(actorTraits: AbsorptionTraits, damage: DamageDescription, options: DamageApplicationOptions): boolean {
+  if (isDRType(damage.type) || damage.type === "midi-none" || GameSystemConfig.healingTypes[damage.type]) return false;
+  if (actorTraits.da?.[damage.type] === undefined && !absorbsType(actorTraits.da, damage)) return false;
+  return !shouldIgnore(options, "absorption", damage.type, actorTraits);
+}
+
+/**
+ * Absorption heals by the damage dealt (the published absorbers are also immune to the type), so the target's own
+ * reductions must not shrink it. Noted before dnd5e's calculation and restored after it, see restoreAbsorbedDamage.
+ */
+function noteAbsorbedDamage({ actor, damages, options }: DamageCalcParams): void {
+  //@ts-expect-error no dnd5e types
+  const actorTraits = actor.system?.traits ?? {};
   for (const damage of damages) {
-    if (damage.active?.inlined) continue;
-    if (damage.type === "temphp") {
-      //@ts-expect-error
-      damages.temp += damage.value;
-    } else {
-      //@ts-expect-error
-      damages.amount += damage.value;
-    }
-  }
-
-  //@ts-expect-error
-  damages.amount = damages.amount > 0 ? Math.floor(damages.amount) : Math.ceil(damages.amount);
-
-  //@ts-expect-error
-  if (damages.amount < 0) {
-    for (const damage of damages) {
-      if (damage.type === "none" && damage.active?.DR && !damage.active?.inlined) {
-        //@ts-expect-error
-        damage.value -= damages.amount;
-        //@ts-expect-error
-        damages.amount = 0;
-        break;
-      }
-    }
+    if (isAbsorbed(actorTraits, damage, options)) damage.midiAbsorbed = { value: damage.value, active: foundry.utils.deepClone(damage.active ?? {}) };
+    else delete damage.midiAbsorbed;
   }
 }
 
-function calculateTotalDamage({ damages, options }: DamageCalcParams): number {
-  return damages.reduce((total, damage) => {
-    if (damage.active?.inlined) return total;
-    let value = damage.value;
-    if (options.invertHealing !== false && damage.type === "healing") value = -value;
-    if (damage.type === "temphp" || damage.type === "midi-none") value = 0;
-    return total + value;
-  }, 0);
+/** Undo dnd5e's modification, immunity, resistance and vulnerability on absorbed damage; the card's multiplier still applies. */
+function restoreAbsorbedDamage({ damages, options }: DamageCalcParams): void {
+  const multiplier = options.multiplier ?? 1;
+  for (const damage of damages) {
+    if (!damage.midiAbsorbed) continue;
+    damage.value = damage.midiAbsorbed.value * multiplier;
+    damage.active = foundry.utils.deepClone(damage.midiAbsorbed.active ?? {});
+    damage.active.multiplier = (damage.active.multiplier ?? 1) * multiplier;
+  }
 }
 
-// --- dnd5e 5.3+ variants ---
-
-function applyTraitMultipliers_53({ actor, damages, options }: DamageCalcParams): void {
+function applyTraitMultipliers({ actor, damages, options }: DamageCalcParams): void {
   if (options.midi?.noCalc) return;
 
   //@ts-expect-error no dnd5e types
@@ -1685,7 +1448,7 @@ function applyTraitMultipliers_53({ actor, damages, options }: DamageCalcParams)
       damage.active.multiplier = (damage.active.multiplier ?? 1) / 2 * configSettings.damageVulnerabilityMultiplier;
       damage.value = damage.value / 2 * configSettings.damageVulnerabilityMultiplier;
     }
-    const absorptionValue = actorTraits.da?.[damage.type];
+    const absorptionValue = actorTraits.da?.[damage.type] ?? (absorbsType(actorTraits.da, damage) ? -1 : undefined);
     if (absorptionValue !== undefined && !shouldIgnore(options, "absorption", damage.type, actorTraits)) {
       const multiplier = Number(absorptionValue) ?? -1;
       damage.active ??= {};
@@ -1697,7 +1460,7 @@ function applyTraitMultipliers_53({ actor, damages, options }: DamageCalcParams)
   }
 }
 
-function applyCustomResistances_53({ actor, damages, options }: DamageCalcParams): void {
+function applyCustomResistances({ actor, damages, options }: DamageCalcParams): void {
   const categories = { di: "immunity", dr: "resistance", dv: "vulnerability", da: "absorption" };
   const traitMultipliers = {
     dr: configSettings.damageResistanceMultiplier,
@@ -1728,6 +1491,7 @@ function applyCustomResistances_53({ actor, damages, options }: DamageCalcParams
       for (const damage of damages) {
         if (damage.type === "midi-none") continue;
         if (GameSystemConfig.healingTypes[damage.type]) continue;
+        if (trait !== "da" && damage.midiAbsorbed) continue;
         // Check nested (dnd5e 5.3+) active keys using helper
         if (getDamageActiveFlag(damage, categories[trait])) continue;
         if (getDamageActiveFlag(damage, custom)) continue;
@@ -1758,7 +1522,7 @@ function applyCustomResistances_53({ actor, damages, options }: DamageCalcParams
   }
 }
 
-function recalculateTotals_53({ damages }: DamageCalcParams): void {
+function recalculateTotals({ damages }: DamageCalcParams): void {
   //@ts-expect-error amount exists on damages array
   damages.amount = 0;
   //@ts-expect-error temp exists on damages array
@@ -1797,7 +1561,7 @@ function recalculateTotals_53({ damages }: DamageCalcParams): void {
   }
 }
 
-function calculateTotalDamage_53({ damages, options }: DamageCalcParams): number {
+function calculateTotalDamage({ damages, options }: DamageCalcParams): number {
   return damages.reduce((total, damage) => {
     if (damage.active?.inlined) return total;
     let value = damage.value;
@@ -1818,6 +1582,7 @@ function preCalculateDamageHandler(actor: Actor.Implementation, damages: DamageD
 
     const saveDROrder = configSettings.saveDROrder;
     computeSourceIgnores(params);
+    dropUnmatchedOtherDamage(params);
     applyUncannyDodge(params);
 
     // Apply saves and/or DR based on order setting
@@ -1830,6 +1595,7 @@ function preCalculateDamageHandler(actor: Actor.Implementation, damages: DamageD
       }
     }
 
+    noteAbsorbedDamage(params);
     foundry.utils.setProperty(options, "midi.totalDamage", calculateTotalDamage(params));
     if (Hooks.call("midi-qol.dnd5ePreCalculateDamage", actor, damages, options) === false) return false;
   } catch (err) {
@@ -1850,6 +1616,7 @@ function calculateDamageHandler(actor: Actor.Implementation, damages: DamageDesc
     const params = { actor, sourceActor, damages, options };
 
     const saveDROrder = configSettings.saveDROrder;
+    restoreAbsorbedDamage(params);
 
     // Apply saves if not already done
     if (saveDROrder === "DRSaveDr") {
@@ -1865,71 +1632,6 @@ function calculateDamageHandler(actor: Actor.Implementation, damages: DamageDesc
     }
 
     recalculateTotals(params);
-    if (Hooks.call("midi-qol.dnd5eCalculateDamage", actor, damages, options) === false) return false;
-  } catch (err) {
-    error(err);
-  }
-  return true;
-}
-
-function preCalculateDamageHandler_53(actor: Actor.Implementation, damages: DamageDescription[], options: DamageApplicationOptions) {
-  try {
-    if (options.midi?.noCalc) return true;
-
-    const sourceActor = options.midi?.sourceActorUuid
-      ? fromUuidSync(options.midi.sourceActorUuid) as Actor.Implementation | undefined
-      : undefined;
-    const params = { actor, sourceActor, damages, options };
-
-    const saveDROrder = configSettings.saveDROrder;
-    computeSourceIgnores(params);
-    applyUncannyDodge(params);
-
-    // Apply saves and/or DR based on order setting
-    if (saveDROrder === "DRSaveDr") {
-      if (!applyDamageReduction(params)) return false;
-    } else if (["SaveDrDR", "SaveDRDr"].includes(saveDROrder)) {
-      applySaves(params);
-      if (saveDROrder === "SaveDRDr") {
-        if (!applyDamageReduction(params)) return false;
-      }
-    }
-
-    foundry.utils.setProperty(options, "midi.totalDamage", calculateTotalDamage_53(params));
-    if (Hooks.call("midi-qol.dnd5ePreCalculateDamage", actor, damages, options) === false) return false;
-  } catch (err) {
-    const message = `Error in preCalculateDamage`;
-    error(message, err);
-    TroubleShooter.recordError(err, message);
-  }
-  return true;
-}
-
-function calculateDamageHandler_53(actor: Actor.Implementation, damages: DamageDescription[], options: DamageApplicationOptions) {
-  try {
-    if (options.midi?.noCalc) return true;
-
-    const sourceActor = options.midi?.sourceActorUuid
-      ? fromUuidSync(options.midi.sourceActorUuid) as Actor.Implementation | undefined
-      : undefined;
-    const params = { actor, sourceActor, damages, options };
-
-    const saveDROrder = configSettings.saveDROrder;
-
-    // Apply saves if not already done
-    if (saveDROrder === "DRSaveDr") {
-      applySaves(params);
-    }
-
-    applyTraitMultipliers_53(params);
-    applyCustomResistances_53(params);
-
-    // Apply DR if not already done
-    if (saveDROrder === "SaveDrDR") {
-      if (!applyDamageReduction(params)) return false;
-    }
-
-    recalculateTotals_53(params);
     if (Hooks.call("midi-qol.dnd5eCalculateDamage", actor, damages, options) === false) return false;
   } catch (err) {
     error(err);
@@ -2021,123 +1723,128 @@ Hooks.on("dnd5e.rollConcentration", (rolls, { subject }) => {
   }
 });
 
-// Set midi-qol flags on activity templates for use during preview and placement.
-// When constrainTemplatePlacement is enabled:
-// - Sets sourceTokenUuid for all templates
-// - Sets maxRange for templates with limited range (clamps placement during preview)
-// - Sets anchorToToken for cone/ray templates with range Self/None
-Hooks.on("dnd5e.preCreateActivityTemplate", (activity, templateData) => {
-  templateData.distance! += 0.000001; // Make the template fractionally larger to avoid rounding errors
+
+
+// v14: preCreateMeasuredTemplate does NOT fire after the compat layer creates a Region.
+// preCreateRegion fires instead. Filter for template-backed regions and run the same range validation.
+/*
+ * Stamp midi's flags onto activity template regions before they are created.
+ *
+ * This is where `dnd5e.preCreateActivityTemplate` used to do it. That hook fires only from the
+ * deprecated `AbilityTemplate`; `dnd5e.createMeasuredTemplate` is the 6.0 equivalent and receives
+ * the region data `TemplatePlacement.fromActivity` is about to create. `preCreateRegion` below
+ * reads both of these back to enforce the range limit.
+ */
+/*
+ * Hand midi's placement constraints to `TemplatePlacement` before the placement UI runs.
+ *
+ * `_place` is wrapped (patching.ts) to apply them while the template is dragged; this is where the
+ * values come from. Putting them on the config keeps the wrapper free of activity lookups.
+ */
+Hooks.on("dnd5e.preCreateMeasuredTemplate", (activity, placementConfig: Record<string, unknown>) => {
+  placementConfig.activity = activity;
+  const flags = midiTemplateFlags(activity);
+  if (flags.maxRange !== undefined) placementConfig.midiMaxRange = flags.maxRange;
 
   if (!configSettings.constrainTemplatePlacement) return true;
-
-  // Get the caster's token and store its UUID for later use
-  const actor = activity.actor;
-  const token = actor ? tokenForActor(actor) : undefined;
-  if (token) {
-    foundry.utils.setProperty(templateData, "flags.midi-qol.sourceTokenUuid", token.document.uuid);
-  }
-
+  // Cones and rays with no meaningful range originate from the caster's own border.
+  const shapeType = GameSystemConfig.areaTargetTypes?.[activity.target?.template?.type]?.template;
   const range = activity.range;
-  const rangeUnits = range?.units;
+  const units = range?.units;
+  const isSelfRange = units === "self" || units === "none"
+    || (!range?.value && !range?.long && units !== "touch");
+  if (isSelfRange && (shapeType === "cone" || shapeType === "ray")) placementConfig.midiAnchorToToken = true;
+  // A cube originating from the caster has a face against the caster's space (Thunderwave)
+  if (isSelfRange && shapeType === "rect") placementConfig.midiCubeAgainstToken = true;
+  return true;
+});
 
-  // Calculate and store max range for templates that should be range-limited
-  // Only set maxRange for range types that should be limited (not self/none/any)
-  if (rangeUnits && rangeUnits !== "self" && rangeUnits !== "none" && rangeUnits !== "any") {
-    let maxRange = range.long || range.value;
-    if (maxRange && maxRange > 0) {
-      if (rangeUnits === "touch") maxRange = canvas?.dimensions?.distance ?? 5;
-      else maxRange = rangeToSceneUnits(maxRange, rangeUnits);
-      foundry.utils.setProperty(templateData, "flags.midi-qol.maxRange", maxRange);
+Hooks.on("dnd5e.createMeasuredTemplate", (activity, regionData: Record<string, any>[]) => {
+  const flags = midiTemplateFlags(activity);
+  for (const data of regionData) {
+    for (const [key, value] of Object.entries(flags)) foundry.utils.setProperty(data, `flags.${MODULE_ID}.${key}`, value);
+    if (Number.isFinite(data.elevation?.bottom)) {
+      // A height dnd5e (or the placement) gave the region stands: only kept within its level
+      data.elevation = clampTemplateElevation({ topInclusive: true, top: null, ...data.elevation }, data.levels?.[0]);
+      continue;
     }
-  }
-
-  // Check if this template should be anchored to the caster's token
-  // Cones and rays with range self/none/0 should be anchored
-  const templateType = templateData.t;
-  if (templateType === "cone" || templateType === "ray") {
-    const isSelfRange = rangeUnits === "self"
-      || rangeUnits === "none"
-      || (!range?.value && !range?.long && rangeUnits !== "touch");
-
-    if (isSelfRange) {
-      foundry.utils.setProperty(templateData, "flags.midi-qol.anchorToToken", true);
-    }
+    const placed = templateElevation(activity, data.shapes?.[0], data.levels?.[0], data.attachment?.token);
+    if (!placed) continue;
+    data.elevation = { ...data.elevation, ...placed.elevation };
+    foundry.utils.setProperty(data, `flags.${MODULE_ID}.band`, true);
+    if (placed.area) foundry.utils.setProperty(data, `flags.${MODULE_ID}.area`, placed.area);
+    foundry.utils.setProperty(data, `flags.${MODULE_ID}.reach`, placed.reach);
   }
   return true;
 });
 
-// Check template placement range - prevent placing templates beyond the activity's range
-// This is a safety check - the preview movement should already clamp position within range
-Hooks.on("preCreateMeasuredTemplate", (templateDoc: MeasuredTemplateDocument.Implementation, templateData: MeasuredTemplateDocument.CreateData, options: object, userId: string) => {
+// A banded area that follows a token: core moves it with the token, shifting its band and changing its level. Measure it
+// again from the token and keep it within the new level (core's shift keeps a band clipped by the old floor or ceiling).
+Hooks.on("updateRegion", (region: RegionDocument.Implementation, changes: Record<string, unknown>) => {
+  if (!("elevation" in changes || "levels" in changes || "attachment" in changes)) return;
+  if (!preferredActiveGM()?.isSelf) return;
+  const placed = attachedRegionBand(region);
+  if (!placed) return;
+  const { bottom, top, topInclusive } = region._source.elevation as { bottom: number | null, top: number | null, topInclusive: boolean };
+  const wanted = placed.elevation;
+  if (bottom === wanted.bottom && top === wanted.top && topInclusive === wanted.topInclusive) return;
+  region.update({ elevation: wanted } as RegionDocument.UpdateData).catch(err => console.warn("midi-qol | attached area elevation", err));
+});
+
+Hooks.on("preCreateRegion", (regionDoc, regionData, options, userId) => {
+  if (!isTemplateRegion(regionData)) return true;
   if (userId !== game.user?.id) return true;
 
-  // Use pre-set midi-qol flags from preCreateActivityTemplate hook
-  const midiFlags = templateDoc.flags?.[MODULE_ID] as { maxRange?: number, sourceTokenUuid?: string } | undefined;
+  const midiFlags = regionDoc.flags?.[MODULE_ID] as { maxRange?: number, sourceTokenUuid?: string } | undefined;
   const maxRange = midiFlags?.maxRange;
   if (!maxRange) return true;
 
   const sourceTokenUuid = midiFlags?.sourceTokenUuid;
   if (!sourceTokenUuid) return true;
 
-  // Get the source token
   const tokenDoc = fromUuidSync(sourceTokenUuid) as TokenDocument.Implementation | null;
   const token = tokenDoc?.object;
   if (!token) return true;
 
-  // Calculate raw grid distance from token perimeter to template position
-  const templateX = templateDoc.x;
-  const templateY = templateDoc.y;
+  // Reconstruct template position from the first region shape
+  const shape = regionDoc.shapes?.at?.(0) as any;
+  if (!shape) return true;
+  const templateX = shape.x as number | undefined;
+  const templateY = shape.y as number | undefined;
   if (templateX === undefined || templateY === undefined) return true;
 
   const poly = getTokenPerimeterPolygon(token);
   const closest = closestPointOnPerimeter(poly, templateX, templateY);
   const distance = measurePointDistance(closest, { x: templateX, y: templateY });
-  // Allow half a grid square tolerance for grid snapping moving the position slightly beyond range
   const tolerance = (canvas?.dimensions?.distance ?? 5) / 2;
   if (distance <= maxRange + tolerance) return true;
 
-  // Out of range - notify and cancel
   ui.notifications?.warn(i18n("midi-qol.TemplateOutOfRange"));
   return false;
 });
+
+// Midi's Shift+Alt+Ctrl forced normal roll, for every d20 roll. The V2 hooks fire after midi's own pre-roll hooks,
+// which still read the keys (Roll Toggle, the dialog's default button); death saves are not a d20Test.
+Hooks.on("dnd5e.preRollD20TestV2", (config, dialog) => releaseForcedNormalKeys(config, dialog));
+Hooks.on("dnd5e.preRollDeathSaveV2", (config, dialog) => releaseForcedNormalKeys(config, dialog));
 
 // insert midi initiative changes into the initiative config.
 Hooks.on("dnd5e.preConfigureInitiative", (actor, rollConfig) => {
   let { parts, data, options } = rollConfig;
   //@ts-expect-error no dnd5e-types
-  const init: string = actor.system.attributes.init.value ?? "dex";
-  const conditionData = createConditionData({ workflow: undefined, target: undefined, actor: actor });
-
-  // Check for advantage
-  if (evalAllConditions(actor, "flags.midi-qol.advantage.all", conditionData)
-    || evalAllConditions(actor, "flags.midi-qol.advantage.check.all", conditionData)
-    || evalAllConditions(actor, `flags.midi-qol.advantage.check.${init}`, conditionData)
-    || evalAllConditions(actor, `flags.${game.system?.id}.initiativeAdv`, conditionData)) {
-    options.advantage ||= true;
-  }
-
-  // Check for disadvantage
-  if (evalAllConditions(actor, "flags.midi-qol.disadvantage.all", conditionData)
-    || evalAllConditions(actor, "flags.midi-qol.disadvantage.check.all", conditionData)
-    || evalAllConditions(actor, `flags.midi-qol.disadvantage.check.${init}`, conditionData)
-    || evalAllConditions(actor, `flags.${game.system?.id}.initiativeDisadv`, conditionData)) {
-    options.disadvantage ||= true;
-  }
-
-  // Check for noAdvantage (prevents advantage)
-  if (evalAllConditions(actor, "flags.midi-qol.noAdvantage.all", conditionData)
-    || evalAllConditions(actor, "flags.midi-qol.noAdvantage.initiative", conditionData)
-    || evalAllConditions(actor, `flags.${game.system?.id}.initiativeNoAdv`, conditionData)) {
-    options.advantage = false;
-  }
-
-  // Check for noDisadvantage (prevents disadvantage)
-  if (evalAllConditions(actor, "flags.midi-qol.noDisadvantage.all", conditionData)
-    || evalAllConditions(actor, "flags.midi-qol.noDisadvantage.initiative", conditionData)
-    || evalAllConditions(actor, `flags.${game.system?.id}.initiativeNoDisadv`, conditionData)) {
-    options.disadvantage = false;
-  }
+  const init: string = actor.system.attributes.init?.ability || GameSystemConfig.defaultAbilities?.initiative || "dex";
+  // dnd5e decides from midi's flags (dnd5e's own initiative flags too), any advantage the caller passed and the
+  // initiative roll mode fields and advantage rules, so suppression and overrides apply across all of them.
+  const system = game.system?.id;
+  const tracker = computeAdvantageFlagsSync(actor, {
+    advantageFlags: ["advantage.all", "advantage.check.all", `advantage.check.${init}`, `flags.${system}.initiativeAdv`],
+    disadvantageFlags: ["disadvantage.all", "disadvantage.check.all", `disadvantage.check.${init}`, `flags.${system}.initiativeDisadv`],
+    noAdvantageFlags: ["noAdvantage.all", "noAdvantage.initiative", `flags.${system}.initiativeNoAdv`],
+    noDisadvantageFlags: ["noDisadvantage.all", "noDisadvantage.initiative", `flags.${system}.initiativeNoDisadv`],
+    systemRollModeFields: [`abilities.${init}.check.roll.mode`, "attributes.init.roll.mode", "rolls.ability.check.mode"],
+    systemRules: { category: "check", rollData: { ...actor.getRollData(), roll: { ability: init, type: "initiative" } } }
+  }, { advantage: !!options.advantage, disadvantage: !!options.disadvantage });
+  ({ advantage: options.advantage, disadvantage: options.disadvantage } = tracker.dnd5eVerdict);
 
   if (foundry.utils.getProperty(actor, `flags.${game.system?.id}.initiativeHalfProficiency`) && !parts.includes("@prof")) {
     parts.push("@prof");
@@ -2146,4 +1853,24 @@ Hooks.on("dnd5e.preConfigureInitiative", (actor, rollConfig) => {
   }
 });
 
+/** Status documents midi is deleting together with the statuses that carry them. */
+const carrierDeletes = new Set<string>();
 
+/**
+ * Deleting a status while one of midi's statuses carries it (Invisible while the self-ending Invisible is on, from the
+ * sheet, the token HUD or a macro): the delete is cancelled and redone with the carriers in the same operation. One
+ * render, and DAE's dependent conditions never see the carrier alone and put the plain status back.
+ */
+function deleteStatusWithCarriers(effect: ActiveEffect.Implementation, options: object, userId: string): boolean | void {
+  const actor = effect.parent;
+  if (!(actor instanceof Actor) || !effect.id || carrierDeletes.has(effect.uuid)) return;
+  const carriers = Object.entries(MIDI_IMPLYING_STATUSES).filter(([, implied]) => effect.id === getStaticID(implied))
+    .map(([status]) => getStaticID(status)).filter(id => actor.effects.has(id));
+  if (!carriers.length) return;
+  const uuid = effect.uuid;
+  carrierDeletes.add(uuid);
+  actor.deleteEmbeddedDocuments("ActiveEffect", [effect.id, ...carriers])
+    .catch(err => { if (!/does not exist/.test(String(err?.message ?? err))) error("midi-qol | deleteStatusWithCarriers", err); })
+    .finally(() => carrierDeletes.delete(uuid));
+  return false;
+}

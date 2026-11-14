@@ -1,37 +1,30 @@
 export async function preloadTemplates() {
   const templatePaths = [
-    "modules/midi-qol/templates/activity-card.hbs",
+    "modules/midi-qol/templates/condition-results.html",
+    "modules/midi-qol/templates/condition-results-player.html",
+    "modules/midi-qol/templates/chat/usage-card.hbs",
     "modules/midi-qol/templates/attack-roll.html",
     "modules/midi-qol/templates/bonus-damage-roll.html",
     "modules/midi-qol/templates/damage-results.html",
     "modules/midi-qol/templates/damage-results-player.html",
-    "modules/midi-qol/templates/condition-results.html",
-    "modules/midi-qol/templates/condition-results-player.html",
-    "modules/midi-qol/templates/damage-roll-dialog.hbs",
     "modules/midi-qol/templates/damage-roll.html",
     "modules/midi-qol/templates/dialog.hbs",
     "modules/midi-qol/templates/hits.html",
     "modules/midi-qol/templates/other-damage-roll.html",
     "modules/midi-qol/templates/roll-base.html",
-    "modules/midi-qol/templates/roll-dialog.hbs",
     "modules/midi-qol/templates/roll.html",
     // "modules/midi-qol/templates/roll-options.html",
     "modules/midi-qol/templates/saves.html",
-    "modules/midi-qol/templates/tool-card.hbs",
     "modules/midi-qol/templates/tooltip.html",
+    "modules/midi-qol/templates/tooltip-extras.html",
     "modules/midi-qol/templates/activity/attack-effect.hbs",
     "modules/midi-qol/templates/activity/check-effect.hbs",
-    "modules/midi-qol/templates/activity/damage-effect.hbs",
-    "modules/midi-qol/templates/activity/enchant-effect.hbs",
-    "modules/midi-qol/templates/activity/heal-effect.hbs",
     "modules/midi-qol/templates/activity/save-effect.hbs",
-    "modules/midi-qol/templates/activity/utility-effect.hbs",
     "modules/midi-qol/templates/activity/parts/attack-details.hbs",
     "modules/midi-qol/templates/activity/parts/attack-extras.hbs",
     "modules/midi-qol/templates/activity/parts/midi-activity-tab.hbs",
     "modules/midi-qol/templates/activity/parts/save-damage.hbs",
     "modules/midi-qol/templates/activity/parts/save-extras.hbs",
-    "modules/midi-qol/templates/activity/parts/overtime-extras.hbs",
     "modules/midi-qol/templates/apps/ActorOnUseMacroConfig/actorOnUseMacrosConfig.hbs",
     "modules/midi-qol/templates/apps/ConditionEditor/conditionEditor.hbs",
     "modules/midi-qol/templates/apps/ConfigPanel/concentration.hbs",
@@ -53,13 +46,20 @@ export async function preloadTemplates() {
     "modules/midi-qol/templates/apps/SoundConfigPanel/sounds.hbs",
     "modules/midi-qol/templates/apps/TargetConfirmation/targetConfirmation.hbs",
     "modules/midi-qol/templates/apps/TargetConfirmationConfig/targetConfirmationConfig.hbs",
+    "modules/midi-qol/templates/apps/MidiRegionBehaviorConfig/midiRegionBehaviorConfig.hbs",
     "modules/midi-qol/templates/apps/ModuleReviewDialog/moduleReview.hbs",
     "modules/midi-qol/templates/apps/TroubleShooter/common.hbs",
     "modules/midi-qol/templates/apps/TroubleShooter/errors.hbs",
     "modules/midi-qol/templates/apps/TroubleShooter/modules.hbs",
     "modules/midi-qol/templates/apps/TroubleShooter/problems.hbs",
     "modules/midi-qol/templates/apps/TroubleShooter/summary.hbs",
-    "modules/midi-qol/templates/apps/UndoWorkflow/undo-workflow.hbs"
+    "modules/midi-qol/templates/apps/UndoWorkflow/undo-workflow.hbs",
+    "modules/midi-qol/templates/chat/note.hbs"
   ];
-	return foundry.applications.handlebars.loadTemplates(templatePaths);
+  // `midi.section` is referenced by name from usage-card.hbs, so it needs a registered alias the way
+  // dnd5e registers its own card partials as `dnd5e.card-face` and friends.
+  return foundry.applications.handlebars.loadTemplates({
+    ...Object.fromEntries(templatePaths.map(p => [p, p])),
+    "midi.section": "modules/midi-qol/templates/chat/section.hbs"
+  });
 }

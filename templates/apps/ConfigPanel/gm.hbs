@@ -82,6 +82,13 @@
     </div>
 
     <div class="form-group">
+      <label>{{localize "midi-qol.ChatCardSummaries.Name"}}</label>
+      <select name="chatCardSummaries" data-dtype="String">
+        {{midiSelectOptions chatCardSummariesOptions selected=configSettings.chatCardSummaries localize=true}}
+      </select>
+      <div class="notes midi-qol-faint">{{localize "midi-qol.ChatCardSummaries.Hint"}}</div>
+    </div>
+    <div class="form-group">
       <label>{{localize "midi-qol.dummyCards.Name"}}</label>
       <input type="checkbox" name="gmAttackDamageCards" data-dtype="Boolean" {{checked configSettings.gmAttackDamageCards}} />
       <div class="notes midi-qol-faint">{{localize "midi-qol.dummyCards.Hint"}}</div>
@@ -90,6 +97,25 @@
       <label>{{localize "midi-qol.AddFakeDice.Name"}}</label>
       <input type="checkbox" name="addFakeDice" data-dtype="Boolean" {{checked configSettings.addFakeDice}} />
       <div class="notes midi-qol-faint">{{localize "midi-qol.AddFakeDice.Hint"}}</div>
+    </div>
+
+    <div class="midi-qol-box">
+      <div class="midi-qol-settings heading">{{localize "midi-qol.PlayerWaits.Heading"}}</div>
+      <div class="form-group">
+        <label>{{localize "midi-qol.PlayerWaits.GM.Name"}}</label>
+        <input type="checkbox" name="playerWaitGM" data-dtype="Boolean" {{checked configSettings.playerWaitGM}} />
+        <div class="notes midi-qol-faint">{{localize "midi-qol.PlayerWaits.GM.Hint"}}</div>
+      </div>
+      <div class="form-group">
+        <label>{{localize "midi-qol.PlayerWaits.ShowPlayers.Name"}}</label>
+        <input type="checkbox" name="playerWaitShowPlayers" data-dtype="Boolean" {{checked configSettings.playerWaitShowPlayers}} />
+        <div class="notes midi-qol-faint">{{localize "midi-qol.PlayerWaits.ShowPlayers.Hint"}}</div>
+      </div>
+      <div class="form-group">
+        <label>{{localize "midi-qol.PlayerWaits.Gambit.Name"}}</label>
+        <input type="checkbox" name="playerWaitGambit" data-dtype="Boolean" {{checked configSettings.playerWaitGambit}} />
+        <div class="notes midi-qol-faint">{{localize "midi-qol.PlayerWaits.Gambit.Hint"}}</div>
+      </div>
     </div>
 
     <div class="form-group">

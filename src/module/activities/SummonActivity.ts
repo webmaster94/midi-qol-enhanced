@@ -1,7 +1,5 @@
-import { usesSystemChatData } from "../compatibility.js";
 import { Activity } from "../../globals.js";
-import { debugEnabled, GameSystemConfig, i18n, warn } from "../../midi-qol.js";
-import { Workflow } from "../Workflow.js";
+import { debugEnabled, GameSystemConfig, warn } from "../../midi-qol.js";
 import { replaceDefaultActivities, configSettings } from "../settings.js";
 import { getTokenDocument } from "../utils.js";
 import { MidiActivityMixin, MidiActivityMixinSheet } from "./MidiActivityMixin.js";
@@ -42,7 +40,12 @@ let defineMidiSummonActivityClass = <T extends Activity>(ActivityClass: T) => {
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiSummonSheet,
         usage: {
-          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
+          /*
+           * No `chatCard`. Supplying one keeps the activity on dnd5e's legacy content path — the
+           * system renders the template into `message.content` and `MidiUsageMessageData`'s own
+           * template short-circuits on it, so the card face never runs. Deprecated in dnd5e 6.0 and
+           * removed in 6.2 (`activity/mixin.mjs#legacyUsageContent`) regardless. See AttackActivity.
+           */
           dialog: ActivityClass.metadata.usage.dialog,
           actions: {
             // placeSummons: MidiSummonActivity.#placeSummons 

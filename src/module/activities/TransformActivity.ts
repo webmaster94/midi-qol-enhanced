@@ -1,8 +1,7 @@
-import { usesSystemChatData } from "../compatibility.js";
+import { TokenDocumentSet } from "../lib/tokenDocumentSet.js";
 import { Activity } from "../../globals.js";
 import { debugEnabled, GameSystemConfig, i18nFormat, warn } from "../../midi-qol.js";
 import { replaceDefaultActivities, configSettings } from "../settings.js";
-import { getTokenDocument } from "../utils.js";
 import { MidiActivityMixin, MidiActivityMixinSheet } from "./MidiActivityMixin.js";
 import type { ActivityUseConfiguration } from "../../globals.js";
 
@@ -20,12 +19,6 @@ export function setupTransformActivity() {
   } else {
     GameSystemConfig.activityTypes["midiTransform"] = { documentClass: MidiTransformActivity };
   }
-  //@ts-expect-error
-  Hooks.on("dnd5e.TransformToken", (activity, profile, tokenData, options) => {
-    if (!activity.friendlyTransform) return;
-    const caster = getTokenDocument(activity.actor);
-    if (caster) tokenData.disposition = caster.disposition;
-  });
 }
 let defineMidiTransformSheetClass = (baseClass: any) => {
   return class MidiTransformSheet extends MidiActivityMixinSheet(baseClass) {
@@ -42,12 +35,19 @@ let defineMidiTransformActivityClass = <T extends Activity>(ActivityClass: T) =>
         dnd5eTitle: ActivityClass.metadata.title,
         sheetClass: MidiTransformSheet,
         usage: {
-          chatCard: usesSystemChatData() ? undefined : "modules/midi-qol/templates/activity-card.hbs",
+          /*
+           * No `chatCard`. Supplying one keeps the activity on dnd5e's legacy content path — the
+           * system renders the template into `message.content` and `MidiUsageMessageData`'s own
+           * template short-circuits on it, so the card face never runs. Deprecated in dnd5e 6.0 and
+           * removed in 6.2 (`activity/mixin.mjs#legacyUsageContent`) regardless. See AttackActivity.
+           */
           dialog: ActivityClass.metadata.usage.dialog
         },
       }, { inplace: false, insertKeys: true, insertValues: true });
 
     async _finalizeUsage(config, results) {
+      // Select Form has no actor to transform into: dnd5e applies the form's effect in its subsequent actions.
+      if (this.transform.mode === "form") return super._finalizeUsage(config, results);
       // Nasty kludge since TransformActivity._finalizeUsage does not wait result.message.update
       const profile = this.profiles.find(p => p._id === config.transform?.profile);
       if (profile) {
@@ -63,11 +63,10 @@ let defineMidiTransformActivityClass = <T extends Activity>(ActivityClass: T) =>
       return this.transformActor(config, results.message);
     }
 
-    static async #transformActor(event, target, message) {
-
-    }
     async transformActor(config: ActivityUseConfiguration, message: ChatMessage) {
-      const targets = Array.from(config.midiOptions?.targetsToUse ?? config.workflow?.targets ?? game.user?.targets ?? new Set());
+      // Every given target, drawn or not (only their actors are used)
+      const given = config.midiOptions?.targetsToUse ?? config.workflow?.targets ?? game.user?.targets ?? new Set();
+      const targets = given instanceof TokenDocumentSet ? given.documents : Array.from(given);
       if (!targets.length) {
         ui.notifications?.warn("DND5E.ActionWarningNoToken", { localize: true });
         return;
@@ -132,6 +131,7 @@ let defineMidiTransformActivityClass = <T extends Activity>(ActivityClass: T) =>
     }
 
     async _triggerSubsequentActions(config, results) {
+      if (this.transform.mode === "form") await super._triggerSubsequentActions(config, results);
     }
   }
 }

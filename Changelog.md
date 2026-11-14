@@ -1,122 +1,920 @@
-### 13.0.65.2
-* Support Foundry v14 and D&D 5e 6.0.6 while retaining the D&D 5.x integration.
-* Restore damage totals, damage-type icons, and labelled damage breakdowns on Midi item cards under D&D 6.
-* Center totals in condensed cards and use the selected theme's colors for buttons, hit/save rows, and tooltips.
-* Create custom card content through `_createUsageMessage` and use structured button descriptors instead of the deprecated D&D 6 card APIs.
-* Await card enrichment, retain resource-button visibility, and adapt damage trays to the new target callback and damage groups.
-* Resolve activity effect profiles asynchronously, including effects from compendiums, and store originating messages in the new system field.
-* Use Foundry v14 roll modes and string Active Effect change types, with v13 fallbacks.
-* Use native Region placement and containment for D&D 6 areas, including automatic areas, traps, and multiple shapes in one region.
-* Fix the Windows build's sample-item link by creating a directory junction.
+### 14.6.12.1 - Midi QOL Enhanced
+* Merged upstream 14.6.12, including its native D&D 6 cards, region automation, workflow storage, and player-wait controls.
+* Updated and tested against D&D 6.1.0 on Foundry 14.369 with DAE 14.6.9.
+* Preserved triggered OverTime controllers, hit/save filtering, source actor rolls, source-effect duration and dependency tracking, and removal of triggering effects after a successful save.
+* Preserved grouped condition-change cards, GM/player visibility choices, and settings import/export.
+* Moved the fork to GitHub as `webmaster94/midi-qol-enhanced`; the module ID stays `midi-qol`.
 
-### 13.0.65
-* Fixed the damage card no longer showing which modifications applied (DR, resistance, immunity); the markers are stored with the card rather than recomputed from the raw damage detail.
-* Fixed the damage card total freezing after a multiplier was used: the preview replaced the total span's contents, so later refreshes had nothing to write to.
-* Damage cards now store only the fields undo/apply reads in `flags.midi-qol.undoDamage` (~53% smaller); the socket payload is unchanged.
-* Damage cards no longer embed a generated base64 thumbnail for animated tokens; the card carries the token's path and the thumbnail is produced locally when it renders.
-* Stop storing the recomputed `midi.updates`/`midi.amount` damage options on the card — they are rewritten whenever undo/apply re-runs.
-* Damage cards are now a chat-message sub-type (`midi-qol.damage`) rendered from `message.system` on display instead of storing their markup.
-* Removed the classic (table) damage card style and its setting; the flexbox card is the only layout.
-* Damage cards no longer store other modules' `calcDamageOptions` scopes, or the target/source uuids already on the message; both uuids are restored when the card is read.
-* Attack/damage/bonus/other damage rolls are no longer stored a second time in `flags.midi-qol` — they are rebuilt from `message.rolls` when the message is prepared. `utilityRolls` is unchanged.
-* Chat card updates now always write the full roll list rather than replacing it with the roll just made.
-* Strip template indentation from midi's chat card markup before it is stored; the item description is left as authored.
-* Target rows store one name span instead of a gm/player pair when the two names match.
-* Moved the repeated inline styles on save rows into the stylesheet.
-* Target confirmation: add `includeTargets` support and a "not allowed" overlay when hovering a non-selectable token (backport of MR !433, thanks @pgervais70).
-* Add a "Blind roll display" setting: forced-blind saves/checks/skills can show a public card with the result obscured as `??` (result, dice breakdown and success/crit/fumble highlight hidden from players) instead of being fully hidden.
-* Fixed damage modification (`system.traits.dm`) and midi damage reduction being applied once per damage category (base/other/bonus) instead of once per activity. New "Single Damage Calculation" setting (default on) computes all of a target's damage in one pass; disable it to restore the old behaviour.
-* Fixed multi-target save/check/skill chat cards using the first target's token as the speaker for every roll.
-* Add an "Undead Fortitude" sample item.
-* Add a "Gloves of Soul Catching" sample item.
-* Add a "Gloves of Soul Catching (Elemental)" sample item: adds the 2d10 to the attack's damage roll so Elemental Attunement re-types it.
+### 14.6.12
+* Changed: *List Gambit's Premades prompts in the player list* is off by default.
 
-### 13.0.64
-* Organise the Midi activity settings into subtabs (MR !420, thanks @garrysmod367).
-* Fix socketed (GM-executed) workflows (MR !427, thanks @baconnugget).
-* Fix temp-max HP handling on the undo card (MR !417, thanks @baconnugget).
-* Default `constrainTemplatePlacement` to false (MR !408, thanks @thatlonelybugbear).
-* Add the `icon` CSS class to the dnd5e header-control button (MR !429, thanks @olegbol2005).
-* Updated pt-BR translation (MR !426, thanks @cardosomafrasantana).
-* Offer spell reactions castable with a higher-level slot when no slot of the spell's own level is available (e.g. Shield with only level 3 slots) (MR !430, thanks @thatlonelybugbear).
+### 14.6.11
+**Waiting on players**
+
+midi now shows in Foundry's player list which players it is waiting for, and the GM can answer for them.
+* A player midi is waiting on has a badge on their row: a lightning bolt counts reactions waiting, a d20 counts rolls waiting (saves, ability checks, Active Defence rolls, failed-roll bonuses, contested rolls, and their own attack, damage or other rolls not yet rolled). Hover over the badge to see what each is for and how long it has waited.
+* Click the badge to answer for the player with the choices their dialog offers: roll a save or check for them (normally, with advantage or with disadvantage) or on your own screen, roll their attack (normal, advantage, disadvantage) or damage (normal, critical), choose a reaction for them or decline it. Their dialog closes when you answer. Whoever answers first wins: if the player answers, or declines, before you, your answer is ignored, and vice versa. Right-click a player to answer everything they have waiting with the defaults.
+* If a player disconnects while midi is waiting on them, what they were asked stays on their row for you to answer, and the player list opens to show them. With *GM can answer for players* off, their save is rolled for them and their reaction declined at once.
+* A player sees a badge on their own row while midi is waiting on them. Clicking it brings their dialogs back to the front, for example when clicking their character sheet hid the dialog behind it.
+* Players also see the other players' badges, read-only: the kind of prompt (reaction, saving throw, attack roll...) and how long it has waited, but not what it is about.
+* With Gambit's Premades and its *Mirror 3rd Party Dialog for GMs* setting, Gambit's reaction prompts mirrored to the GM show on the player's row instead of on the GM's screen; *Show prompt* in the popover brings one up for the GM to answer.
+* Settings: *GM can answer for players*, *Players see who midi is waiting for* and *List Gambit's Premades prompts in the player list*, together on the GM tab, all on by default.
+* Macros and modules can show their own prompts the same way with `MidiQOL.playerWaits` (see MACROS.md, *Waiting on Players*).
+
+**Macros**
+* An item's own macro is no longer run automatically after active effects when its *On Use Macros* list is empty (added in 14.6.5). It ran macros a second time when the item's effects already called them, and showed an entry in the list that couldn't be deleted. To run an item's macro when the item is used, add an entry to its *On Use Macros* list; the macro name can be left blank to mean the item's own macro.
+* A workflow rebuilt from its card (after a reload, or a read-only copy) has the item and activity its use ended with: a modified copy a macro swapped in (`workflow.item`, `workflow.activity`) is kept on the card. A rebuilt upcast spell's item is at its cast level, and is its activity's item.
+* A card button (roll damage, attack, save, check, formula, apply effects) pressed after a macro swapped in a modified copy of the use's activity runs the copy, not the item's original.
+* New hook `midi-qol.workflowRebuilt` (workflow, card, { readOnly }) when a workflow is rebuilt from its card.
+* `MidiQOL.socket()` no longer refuses or warns about calls by the caller's role (checked only in the caller's own client, so it protected nothing); `executeForOtherGMs` works (it was `executeForOtherGMS`, which failed; the old name still works).
+
+**Countdowns**
+* Dialogs that answer themselves when time runs out (reactions, optional bonuses, choosing an effect, and a player's save or check when *Player save timeout* is set) show a bar under the title that drains from green to red, with the seconds left. A pause button stops the clock when a player needs more time; pausing a reaction also holds the attack waiting for it. When time runs out the dialog closes.
+
+**Dialogs**
+* The reaction dialog is titled with the reacting token's name ("Goblin Boss: Reaction"), shows each reaction with its item's picture, and has a *No reaction* button. Pressing Enter declines rather than using a reaction.
+* Fixed: the reaction prompt for a creature that moves showed "isMoved" instead of its text.
+* Fixed: confirming a reroll from an optional bonus kept the old roll when you pressed Enter. Enter now keeps the new roll, and the dialog shows the original roll above the new one.
+* Fixed: target confirmation showed a stray *Clear* button, did not roll when you pressed Enter, and with several targets could open partly off the bottom of the screen.
+* Fixed: a quick settings preset in the midi-qol configuration was saved and the window closed before you saw what it would change. It now shows the changes first, and *Don't apply* leaves your settings as they were.
+* Fixed: importing midi-qol settings or Trouble Shooter data hung when you closed the dialog or chose a file that wasn't a valid export; you now get a message instead.
+* Fixed: the Trouble Shooter, sound configuration and roll statistics windows jumped back to their first tab whenever they refreshed (the roll statistics *Config* tab could not be used during combat).
+* Fixed: the Trouble Shooter's problems table showed no module ids, and two of its tables had broken headings.
+
+**Saves and reactions**
+* A save requested by chat card is answered only by the requested kind of roll (the save, or one of its abilities when there is a choice; the check, skill or tool), not by any roll by the token.
+* A save, Active Defence or contested roll the GM makes for a player (taken over from the player list, or a timed-out save for another player's creature) uses the player's roll mode: private and self rolls are whispered to the player, blind ones aren't. With no GM connected a timed-out save is rolled without bonus prompts.
+* A GM using a reaction that targets another creature, places an area or teleports, on a scene they aren't viewing, is asked to view it first. Self-only reactions (Shield) work from any scene.
+* A GM using an item for a creature whose token is on a scene they aren't viewing is asked to view that scene first (targets are then confirmed there) or use it anyway: other modules' reactions (Gambit's Premades), animations and placement only work on the viewed scene.
+* Fixed: a use given targets that aren't drawn (on another level or scene), by `completeActivityUse` or a macro, lost them, so they made no save and took no damage. This includes an area with auto-targeting off, and a target on another scene sharing a drawn token's id (a copied scene).
+* Fixed: `MidiQOL.DamageOnlyWorkflow` dropped targets that aren't drawn (on another level or scene), so they took no damage.
+* Fixed: damage with no type, in a use with nothing typed to take its type from (a macro's untyped roll, a damage-only workflow given no type), is midi's No Type: applied in full, with no resistance. It was an unknown type named after a missing language key (in some languages a word such as "Ninguno"), or the type of whatever use ran last, so the previous use's resistances could apply.
+* Fixed: `applyTokenDamage` gave a target that saved the default damage on a save, not the activity's (full, half or none), and warned that `getSaveMultiplierForItem` is deprecated each time.
+
+**Area heights**
+* An area placed at a point (Fireball, Moonbeam, Flame Strike, a wall) is measured from the floor of the level it is placed on: a sphere is centred on the floor, a cylinder or wall stands on it, so it reaches creatures on the ground whatever height the caster is at. The new optional rule *Height of Areas Placed at a Point* chooses the floor (default) or the caster's height (*Template Origin Height*), and an activity can choose *Floor of the level* on its Region Behavior tab. Areas that start from the caster (a breath cone, a line, Thunderwave) are measured from the caster as before.
+* Emanations (Spirit Guardians) reach their radius below the caster's feet and above its head, rather than to any height.
+* An area stays within its level: it doesn't reach a creature on the floor above or below, except through an opening in a floor (a gap in the scene's floor surfaces), where a straight line from the area's origin passes through it. A floor or ledge between the origin and a creature shields it, on the same level too. An area that follows a token (an emanation, or *Attach Region To*) is measured again when the token rises, falls or changes level.
+* An area cast when it is placed reaches creatures through openings; a lasting area's later triggers (a creature entering it, or starting its turn there) are only for creatures on the area's own level.
+* A sphere or emanation reaches only its true height away from its centre (a creature at the edge of a Fireball has to be lower than one under its centre).
+* Fixed: an area cast from the ground started below the floor, so Automated Animations drew its animation under the map, where it couldn't be seen.
+
+**Other modules**
+* Fixed: Monk's TokenBar roll cards cut off a two-digit total and half hid its pass/fail icons.
+* Hide with CPR 2.1.18 or later (CPR applies the Hiding condition itself): the GM is still told the hide's DC and who perceives it.
+* The outdated-module warning checks for DAE 14.6.7, the version midi requires.
+* Removed Ready Set Roll from midi's module lists and the Trouble Shooter (no Foundry 14 release).
+* Removed Simbul's Cover Calculator support (no Foundry 14 release): worlds using it switch to *None* for *Calculate Cover* and *Center Check* for *Walls block ranged attacks*.
+
+### 14.6.10
+* Reinstated missing tab labels and language entries.
+
+### 14.6.9
+
+**Chat cards**
+* Changed: midi now keeps a use's progress on its chat card, so a use carries on after a reload (press the card's buttons as usual), and players see the same card the GM does. Cards are about 20% smaller for a single attack and 60% for a three-target save, and are written about half as often. The *Save to Chat Card* option has been removed (it is now always on).
+* Changed: *Chat Message Cache Time* has been removed. The new module setting *Chat card updates* chooses how often a card is updated for everyone: *At milestones* (the default, and recommended: the fewest updates) or *At every step*.
+* Fixed: targets on another scene, or on a level you aren't viewing, were dropped from a use after a reload. They are now hit, take damage, roll saves and get effects and follow-ups. Cover and reactions still need the token to be on the scene you are viewing.
+* Fixed: when an attack missed every target and the use completed (*Auto complete workflow*), the card kept its damage buttons. They now go as *Remove chat card buttons after roll* says; a use still waiting for its damage roll keeps them.
+* Fixed: a card whose item has been deleted kept its buttons, which then did nothing.
+* Fixed: re-rolling a utility formula on a completed card kept the old result on the card.
+* Fixed: the other activity's healing was labelled with a raw language key instead of its name.
+* Fixed: a player could tell a hidden save result (dnd5e's *Challenge Visibility*) from the colour and icon on the save roll's total.
+
+**Features**
+* Changed: rolling damage again for a completed use is a damage roll of its own, as in dnd5e: a new card with the use's hits and saves, with the damage applied and its own undo. Nothing is consumed and no effects are applied. It used to start the whole use again (attack, consumption, templates).
+* Fixed: pressing a card's damage button while its use was still being worked out is refused; it used to replace the rolls the use was working with.
+* Fixed: undo now refunds the spell slot, uses and resources a use spent, as the card's Refund button does.
+* Fixed: an attack that missed every target with *Auto complete workflow* on skipped the effects step, so *apply to self always* effects never applied. Effects are now applied on a miss too (damage and saves are still skipped).
+* Fixed: an item with an attack and a save (its other activity) applied the save's self effects the wrong way round: *apply to self* effects applied when no target was hit, and only *apply to self always* effects when one was.
+* Fixed: a GM pressing Apply Effects on another player's card applied the effects to that player's targets, not the GM's.
+* Fixed: applying damage from another user's card (for example the GM applying a player's) named the person applying it, not the attacker, on the damage card.
+* Changed: Careful Spell (`flags.midi-qol.carefulSpells`) follows the 2024 rules: spells only, the first creatures targeted before casting, up to the caster's Charisma modifier (at least one), and they take no damage where a save halves it. A warning names the creatures beyond that. Careful Spell and Sculpt Spells (`sculptSpells`) can be conditions.
+* Added: `flags.midi-qol.optional.NAME.acOnHit`, an optional AC bonus offered when an attack hits; the attack is then checked against the new AC.
+* Changed: `flags.midi-qol.optional.NAME.ac`, offered when attacked (before the hit is known), is renamed `flags.midi-qol.optional.NAME.acOnAttack`. The old name still works, with a deprecation warning (requires DAE 14.6.7).
+* Fixed: an optional bonus whose number of uses ran out didn't fall back to the reaction or bonus action its other count named (for example `count: reaction` with `countAlt: 1`).
+* Fixed: with *Constrain template placement*, a cube with range Self (Thunderwave) could be placed anywhere. It is now placed touching the caster, on the side nearest the pointer.
+* Changed: AutoCover (levelsautocover) needs version 5.0.1 or later. A creature saving against an area spell now gets its cover measured from the spell's template origin (its centre, or where a cone or line starts), not from the caster. With AutoCover as the cover check, darkness between the attacker and the target, or around the target, counts as total cover (AutoCover's rule; midi's own check doesn't count darkness).
+* Fixed: with AutoCover, a failing cover check could stop a use part way (card shown, but no concentration or effects). midi now carries on without AutoCover's cover.
+* Fixed: a use that fails with an error after its card is shown is now stopped with a notification, instead of being left waiting.
+* Added: the GM is warned when an active module is older than the version midi needs; midi doesn't use that module until it is updated.
+* Added: the troubleshooter reports chat messages of midi's types that are damaged (Foundry leaves them out of the chat log, and Clear Chat Log can't remove them), and can delete them.
+* Fixed: the troubleshooter named *Walls Block Range* when the module chosen for *Calculate Cover* wasn't active; it now checks Simple Cover 5e too.
+* Fixed: the *Item details* type list for a new world included the base and backpack types.
+* Removed: ddb-game-log support; the module has no Foundry 14 release.
+
+**Macros**
+
+Token sets. A workflow's target collection (`workflow.targets`, `hitTargets`, `saves`, `failedSaves` and the others) used to hold Tokens, the placeables drawn on the canvas you're viewing. A target that isn't drawn there (on another scene, or on a level you aren't viewing) has no Token, so it was dropped: no damage, no save, no effects, and a workflow rebuilt from its card lost it. The collections are now `MidiQOL.TokenDocumentSet`s, which hold every target's TokenDocument, drawn or not.
+* **Nothing has to change today.** By default a set still reads as the drawn Tokens (iteration, `size`, `first()`, `map`/`filter`), so existing macros keep working, and they still skip targets that aren't drawn. `filter` returns a TokenDocumentSet. The one change in both modes: target hooks and target macros now also run for a target that isn't drawn, with its TokenDocument (below), so a handler that assumes a Token should accept either.
+* **Migrating** (works in both modes; MACROS.md, Token sets, *Migrating macros and modules*, has the full table): iterate `set.documents` for saves, damage, effects and HP, and `set.tokens` for the canvas; `set.count` for `size`; `set.uuids` for `t.document.uuid`; for one member or hook target, `const doc = t instanceof TokenDocument ? t : t.document`; copy with `new MidiQOL.TokenDocumentSet(set)`. `t.actor`, `t.id`, `t.name` and `has`/`add`/`delete` work as they are.
+* To get every target, use the set's properties, which give the same result whichever way the set reads: `set.documents` is every target's TokenDocument, drawn or not (use it for saves, damage, effects and HP); `set.tokens` is the drawn Tokens (use it for distance, sight, cover and moving tokens); `set.uuids` is every target's uuid; `set.count` is how many targets there are.
+* `add`, `delete` and `has` accept a Token, a TokenDocument or a uuid. Assigning any Set (`workflow.targets = new Set(tokens)`) converts it. Set algebra (`difference`, `union`, …) is over every member when called on the TokenDocumentSet. Copy a set with `new MidiQOL.TokenDocumentSet(set)`; `new Set(set)` keeps only what reading gives.
+* Reading as TokenDocuments will become the default. A GM can test it now with `MidiQOL.setTokenDocumentSets(true)` (whole world, after a reload): sets read as TokenDocuments, and target hooks and target macros get TokenDocuments. `workflow.token` stays a Token; `workflow.tokenDocument` added. See MACROS.md, Token sets, and the wiki page Token-Sets-Document-Mode.
+* In that mode midi adds a `TokenDocument#document` property that returns the TokenDocument itself, so code written for Tokens (`target.document.uuid`) keeps working on a set that now gives TokenDocuments. Each use logs a deprecation warning once per calling line (midi's own included), naming the line to change: use the member itself. It applies to every TokenDocument, not only set members, so code that already handles both (`x.document ?? x`, as dnd5e and Simple Cover do) warns too and can be left alone. It is removed in 14.8.0.
+* `midi-qol.preTargetSave`, `preTargetDamageApplication`, `isDamaged`/`isHealed` and the target macros now also run for targets that aren't drawn; their `target`/`token` is then the TokenDocument (the Token otherwise).
+
+**Workflows and Cards.**
+A use's workflow now keeps its state on its usage card, so it can always be rebuilt from the card: after a reload, on another client, or when the workflow has been dropped from memory.
+* **What is stored.** The card holds the workflow's state (`system.midi.state`) and one record per token (`system.midi.records`, keyed by scene id then token id): targets, hits, saves and save results, rolls, damage detail, critical and fumble, templates, `workflowOptions` (including changes a macro makes to them in place, as values that survive JSON; the use's event as the user pressed keys it held), whether the actor was in combat and on its turn (`workflow.inCombat`, `workflow.isTurn`), and where the workflow waits. Anything else a macro keeps on the workflow object is lost when it is rebuilt: put data that must survive in your own flags on the card (see MACROS.md, Storing data on the card). Changes to the token sets in place (`workflow.saves.add(token)`) are stored at the next card write.
+* **Finding a workflow.** `MidiQOL.Workflow.getWorkflow(cardUuid)` gives the workflow in memory, for any user. Otherwise the card's author gets it rebuilt from the card, carrying on from where it waited, and any other user gets a read-only copy (`workflow.readOnly`): it doesn't run or write, and is never updated, so fetch it again after the card changes. `getWorkflow(cardUuid, false)` gives another user a live rebuild instead, which runs and writes the card alongside the author's (at your own risk; it warns in the console).
+* **Before the card exists.** A workflow is filed under its card's uuid as soon as dnd5e creates the card, before the use's templates are placed and `dnd5e.postUseActivity` runs. Before that its id is `undefined`, and `MidiQOL.Workflow.workflowFor(activity)` finds it from the activity a hook or macro is given. Workflows aren't found by activity uuid: `getWorkflowByActivityUuid`, `activity.workflow` and `getWorkflow(activityUuid)` find nothing and warn.
+* **All workflows in memory.** `MidiQOL.Workflow.workflows` is a new Map on each read, for searching (by activity, actor, …). Finished workflows are held weakly and may be missing, so look one up by its card. Changing the Map changes nothing and warns; its setter and `Workflow.WorkflowDataFlags` are removed.
+* **Resuming.** A macro that sets a roll on a waiting workflow (`setAttackRoll`, `setDamageRolls`, `setUtilityRolls`) resumes it with `workflow.resume(event)`, event `"attackRolled"`, `"damageRolled"`, `"noDamage"` or `"utilityRolled"`. `Workflow#unSuspend(context)` is deprecated. `activity.rollAttack({ workflow })` on a completed use starts a new use at its targets on a new card, as the card's Attack button does, and returns its attack roll once rolled (`config.workflow` is then the new use's workflow); damage again for a completed use is a damage roll of its own (Features, above).
+* **Reading results.** `workflow.saveRoll(token)` gives a target's save roll (a Token, TokenDocument or token uuid), also on a rebuilt workflow. `workflow.isHit` and `workflow.isHitEC` are new.
+* **Old card flags.** The workflow's keys in a usage card's `flags.midi-qol` are deprecated and removed in 14.8.0; reading one warns, and writing one keeps the value written. Read the workflow instead, `card.flags.midi-qol.X` → `MidiQOL.Workflow.getWorkflow(card.uuid).X`, except:
+  * `hitTargetUuids`, `hitECTargetUuids` → `workflow.hitTargets`, `workflow.hitTargetsEC`
+  * `saveUuids`, `failedSaveUuids`, `superSaverUuids`, `semiSuperSaverUuids`, `criticalSaveUuids`, `fumbleSaveUuids`, `advantageSaveUuids` → `workflow.saves`, `workflow.failedSaves`, `workflow.superSavers`, `workflow.semiSuperSavers`, `workflow.criticalSaves`, `workflow.fumbleSaves`, `workflow.advantageSaves`
+  * `otherDamageMatchUuids`, `ammunitionDamageMatchUuids` → `workflow.otherDamageMatches`, `workflow.ammunitionDamageMatches`
+  * `targets` (`{uuid, name}`) → `workflow.targets`
+  * `templateUuid` → `workflow.templateUuids[0]`
+  * `GMOnlyAttackRoll` (true while the attack is rolled and its hits aren't yet checked): the card's hit results
+  * the same names for `isHit`, `isHitEC`, `isCritical`, `isFumble`, `workflowOptions`, `currentAction`, `saveAttribution`, `templateUuids`, `damageDetail`, `otherDamageDetail`, `bonusDamageDetail`, `otherDamageTotal`, `bonusDamageTotal` and the roll copies (`attackRoll`, `damageRolls`, `bonusDamageRolls`, `otherDamageRolls`, `utilityRolls`)
+
+Other macro changes:
+* Added: `MidiQOL.toggleStatus(actor, statusId, options)`, `actor.toggleStatusEffect` through midi's per-actor effect queue, so a status toggled while midi changes the same actor's effects doesn't fail.
+* Added: hook `midi-qol.premades.checkHitTarget(hitCheck)`, called for each target in the hit check after cover, AC bonuses, reactions, auto success/failure and criticals, before the result is recorded or shown. `hitCheck` holds `workflow, target, attackTotal, targetAC, isHit, isHitEC, isCritical, isFumble`: a changed `targetAC` (or critical) is tested again unless an auto success or failure decided the hit; a changed `isHit`/`isHitEC` is kept as set.
+* Added: a use's template regions carry `flags.midi-qol.workflowId` and `itemCardUuid`, its card's uuid (the workflow's id), as templates did up to 13.0.42.
+* Changed: the effects step on a miss runs its `preActiveEffects`/`postActiveEffects` hooks and macro passes.
+* Fixed: a use given its targets (`targetUuids`) whose activity places a template took the user's targets once the template was placed.
+* Fixed: a template passed in `workflowOptions.templateUuid` was dropped by the workflow.
+* Fixed: a damage card's Apply button (after Reverse, or when damage is not auto-applied) gave the `dnd5e.preApplyDamage` / `dnd5e.applyDamage` hooks the damage as a negative amount, as if healing.
+* Fixed: `MidiQOL.applyTokenDamage` (and `applyTokenDamageMany`) given an item but no workflow: the damage card is linked to the item's use when called from inside it, and named for the item's actor, not the user.
+
+DamageOnlyWorkflow:
+* Fixed: its `useOther` option (ignored since 12.4.6) makes the damage the workflow's other damage again.
+* Fixed: given another workflow's card, it replaced that card's rolls, hits and targets; its damage is now added to the card, and kept when the card's own workflow writes it.
+* Changed: its own card stores its workflow like a use's card, so it is rebuilt after a reload.
+* Changed: it applies damage only: it no longer fires `midi-qol.postActiveEffects` or, in combat on the actor's turn, marks its action as used.
+* Fixed: rolling damage after the last piece of ammunition was spent and deleted (auto-destroy) made no damage roll.
+
+Removed and deprecated:
+* Removed: `MidiQOL.DDBGameLogWorkflow` (ddb-game-log).
+* Removed: `flags.midi-qol.origin`: deleting a card no longer deletes other messages flagged with it. Put a result on the card with `MidiQOL.addCardNote`, and link a roll to a note with `MidiQOL.cardNoteMessageData`; both go with the card.
+* Removed: `workflow.flagTags` (never set by midi or any known module).
+* Removed: workflow fields nothing read: `attackRollHTML`, `damageRollHTML`, `bonusDamageRollHTML`, `otherDamageRollHTML`, `utilityRollHTML`, `kickStart`, `keepActivityCard`, `onUseCalled`, `attackRolled`, `rollResults`, `applicationTargets`, `TrapWorkflow#onUseMacroCalled` and `DummyWorkflow#expectedAttackRoll`; `bonusDamageHTML` and `otherDamageList` in macro data.
+* Deprecated: `workflow.noAutoDamage` and `workflow.noOptionalRules` (and the `noOptionalRules` workflow option): they never had an effect and warn when used; use `workflowOptions.autoRollDamage: "none"` (or return false from `preDamageRollConfig`); optional rules follow the *Optional rules* setting.
+* Deprecated: `MidiQOL.debouncedUpdate` (use `ChatMessage#update`) and `DamageOnlyWorkflow#itemCard` (use `itemCardUuid`).
+* Deprecated: `workflow.healingAdjustedDamageTotal`, `healingAdjustedBonusDamageTotal`, `healingAdjustedOtherDamageTotal`, `saveTargetsDisplayed` and `allOtherEffectTargets`.
+
+**Sample items**
+* Removed, in favour of CPR's implementations: *Absorb Elements*, *Acid Arrow*, *Aura of Courage*, *Aura of Devotion*, *Aura of Protection*, *Aura of Vitality*, *Banishment*, *Bardic Inspiration*, *Bardic Inspiration (Valour)*, *Calm Emotions*, *Circle of Power*, *Cloudkill*, *Divine Smite*, *Faerie Fire*, *Flaming Sphere*, *Guidance*, *Gust of Wind*, *Healer's Kit*, *Heroism*, *Hold Person*, *Hunter's Mark*, *Ice Knife*, *Indomitable*, *Lay on Hands*, *Moonbeam*, *Power Word Kill*, *Rage*, *Shining Smite*, *Sneak Attack*, *Spirit Guardians*, *Stabilize*, *Warding Bond*.
+* Removed: the legacy *Sneak Attack 12.4.15*.
+* Removed: the *MidiQOL Sample Summons* compendium; its only summon was Flaming Sphere's.
+* Removed: the 2014 *Branding Smite* (use CPR's *Shining Smite*), *Giant Spider Bite*, and the 2014 copies of *Dark Devotion* and *Slayer's Prey*. The sample items follow the 2024 rules, so CAT's medkit offers their automations for items tagged 2024.
+* Removed: midi's *Weapon Mastery* class feature. CAT now automates weapon masteries itself (its *Weapon Mastery* setting, on for player characters by default), and does it better. An actor that also had midi's Weapon Mastery feature got each mastery effect (Graze, Topple, …) twice, once from each. Remove midi's Weapon Mastery feature from your actors: CAT's automation works from its setting and each actor's chosen weapon masteries.
+* Fixed: *Shield* is offered when you are targeted by Magic Missile as well as when hit, and you take no damage from Magic Missile while it lasts.
+* Fixed: *Aid* cast again on the same creature added a second Aid; the new one replaces it.
+* Fixed: *Command* never ended outside combat; it lasts a round.
+* Changed: these follow the 2024 rules:
+  * *Improved Divine Smite* is renamed *Radiant Strikes*, its 2024 name, with the 2024 SRD text.
+  * *Wand of Fireballs*: the 2024 item (equipment with the Focus property, up to 3 charges a use, 1d6 + 1 charges regained at dawn), so CAT's medkit offers it for the 2024 wand.
+  * *Weird*: 10d10 psychic damage on the first save (half on a success), 5d10 at the end of each Frightened turn, creatures of your choice.
+  * *Imprisonment*: a creature that saves is immune for 24 hours.
+  * *Mass Heal*: also removes Poisoned, and affects Undead and Constructs.
+  * *Arcane Ward*: a bonus action that spends a spell slot restores twice its level.
+  * *Shapechange*: you keep your Hit Points, proficiencies and Spellcasting and gain the first form's Hit Points as temporary Hit Points.
+  * *True Polymorph*: the target keeps its Hit Points and gains the new form's as temporary Hit Points.
+* Fixed: *Shapechange* and *True Polymorph* used dnd5e's default transformation settings instead of their own.
+* Changed: *Foresight*, *Meteor Swarm* and *True Resurrection* follow the 2024 rules, with the 2024 SRD text. *Toll the Dead* and *Warding Flare* follow the 2024 Player's Handbook, whose text is filled in from your copy (rules text, below). *Choose Blessing*, *Lantern*, *Mortar* and the two *Regeneration* demos are 2024 items.
+* Changed: the results of *Hide*, *Search*, *Check Cover* and *Influence* (and Influence's check) are notes on the action's card, not separate messages.
+* Fixed: the *Influence* note showed an NPC's real name with *Hide NPC names*, and the DC whatever *Challenge Visibility* says.
+* Added: *Infernal Glaive* (2024 Bearded Devil) and *Infernal Tail* (2024 Horned Devil), automated with CAT. A failed save gives an infernal wound (one at a time) that loses hit points at the start of each turn. It closes after 1 minute, when a spell restores hit points, or on a Medicine check by the wounded creature or one within 5 ft targeting it (a Medicine roll, or *Stabilize*). The save, hit point loss, duration and Medicine DC are Cat Kit configuration options.
+* Changed: *Irresistible Dance* is renamed *Otto's Irresistible Dance*, its name in the 2024 Player's Handbook (its identifier, `ottos-irresistible-dance`, is unchanged).
+* Changed: *Detect Magic (Vision)*'s Magic Sight lasts 15 seconds out of combat (it was 10), set by *Magic Sight duration* in its CAT configuration.
+* Changed: *Parry* (the seven 2024 creatures) is offered when a melee attack hits, not when attacked.
+* Changed: *Nature's Ward* follows the 2024 rules: immunity to the Poisoned condition, and the resistance of the land chosen after a Long Rest (an activity per land; choosing another land replaces the last). dnd5e's own 2024 item grants an immunity to "poison", which isn't a condition.
+* Changed: the homebrew sample items and the demo variants (Turn into Frog, Detect Magic (Vision), Lantern, …) are CAT automations, so CAT's medkit offers their updates; each variant has its own identifier.
+* Added: rules text for sample items outside the SRD (Toll the Dead, Metamagic Adept, Arcane Ward, …), which ship without a description.
+  * When such an item is added to an actor, midi copies the description from your official D&D modules (Player's Handbook, Tasha's, …), then the dnd5e SRD, then a compendium you choose (*Rules text compendium*, Misc tab).
+  * It matches the item by type and identifier, falling back to its name; the item's notes say where the text came from.
+  * *Fill in missing rules text* (Misc tab, on by default) turns it on or off. For items added earlier, use the item sheet's *Fill in rules text* button, or the TroubleShooter's Auto Fix for every item in the world. Macros: `MidiQOL.fillRulesText(item)`.
+
+### 14.6.8
+
+* Changed: midi-qol has moved to GitHub (https://github.com/tposney/midi-qol): updates and downloads come from its releases, and issues are reported there. Installed copies move over with this update. Manifest URL: https://github.com/tposney/midi-qol/releases/download/latest-dnd6/module.json.
+* Changed: installing midi-qol installs DAE for dnd5e 6 (its GitHub dnd6 release) rather than DAE for dnd5e 5.x from foundryvtt.com.
+* Changed: Brazilian Portuguese (pt-BR) translation updated (MR [!442](https://gitlab.com/tposney/midi-qol/-/merge_requests/442), thanks @Kharmans).
+
+### 14.6.7
+
+* Fixed: *Double Rolled Damage* critical damage never doubled the dice: dnd5e rolls its own die class, which didn't know midi's `mx` modifier, so `1d4mx2` was read as `1d4x2` (explode on 2) and the damage was normal.
+* Fixed: the *Secret Squirrel* quick setup recommended Anonymous, which has no Foundry 14 release; it recommends Hide NPC Names, and only when neither is active.
+* Fixed: the hints for *Hide NPC names* and *Auto apply item effects* named modules that don't run on Foundry 14 (Anonymous, times-up).
+* Fixed: activity condition fields (*Use Condition*, *Active Effect Condition*) showed Foundry's dice Formula Editor button (λ), which opens an untitled editor for dice formulas, not conditions. They are plain text fields again; midi's *Condition Editor* button edits them.
+* Changed: the *Midi Condition Editor* (as its button and window are now named) no longer fills an empty condition with `true`, shows the flag key only for effect changes, and no longer offers Macro Autocomplete's visual block editor, which rewrote a condition as a statement (`true;`). CAT's quick conditions button sits between the condition and midi's editor button, with little space around either.
+* Added: for an over-time effect on an actor, the Over Time editor shows *Saves remaining* and *Fails remaining* (the progress of *Saves required* / *Fails required*) and lets a GM correct them. The configured counts are unchanged; consecutive counts still reset to them.
+* Fixed: Dice So Nice showed every midi roll with the rolling user's dice and no actor, so an actor's own dice appearance was ignored. midi now passes the actor, and with DSN's *Force character owner appearance* set to All, rolls for a player-owned actor use that player's dice, as DSN does for its own rolls.
+* Added: *Mounted creatures use their mount's space* (Mechanics, on by default): a rider's range and reach, and distances to it, are measured from its mount's space. A rider is a token with `flags.midi-qol.mount` set to its mount's token id, or a Rideable rider (familiars included; grappled tokens and riders moving within their mount keep their own space).
+
+### 14.6.6
+
+* Changed: updates are served from GitLab Pages, so update checks no longer fail when GitLab rate-limits repository files. Installed copies move over with this update. Manifest URL: https://tposney.gitlab.io/midi-qol/dnd6/module.json. Changelog: https://tposney.gitlab.io/midi-qol/dnd6/changelog.html.
+* Fixed: the deprecation warning for *Move roll formula to tooltip*'s advantage attribution options appeared several times when a world loaded; it appears once.
+
+**Sample items**
+* Added: *Flaming Sphere* (SRD 5.2, needs CAT): summons an automated sphere from the new compendium *MidiQOL Sample Summons*; a creature that ends its turn within 5 feet of it makes the Dexterity save.
+* Added: monster features for any NPC (SRD 5.1 text): *Ambusher*, *Brave*, *Dark Devotion* (2014 and 2024 rules), *Keen Senses*, *Steadfast*, *Sure-Footed*. Brave, Dark Devotion and Sure-Footed need CAT.
+* Fixed: *Legendary Resistance*'s optional prompt showed "LegRes" instead of its name.
+
+### 14.6.5
+
+* Compatibility: dnd5e 6.0.x only (maximum 6.0.999). dnd5e 6.1 changes damage application in ways that break midi's damage card; support follows in a later release.
+* Compatibility: requires DAE 14.6.4.
+* Added: `MidiQOL.addCardNote(card | uuid | workflow, html, { anchor, position, key, visibility | whisper })` / `removeCardNote(card, key)`: a note on a usage card, drawn where it names (`anchor`: buttons, attack, hits, damage, otherDamage, bonusDamage, utility, saves, top, bottom; `position`: before, prepend, append, after) and hidden in the log. A note is a chat message linked to the card: whispered notes show only to their recipients, links, inline rolls and enrichers work, and it is deleted with the card. Usage cards are drawn from their data, so splicing text into `content` no longer works.
+* Added: card notes drawn by your code: `MidiQOL.registerCardNoteRenderer(kind, renderer)` draws notes added with `{ kind, data }`, for each viewer whenever the card is drawn, from the note's data and its own messages (rolls made with `MidiQOL.cardNoteMessageData(note, role)` as their message data: hidden in the log, deleted with the note, drawn on the card with `MidiQOL.renderLinkedMessage`, masked as midi masks dnd5e's summaries; `MidiQOL.visibleRollTotal` gives a roll's total only if the viewer may see it). A note whose renderer isn't registered shows its html. Contested rolls are drawn this way.
+* Added: token names as each viewer may see them (midi's player-name rules): `@MidiTokenName[uuid]{name}` in enriched text (card notes, messages, journals), `{{midi-token-name uuid name}}` in templates, `MidiQOL.tokenName(uuid)`; markup with `data-midi-token-uuid` is renamed on midi's cards.
+* Fixed: saves and checks shown on their use card also popped up as chat notifications.
+* Fixed: a critical hit whose damage had parenthesised dice (e.g. `1d8 + (2d6)`) failed and the use never finished (dnd5e 6 bug, worked around).
+* Fixed: a damage roll that fails stops the use with a message instead of leaving it waiting.
+* Fixed: with *Save summary style* midi, dnd5e's summaries of rolls midi's saves section doesn't show (e.g. another module's check on the use card) were hidden.
+* Changed: text written to a usage card's `content` becomes a note at the bottom of the card (with a console warning) instead of replacing the card.
+* Fixed: `MidiQOL.contestedRoll` results were not shown on the item card, and its checks could be hidden both from the card and the log. The card now shows the contest as soon as it starts: each side's check, or who it is still waiting for ("Waiting for actor1 (Athletics)"), then the result, which follows a reroll; if a roll is never made it says so. A total is shown only to viewers who can see that roll.
+* Fixed: `MidiQOL.contestedRoll` ignored its `rollOptions` (for both rolls, or per side in `source`/`target`): `advantage`, `disadvantage`, `fastForward` and `rollMode` now reach the checks.
+* Fixed: undo did not colour the undone workflow's card; a change to *Undo chat colour* now recolours cards already undone.
+* Changed: undo removes the use's card and every message linked to it (saves, damage cards, card notes, uses made from it) instead of guessing from who spoke; an undone card shows no buttons.
+* Fixed: a second quick use of the same item couldn't be undone.
+* Changed: undo data is much smaller (a repeat attack's entry is about a tenth of the size), and undo restores only the items and effects that changed.
+* Fixed: `MidiQOL.addUndoChatMessage` did nothing on a player's client.
+* Fixed: the AC modifier icons on a hit row (cover, reaction, a target's attack penalty) were different sizes and sat at different heights.
+* Fixed: players who may not see a target's AC (dnd5e's *Attack Result Visibility*) still saw its modifier icons, whose tooltips give the amounts (cover, a reaction, and with several targets a target's attack penalty); they are now hidden with the AC.
+* Changed: an attack roll's expanded breakdown is dnd5e's: the dice, then each modifier labelled (Proficiency +6, Blurred Form −2), where it showed only the dice. The sources of advantage and disadvantage above it are named ("Nearby foe") instead of showing internal keys.
+* Fixed: *Move roll formula to tooltip* ignored its advantage attribution options: a roll's breakdown listed the sources of advantage/disadvantage whatever it was set to. They are listed there only with *Advantage Attribution* or *Formula -> tooltip + adv attribution*; the info icon on the roll's label shows them either way.
+* Deprecated: *Move roll formula to tooltip*'s advantage attribution options (the label's info icon shows the same sources). A world using one gets a deprecation warning; they are due to be removed in 14.8.
+* Fixed: an attack rolled without the roll dialog spent the actor's first ammunition (even one with none left) instead of the activity's chosen ammunition, while the card named the chosen one.
+* Fixed: an actor with a `flags.midi-qol.optional.*` change set to `ItemMacro` threw `DAE is not defined` when the world loaded, leaving the actor's data incomplete.
+
+**Settings**
+* Fixed: settings added since a world last saved midi's settings, or missing from an imported settings file, were treated as off (e.g. the condition editor, sheet buttons, waiting for damage application); they now take their defaults.
+* Fixed: quick settings *GM Attack/Damage: Manual*, *Player Attack/Damage Roll: Manual* and *No Hits/Saves/damage application automation* set values the config panel doesn't offer; *Turn on Reaction processing* no longer changes how saves are rolled.
+* Changed: the Rules tab starts with *Rules always applied*: *When an Incapacitated actor takes an action*, *Check weapon range when attacking*, *Targets you can see* (moved from Mechanics) and *Force vision when checking*, which apply whether or not optional rules are enabled. The Vitality settings, which need optional rules enabled, are shown with them.
+* Changed: *When an Incapacitated actor takes an action*: the option *Do nothing* is now *Allow it*.
+* Fixed: the *Enable ddb-game-log support* checkbox did nothing; it now turns the integration on, and a world where it was ticked has it on.
+* Changed: new worlds default to *Temporary HP Concentration Check* and *Remove concentration when incapacitated status applied* on (the rules as written), and GM critical damage to *DND5e Settings Only* (it was a blank choice, so the GM's critical hits didn't double damage dice); a world with the blank choice saved follows the player setting.
+* Changed: the *Full Automation* and *No Automation* quick settings are rebuilt for this version. Full Automation now uses the 2024 invisibility rules, hiding per observer, GM damage rolled on a hit, and no target confirmation.
+
+**Teleport activity**
+* Added: *Teleport* option *During the Use*: the teleport is planned as part of the use, after its effects and damage; dismiss the plan and the card keeps its Teleport button.
+* Added: *Who Teleports*: *Swap Caster and Target*.
+* Added: macros can pass `midiOptions.teleport` to `completeActivityUse`: the destinations (no planning) or `"button"`.
+* Changed: a teleport used as a reaction pauses the reaction timeout while it is placed.
+* Changed: once the teleport is made, the card's Teleport button is hidden.
+* Changed: on hex grids destinations are checked by hex (occupied spaces, 5 ft, nearest free space, walls); on gridless scenes distances are measured exactly.
+* Changed: when the caster dismisses their own plan, nobody teleports.
+* Fixed: when the caster's teleport goes to another level, the creatures teleported with it go to that level too, and only tokens on that level block a space. `MidiQOL.moveToken` takes a `level`.
+* Fixed: a player placing a GM's creature got an error.
+* Fixed: an error when a token just targeted was teleported to a level not being viewed.
+* Fixed: "Non-existent data field" warnings from the midi tab of teleport, transform and similar activities.
+
+**Saves**
+Who sees what of a card's saves and checks:
+* A card's challenge (its DC and its NPC targets' results) belongs to the caster, whoever made the roll: dnd5e's *Challenge Visibility* *Show all* shows it to everyone, *Show only from other players* to players when the caster is player-owned (never an NPC caster's), *Hide all* to no one. The caster's owners always see it. Player-owned NPCs count as player characters.
+* Of an NPC's save, players who see the challenge see what *Auto Check Saves* allows: the outcome, the total or the dice; with *only GM sees* nothing.
+* A player character's save shows its roll as its own save message does (blind and private rolls stay hidden); its outcome (tick/cross and highlight) follows the visibility settings, and its owners see it unless *only GM sees*.
+* A roll forced obscured (*Which skill checks are rolled blind*, *Blind roll display* Obscured) shows ?? in the saves section and in dnd5e's summary, with no success/failure icon, as on its roll card.
+* Target names are always shown.
+* With *Auto Check Saves* off, a save or check rolled from the card's button is recorded in midi's saves section: the total and result against the DC, a reroll replacing the row, a row for a creature that wasn't a target. Display only.
+* GM setting *Chat card summaries*: Each user's choice/Always/Never forces dnd5e's *Summarize chat cards* for every user (a user's own choice is put back afterwards).
+* Fixed: a check or save the activity's user rolls for its own creature (Hide's Stealth, Search's Perception, Influence…) ignored the Alt/Ctrl (advantage/disadvantage) and Shift keys held when it was used, including an action chosen in Generic Actions; the card's tooltip names the key press.
+* Removed: setting *Show damage after each save*. A target's damage is on the damage card (with its save and resistance marks, and the player view's own settings) and in dnd5e's damage tray.
+
+**Conditions**
+* Added: optional rule *Apply condition rules* (off by default): the condition rules dnd5e doesn't apply, however the condition is set (token HUD, sheet, activity). Replaces CPR 1's *Apply Midi-QOL Condition Effects*.
+  * Frightened, poisoned, prone and restrained creatures attack with disadvantage, as do creatures with 2014 exhaustion 3 and heavily encumbered ones (Strength and Dexterity attacks).
+  * Attacks against a paralyzed, petrified, restrained, stunned or unconscious creature have advantage; against a prone one, advantage within 5 ft and disadvantage beyond.
+  * Hits within 5 ft on a paralyzed or unconscious creature are critical.
+  * Paralyzed, petrified, stunned and unconscious creatures fail Strength and Dexterity saves.
+  * Frightened creatures have disadvantage on ability checks.
+  * Silenced creatures can't cast spells with a Verbal component.
+  * Blinded follows these rules only when *Unseen/Invisible attackers* is off.
+* Added: the advantage tooltip names the conditions behind dnd5e's own advantage or disadvantage on checks and saves (poisoned, restrained, exhaustion).
+
+**Vision**
+* Changed: *Dim lower floors through surface holes* is replaced by the player setting *Mark lower floors where creatures can't be seen*. Through an opening you see the floor below, but not always the creatures on it: midi marks the squares where a creature would be hidden from your selected token, in the style (tint, dim, hatch, outline), colour and opacity you choose.
+
+**Activities**
+* Added: *Statuses Applied* on the activity sheet (midi-qol tab › Use): statuses put on the targets directly, as the token HUD does, rather than an effect carrying them. Each can have extra special durations and an On Save choice. They go to the same targets as the activity's effects (hit, failed save, activation condition; also from the item's other activity or an ammunition activity) and end with the caster's concentration. A creature that already has the status keeps it.
+* Fixed: an effect or status applied "whatever the save" also went to creatures an attack missed; it now goes only to the creatures hit.
+* Changed: *Statuses Applied*: *On Save* is a choice, *If the save fails* or *Whatever the save*.
+* Changed: the *Midi Overtime* tab explains which effect change runs an over-time activity (`flags.midi-qol.ActivityOverTime` set to its identifier); marking an activity *Is Over Time* alone does nothing.
+
+**Regions**
+* Fixed: *Midi Region Light*'s light spilled outside its region and could sit off-centre. It now stays inside the region (single-piece regions) and is centred on the shape: an emanation's token, a circle's or rectangle's centre, the middle of a cone or line.
+* Added: *Midi Region Light* can be darkness, with *Priority*, *Constrained by Walls* (off by default), *Fill Region* and the darkness animations.
+
+**Targeting**
+* Fixed: an automated use (a macro's, or a turn-start effect such as Regeneration) could lose its targets, and with them its damage, when another use started or finished at the same moment. Each use keeps its own targets, and the user's targets are put back only if nothing has targeted since.
+* Fixed: *Un-target at end of turn* (dead targets) cleared every target at 0 hit points shortly after any use, so a Healer's Kit or Spare the Dying used on a downed creature lost its target; only the finished use's targets are cleared.
+
+**Flanking and attack rolls**
+* Added: an attack per target works with area templates and emanations (e.g. a cone that makes an attack roll against each creature in it). The use places its template, chooses its targets and spends its cost; each target then gets its own use and card, linked to the first card, which shows each target's hit or miss as its attack resolves. The first use's `RollComplete` comes after the per-target uses, with no attack roll.
+* Added: attack activity *Ammunition* (weapons that use ammunition): one per attack roll (default), one per use, or one per target. With an attack per target, later targets use the first target's ammunition. A target's attack that can't be made waits at its attack button; cancelling it or deleting its card skips the remaining targets.
+* Changed: flanking applies only to a melee attack roll against a single target (with *Roll a separate attack per target*, each roll counts).
+* Changed: a fixed flanking bonus (+1 to +5) is added to the attack roll, labelled Flanking or Flanked, instead of lowering the target's AC.
+* Changed: against a single target, the target's granted attack bonus (`flags.midi-qol.grants.attack.bonus`) is part of the attack roll instead of lowering its AC; against several targets it still applies per target.
+* Changed: changing the flanking settings clears existing Flanking and Flanked statuses.
+* Added: attack roll details (Workflow › Hits *Show attack roll details*, on by default): icons beside the total for its unusual parts (flanking, a granted bonus, an effect's bonus shown with the effect's image, exhaustion), green for a bonus and red for a penalty, and a tooltip on the total listing every part of the roll and any advantage or disadvantage.
+
+**Macros**
+* Fixed: an `onUseMacroName` effect change naming `ActivityMacro`, on an effect applied by an item's second or later activity, ran the item's first activity's macro instead of the effect's own activity's.
+* Fixed: DAE's field browser listed `flags.midi-qol.optional.NAME.displayChatCard` instead of `displayBonusRolls`.
+* Added: `MidiQOL.hasUsedAction(actor)` and `MidiQOL.setActionUsed(actor)`, alongside the reaction and bonus action helpers.
+* Added: hook `midi-qol.conditionData` to add data that conditions can read.
+* Fixed: an effect change `flags.midi-qol.onUseMacroName` with `ItemMacro` on an aura's copy (Aura Effects) pointed at the aura effect rather than its item, so the macro never ran; it now runs the item's macro.
+* Fixed: a reaction passed to the `chooseReactions` socket as an object (`{itemName, id, uuid, …}`, the older form) made the reaction dialog fail to render, so nothing was offered; it is looked up by its uuid.
+* Fixed: with CAT 0.1.3 or older active, an item with a cast activity made CAT throw an error for every effect pointing at it.
+* Fixed: an ammunition's onUse macros at the workflow-state passes (e.g. `postAttackRollComplete`, `preDamageRollComplete`) got the weapon as the macro item, so its `ItemMacro` never ran; the macro item is now the ammunition.
+* Changed: a blank onUse macro name is the item's own macro (the used activity's, else the item's; for an effect change, the effect's activity's, else its item's), and an item with a macro but no onUse macros runs the macro after active effects. An onUseMacroName effect change with no pass is ignored and reported.
+
+**Invisible and hidden**
+* Removed (breaking): the optional rule *Attacking removes hidden/invisible*. Invisibility and hiding end by their own durations instead, so Greater Invisibility and other lasting invisibility survive an attack (midi used to end the spell and its concentration). Invisible set from the token HUD stays until removed by hand.
+* Changed: *Unseen/Invisible attackers have advantage/disadvantage* defaults to RAW (2024) where it was never set.
+* Added: two options for *Hidden attackers have adv/disadv on attacks*: *Hiding is Invisible to whoever doesn't perceive it* (the default, replacing *Check 'Hidden' Status*), and the same with a house rule where a passive Perception at least the hide's DC sees through it. A hiding creature (dnd5e's Hiding condition) is then Invisible, on the map and for attack rolls, to every creature that doesn't perceive it. These perceive it: the hider and its allies; a token with vision disabled, unless *Force vision when checking* is on; anything that sees invisible creatures (truesight, see invisibility, blindsight, tremorsense); and, with the house rule, a creature whose passive Perception is at least the DC. The DC is the Hide action's Stealth total, or 15 for Hiding set from the token HUD.
+* Added: a status *Invisible (until it attacks, casts a spell or deals damage)*, which ends itself the way the Invisibility spell does. The token shows a single Invisible icon, and removing Invisible from the sheet or token HUD also removes this status.
+* Changed: the *Invisibility* sample spell applies Invisible this way; it ends when the target attacks, casts a spell or deals damage, ending the spell.
+
+**Damage**
+* Fixed: damage a creature absorbs (Damage Absorption) shows as healing on the damage card; it was applied correctly but shown as no change.
+* Fixed: absorbed damage heals the full damage dealt (after a save and the card's multiplier); immunity, resistance, vulnerability and DR no longer reduce it (an immune absorber, such as an SRD golem, healed nothing).
+* Fixed: `MidiQOL.modifyDamageBy` (in an `isDamaged` or `preTargetDamageApplication` macro) changed only part of the damage entry, so later special durations used the old figure; the whole entry now follows.
+* Removed: setting `useDamageDetail` (`MidiQOL.configSettings().useDamageDetail` reads true, with a deprecation warning).
+* Fixed: damage to a creature at 0 hit points counts as damage, so `isDamaged` hooks, macros and special durations fire (e.g. Stable from Spare the Dying or a Healer's Kit ends).
+* Added: setting *Enforce death saves* (Mechanics, off by default): damage to a character at 0 hit points is a failed death save, two for a critical hit, and death if it is at least the character's hit point maximum. Undo on the damage card restores the count and, after a death, the unconscious status. `flags.midi-qol.noDeathSaveFailureFromDamage` exempts a creature.
+
+**Chat cards**
+* Fixed: the lines between a card's sections were near-white in dark mode. They are now dnd5e's dotted divider (light or dark with the theme), and only between the attack, damage, utility and saves groups, not between an attack and its hits or between damage rolls. The dice tooltip, advantage tooltip and contested roll lines follow the theme too.
+* Fixed: a card no longer shows the same picture twice when the activity's image is its item's.
+* Added: follow-up buttons. An activity marked *Follow-up Button* (with an optional *Follow-up Condition*) appears as a button on the card when another activity of its item is used, for the user's owners and the GM. Clicking it runs the activity at its *Follow-up Targets*: by default the creatures an attack hit, else all the targets; or the user, the hit or missed targets, or the failed or successful saves. A critical stays a critical, its uses are spent, and its card is linked to the first. Macros can offer any activity with `MidiQOL.addFollowUp(workflow, activity, {label, targets})`.
+* Changed: a damage card is linked to the card it came from and deleted with it, and no longer repeats its speaker and whisper recipients.
+* Changed: the card of an item used inside another use by the same actor (e.g. CPR's Sneak Attack spending its use) is linked to that use's card and deleted with it, unless that use is aborted.
+* Changed (breaking): Apply on dnd5e's damage tray goes through midi: damage hooks and macros run (CAT/CPR damage reductions apply) and the linked damage card can undo it.
+
+**Rolls and saves**
+* Fixed: `flags.midi-qol.noAdvantage.check.*` and `noDisadvantage.check.*` didn't apply to skill checks using that ability (they did to tool checks).
+* Changed: `flags.midi-qol.deathSaveBonus` is deprecated: an effect using it now sets dnd5e's `system.attributes.death.roll.bonus`, so dice work; set on an actor directly it still works, with a warning, until 14.6.10.
+* Added: `flags.midi-qol.DR.save`, `.other`, `.util`, `.abil`, `.ench` and `.summ` reduce damage from activities of that type (they did nothing).
+* Changed: `flags.midi-qol.DR.{damage type}` (including `DR.healing` and `DR.temphp`) and `DR.all` are no longer offered in DAE's field browser: they only set dnd5e's `system.traits.dm.amount.{type}` and midi's `system.traits.dm.midi.all`, which are offered instead. Effects using them still work.
+* Fixed: DAE's field browser offered `system.traits.dm.{damage type}` and `system.traits.dm.midi.healing`, which don't exist, instead of `system.traits.dm.amount.{type}`.
+* Removed: `flags.midi-qol.advantage.damage.*` and `magicResistance.save.all` / `.check.all` / `.skill.all` from the DAE field browser; midi never read them.
+* Changed: an optional bonus's terms are named after the bonus, so an attack roll's breakdown shows e.g. "+5 Lucky Strike" rather than "+5 Bonus" (attack, save, check and AC bonuses; damage terms keep their damage type).
+* Changed: *Show before and after optional bonus chat card*: an optional bonus to a roll made for a use card (attack, damage, a target's save or check, the AC an attack is compared with) is a one-line note on the card beside the roll it changed (e.g. "Lucky Strike: 17 → 22", each total an inline roll that expands to its dice), instead of a message repeating both rolls. A save's note shows each viewer as much as that target's save row: expandable totals with the dice, plain totals with the total only, the bonus's name with the outcome only, nothing when the result is hidden. A save's before/after message used to be posted as a second save message, so with *Summarize chat cards* on it was never shown.
+* Fixed: an "ActiveEffect … does not exist" error when one use ended an effect lasting until a Bonus Action, Reaction or Turn Action.
+* Fixed: optional bonuses limited by `@resources.legres.value` or `@resources.legact.value` (e.g. Legendary Resistance) now spend a use; they could be used without limit.
+* Changed: an over-time roll's card shows the effect's icon and name once, with the activity type (Damage, Saving Throw) beneath.
+* Fixed: an over-time action save with `rollType=skill` or `tool` (e.g. an Athletics check to escape) showed "undefined check" and never ended the effect; it now names the check, and a success ends the effect.
+* Fixed: Dice So Nice's *Hide NPC rolls* and *Disabled during combat* now apply to the dice midi shows (attacks, damage, saves, checks, bonus rerolls), including dice other modules show through `MidiQOL.displayDSNForRoll`, which now takes the rolling actor.
+
+**New sample items**
+* Most of these came about because I needed them for my ember game and could not find another source. These are all AI generated and I'm confident that over time CPR/MISC/Gambits will come up with their own and better implementations. However I found them useful so thought I'd add them for anyone that needs them. Most of these use Coven's Automation Toolkit (CAT) so make sure it is installed if you want to use them. I suggest making midi's sample items the last compendium to check when applying medkit via CAT.
+* 2024 actions (sample items › Actions, need CAT): Attack, Check Cover, Generic Actions, Hide, Influence, Knock Out, Magic, Mount, Ready, Search, Squeeze, Stabilize, Study, Suffocation, Underwater. *Generic Actions* offers all of them and, with CPR, CPR's actions too (an action both offer is listed twice, tagged with its source). To give an action options for every player, import it from the compendium into the world's Items and set them there: Generic Actions uses those options with the current compendium version.
+* *Hide* (2024 rules): a DC 15 Stealth check; on a success you are hiding (dnd5e's Hiding condition), with your total as the DC to find you (see *Invisible and hidden*). It ends when you attack, cast a spell with a Verbal component, or are found. With CPR, CPR's hide applies its effect. *Search*: a Perception check finds hidden enemies in line of sight whose DC it meets; by default the GM confirms who is found (Search's *GM Confirms* option).
+* The actions' result messages (Hide's DC, Search, Check Cover, Influence) are deleted with the action's card, and a chosen action with its Generic Actions card. For macros: any message flagged `flags.midi-qol.origin` with a card's id is deleted with that card.
+* SRD 2024 spells (those needing CAT say so): Calm Emotions, Command, Detect Magic (see below), Dragon's Breath, Ensnaring Strike, Faerie Fire, Guiding Bolt, Gust of Wind, Hellish Rebuke, Heroism, Identify, Lesser Restoration, Light, Pass without Trace, Phantasmal Force, Sanctuary, Sleep, Spare the Dying, Thunderwave, Web.
+* SRD 2024 equipment: Torch, Candle, Lamp, Hooded and Bullseye Lanterns, Healer's Kit, Eversmoking Bottle.
+* SRD 2024 Metamagic options (need CAT): Careful, Distant, Empowered, Extended, Heightened, Quickened, Seeking, Subtle, Transmuted and Twinned Spell.
+* SRD 2024 class features: Innate Sorcery, Preserve Life, Weapon Mastery.
+* *Metamagic Adept* (2024 feat, needs CAT): 2 Sorcery Points, regained on a Long Rest, which midi's Metamagic options spend before Font of Magic's. Not SRD, so no rules text: apply midi's automation to your own copy (identifier `metamagic-adept`, 2024 rules) with CAT's medkit, which keeps your description and adds midi's notes.
+* Official, not SRD, so without rules text (apply them to your own copy with CAT's medkit): *Vow of Enmity* (Oath of Vengeance), *Dragonhide Belt, +2*, *Gloves of Soul Catching* (and an Elemental version adding the 2d10 to the strike's damage roll), *Jewel of Three Prayers* in its Dormant, Awakened and Exalted states (the latter two need Aura Effects; Prayer of Fortune is for allies, or any creature with the Ward aura set to Any; Exalted adds swimming for the wearer and nearby allies, and Golden Flash: a teleport whose landing bursts with radiance).
+* SRD monster features (sample items › Features › Monster Features), each offered by CAT only to its creature (most need CAT): Stench, Unnerving Gaze, Fear Aura, Death Burst, Death Throes, Life Drain, Vampire Bite, Grick Tentacles, Regeneration (Troll and Troll Limb with the SRD 5.2.1 acid/fire rule and amounts), Parry; Pack Tactics, Lightning and Acid Absorption for any NPC.
+* *Swallow* for the SRD Behir, Purple Worm, Remorhaz, Tarrasque, Kraken, Giant Frog and Giant Toad (sample items › Features › Monster Features, needs CAT): as many creatures at a time as the stat block says, damage when the stat block says (the swallower's turn start or end, the swallowed creature's own turn, or the Giant Frog's once-then-disgorge), regurgitation after enough damage from inside, escape at 0 hit points.
+The rest are just fun, with some interesting effects, so thought I'd push them too.
+* *Starfall Bullet* (homebrew legendary sling bullet): on a hit, 8d10 radiant to the target and DC 18 Dex for 4d10 fire (half on a success) to every other creature within 15 ft; the crater is difficult terrain filled with bright light for 1 minute (a region with a Midi Region Light, made by the GM and removed when the minute ends).
+* *Chainbreaker Bolt* (homebrew legendary crossbow bolt): on a hit, choose up to five more creatures, each within 30 ft of the last one hit; each takes the crossbow's damage dice plus 3d10 force.
+* *Arrow of Echoed Wounds* (homebrew legendary arrow): on a hit the arrow lodges for 1 minute, adding 2d6 piercing whenever the target takes damage; the target's Lodged Arrow item pulls the arrow out (DC 18 Medicine, 4d6 piercing on a failure).
+* *Cataclysm Bolts* (homebrew very rare crossbow bolts): on a hit, a d6 picks a fire burst (3d8 to the target and those within 5 ft), jagged ice, a necrotic pulse or six shards of shrapnel.
+* *Draught of the Echoing Step* (homebrew legendary potion): for 10 minutes you leave echoes of yourself; attacks against you have Disadvantage while one is beside you, an echo can take a hit meant for you, and as a reaction you can step to an echo so the attack misses and the echo bursts for 3d8 force at the attacker.
+* *Draught of the Second Breath* (homebrew legendary potion), drunk as a reaction when damage would drop you to 0: you rise at your hit point maximum, free of Charmed, Frightened, Paralyzed, Poisoned and Stunned, with resistance to all damage for a minute and a Constitution save to drop to 1 instead of 0, each success costing a level of Exhaustion when the minute ends.
+
+**Detect Magic and Detect Magic (Vision)** (sample items › Spells › 1st Level, need CAT)
+* *Detect Magic* has two activities. *Cast* (the spell, concentration, 10 minutes) whispers the caster's owners and the GM whether the caster senses magic within 30 feet, no more. *Sense Magic* (the spell's Magic action, no usage dialog or spell slot) gives the specifics, one line per creature or area.
+* What Sense Magic reports: magic items by kind (a longsword, a potion, armor), never by name; magical effects as "a magical effect" with the spell's school (e.g. "a magical effect (Abjuration)"), never by spell name. An effect counts if it is marked magical or comes from a spell or a magic item; a magic item's own effects on its bearer are reported as the item.
+* Range and line of sight: creatures and areas within 30 feet, nothing behind a wall that blocks sight. A creature the caster can't see (invisible, hidden) is reported only as "An unseen creature radiates magic", with no breakdown; tokens the GM has hidden are not reported.
+* Magical areas: a region made by a spell (its school) or a magic item, or one marked *Magical* in the region editor, is reported as "a magical area". The region editor's Appearance tab has *Magical* and *Magic School* (`flags.midi-qol.magical`, `flags.midi-qol.magicSchool`); Magic School overrides the school of the spell that made the region.
+* *Detect Magic (Vision)* (`flags.midi-qol.detectMagic.vision`; add it from the compendium, CAT doesn't offer it as a replacement) is Detect Magic whose Sense Magic also gives the caster *Magic Sight* until the end of the caster's turn (in combat) or 10 seconds, whichever comes first. The GM and the caster's owners see glowing concentric rings around each visible creature bearing magic, and bands along the outline of each magical area: one ring per colour, a spell school's colour (abjuration blue, conjuration yellow, divination white, enchantment pink, evocation red, illusion purple, necromancy green, transmutation orange) or turquoise for magic items, brightest innermost. A ring is brighter and wider for a higher spell level (the level it was cast at) or a rarer item. The rings follow their tokens and fade when Magic Sight ends; unseen creatures get none.
+
+**Sample items**
+* Changed: the *Bullseye Lantern* sample is the SRD *Lantern, Bullseye* (Light/Extinguish, oil, cone).
+* Fixed: the *Brooch of Shielding* sample (was "Broach") let Magic Missile damage the wearer; it is now the SRD 5.2 brooch (text, uncommon, CC-BY-4.0) with identifier `brooch-of-shielding`, so CAT matches it.
+* Changed: sample items › Items is sorted into Mundane, Weapons, Ammunition, Wands and Wondrous Items; midi's own creations are in Items › Homebrew, with the source "midi-qol homebrew". Fleet of Foot moved to Features, Devil's Glaive to Monster Features.
+* Changed: samples of official items that aren't SRD have no rules text (Absorb Elements, Toll the Dead, Rakish Audacity, Arcane Ward, Aura of Vitality, Elemental Attunement); their source names the book. Apply them to your own copy with CAT's medkit.
+* Changed: a sample's midi-qol notes (including the former "Foundry Note" sections and the CAT requirement) sit in a block at the end of its description. When CAT's medkit applies a midi automation it keeps the item's own description and replaces that block, so anything typed inside it is lost; the medkit also lists the notes.
+
+### 14.6.4
+
+**Rolls and saves**
+* Fixed: a check activity's skill or tool check could lose the roller's fail/success, min/max and advantage (with CAT active, a Stealth check ignored `system.skills.ste.roll.success`).
+* Fixed: a check activity offering several skills or tools rolled the chosen one with the first one's ability (Athletics or Acrobatics: Acrobatics rolled with Strength); switching the skill in the roll dialog now switches the ability too.
+* Fixed: with CAT active, a check activity's own ability (e.g. Strength (Stealth)) was ignored when the GM rolled for a player.
+* Fixed: a tool's check activity read advantage and fail/success flags for the tool's default ability, not the tool item's own.
+* Changed: walls block an attack (*Walls block ranged attacks*: Center Check, and the module fallbacks) only if they block movement, i.e. total cover, as in 11.0.13: darkness and walls that only block sight (curtains) no longer block it (if the target can't be seen the attack has disadvantage with vision checking); a wall that blocks movement but not sight (a window) does. The failure says the target has total cover.
+* Added: *Targets you can see* on an activity's Targeting tab, for spells and features that target "a creature you can see": midi won't use it on a target its token can't see (each target of an activity that targets creatures directly, not an area template or emanation; vision follows *Force vision when checking*). Setting *Targets you can see* (Mechanics): do not check, enforce (default) or warn only.
+* Changed: with *Calculate Cover* set, a target with total cover (dnd5e's Total Cover status, or the cover module's total cover) can't be targeted by an activity that targets creatures directly (not an area template or emanation), as the rules have it; previously attacks auto-missed and other spells (e.g. Hold Person, Magic Missile) still applied. New *Calculate Cover* option *dnd5e cover status only* uses the status alone. *Ignore total cover* still applies; None keeps the old behaviour.
+* Fixed: once an actor whose reactions or bonus actions reset only on a rest (or never, or each turn) used one, every later reaction or bonus action marker, for any actor, reset that way too (a reaction no longer cleared at the start of its turn).
+* Fixed: the default *Check weapon range when attacking* (`longFail`) wasn't one of the setting's options, so the settings panel showed none selected; stored values are migrated to `longfail`.
+* Fixed: TroubleShooter's Auto Fix didn't refresh an open settings panel (it fired `midi-qol.configSettingsChanged` instead of `ConfigSettingsChanged`).
+
+**Effect expiry**
+* Changed: an effect ended by a special duration (1Attack, isAttacked, a save, a rest, zero HP, an over-time save, …) follows DAE's *Special Duration Expiry Action* and the effect's own *Expiry Mode*: under Mark Expired it is suppressed (disabled, kept). It was flagged expired, so it was deleted outside combat and left inactive for good after a combat.
+* Fixed: the `removeEffects`, `deleteEffects` and `deleteItemEffects` socket actions, and removing a token condition, delete the effect, suppressed (disabled) ones included; under Mark Expired they only flagged it expired.
+* Fixed: an attack without damage didn't end 1Attack, 1Hit, 1Critical or 1Fumble, and an all-missed attack that completed at once didn't end 1Critical or 1Fumble.
+* Fixed: `isSaveSuccess.<ability>`/`isSaveFailure.<ability>` never ended for a save activity. Target save durations follow the workflow's save activity and the ability the target chose (with several and no choice recorded, only the bare keys), and a target that never rolled (missed by the attack) no longer counts as failing.
+* Changed: a save or check rolled outside a workflow ends `isSaveSuccess`/`isSaveFailure` by its DC (one from midi's save card is the workflow's, whichever client rolls it).
+* Fixed: a rest could race DAE deleting the reaction and bonus action markers ("does not exist"), and didn't remove the bonus action marker when bonus actions reset on a rest.
+* Fixed: an unlinked token with an item that depends on an effect in that token (`addDependent`, CAT/CPR items, dnd5e enchantment riders) failed to prepare on load: "Maximum call stack size exceeded" (Foundry 14.369).
+* Fixed: a pasted, teleported (`MidiQOL.teleportToken`), duplicated or transformed token, actor or scene kept its dependent items and effects tied to the original's effects (`addDependent`, CAT/CPR): they were hidden and deleted with the original's, or never.
+* Requires DAE 14.6.3.
+
+**CAT**
+* Changed: sample items carry their CAT automation version in `flags.cat.automation.version` and the identifier of the item they automate (e.g. `sneak-attack`, `lucky`, `radiant-strikes`, `sword-of-wounding`), and midi registers them with CAT itself. Demos and legacy copies (versioned Sneak Attacks, "USE CPR" items, Turn into Frog, Mortar …) are no longer offered by the medkit.
+* Fixed: the Bullseye Lantern sample item is equipment, as dnd5e's Lantern, Bullseye is (it was a consumable).
+* Fixed: with CAT 0.1.2 the medkit stopped part way through an actor when replacing an item with a cast activity (e.g. Paladin's Smite) made dnd5e replace that activity's cached spell.
+
+### 14.6.3
+* Requires DAE 14.6.2.
+
+**Rolls and saves**
+* Changed: fail and success are conditions on dnd5e's roll fields (`system.abilities.dex.save.roll.fail`, `system.skills.ste.roll.success`, `system.rolls.attack.fail`, …), combined as dnd5e combines min/max; min/max are dnd5e's. The `flags.midi-qol.fail/success/min/max` save, check, skill, tool, attack, death save and concentration keys are deprecated; DAE moves them to the fields.
+* Added: roll field fail/success have readable names in the roll dialog and DAE's field browser (e.g. *Fail (Dexterity Saves)*).
+* Changed: every d20 roll (attacks, saves, checks, skills, tools, concentration, death saves, initiative) takes dnd5e's verdict on advantage: midi's flags and its own sources (flanking, range, visibility) count alongside dnd5e's roll mode fields and advantage rules, so a downgrade or override on any of them applies to all (e.g. `rolls.ability.save.mode` Downgrade cancels advantage from `abilities.dex.save.roll.mode`). The roll tooltip names each dnd5e roll mode source, and a held Alt/Ctrl counts as dnd5e counts it.
+* Fixed: Alt/Ctrl were ignored on a skill or tool check when midi had already found disadvantage/advantage.
+* Fixed: a tool check rolled from a request card for another actor was rolled for the clicker's actor; tool checks also honour `simulate` and the request card's roll mode, as saves and skills do.
+* Changed (macros): a `RollModifierTracker` side counts its sources; `advantage.setOverride` forces a side as a dnd5e override does, so a suppression of it still applies; `hasAdvantage`/`advantageMode` are dnd5e's verdict, then the roll as made (`reconcileWithRoll`); `processKeys` is removed.
+* Changed: a dnd5e advantage rule that forces a mode (`=1`/`=-1`) no longer beats a suppression: with `noAdvantage` (midi's, or a dnd5e Downgrade) the roll is normal, as dnd5e rolls it.
+* Fixed: an attack or save whose d20 a minimum or maximum changed (e.g. `system.rolls.attack.min` 20) was judged critical/fumble by the face rolled, not the value it counts as, as dnd5e does. midi's auto-success/fail are still not critical/fumble unless the face is; an auto-failed save is never critical and an auto-succeeded one never a fumble.
+* Fixed: Shift+Alt+Ctrl rolled saves, checks, skills, tools, death saves and initiative with advantage (dnd5e reads Shift+Alt first); it forces a normal roll, as on attacks. With the roll dialog shown it defaults to Normal.
+* Fixed: an advantage reason for an unknown tool key (e.g. `disadvantage.concentration`) showed as `tool:<key>`.
+* Removed: setting *Ability Check Advantage gives Skill Advantage*; an ability's check advantage always applies to its skills, as in dnd5e.
+* Fixed: with *Attack display* set to Hit/Miss/Critical/Fumble, players saw `midi-qol.criticalHit` or `midi-qol.fumble` instead of the text for a critical or fumble.
+* Fixed: the Target Confirmation dialog didn't update a target's cover or range when the attacker or a target moved while it was open; a dialog that failed to render left the use waiting and its hooks registered ([#1554](https://gitlab.com/tposney/midi-qol/-/issues/1554)).
+* Changed: with fast forward off, Alt or Ctrl on an attack skip the roll dialog with advantage or disadvantage, as dnd5e does (they opened the dialog).
+* Fixed: Roll Toggle did nothing on skill, ability, save and tool rolls with fast forward off; held, it now skips the dialog of a roll that isn't fast forwarded and shows it for one that is, keeping Alt/Ctrl's advantage or disadvantage. Bound to Shift it opens the dialog for fast forwarded rolls ([#1553](https://gitlab.com/tposney/midi-qol/-/issues/1553)).
+* Fixed: tool and skill checks requested through Flash Token Bar were sent with the ability as the roll key, so players rolled a plain ability check ([#1575](https://gitlab.com/tposney/midi-qol/-/issues/1575)).
+* Fixed: skill and tool checks applied the min/max/fail/success of the skill's default ability, not the one rolled, passed in or chosen in the roll dialog ([#1572](https://gitlab.com/tposney/midi-qol/-/issues/1572)).
+* Fixed: *Force vision when checking* left a token's vision switched on until its next update, then tested stale vision ([#1571](https://gitlab.com/tposney/midi-qol/-/issues/1571)). `MidiQOL.canSee`/`canSense`/`canSenseModes` take `{ forceVision }`.
+* Fixed: crits and fumbles on a non-d20 attack or save die (e.g. Custom D&D 5e's 2d10) were judged on the first die only.
+* Deprecated: `flags.midi-qol.concentrationSaveBonus`; use `system.attributes.concentration.roll.bonus`. Setting it on an actor directly stops working in 14.6.10.
+* Fixed: `flags.midi-qol.concentrationSaveBonus` still mapped to the deprecated `concentration.bonuses.save`.
+* Fixed: with *Concentration check* set to item, the concentration advantage/disadvantage flags were ignored.
+* Fixed: Super Saver and Semi Super Saver changed all of a target's damage, not just damage a save halves.
+* Fixed: ammunition with its own activity (e.g. Arrow of Slaying) used the weapon's conditions and save instead of its own.
+* Fixed: *Chat Message + Auto Roll* concentration saves could roll twice.
+* Fixed: on multi-level scenes, sight, wall, template and teleport checks used the GM's viewed level, not the token's.
+
+**Damage**
+* Fixed: Damage Absorption chosen on the actor sheet was not saved, and `system.traits.da.value` absorbed nothing; its types, ALL (not healing) and physical bypasses now absorb damage. `system.traits.da.all` maps to `system.traits.da.value` ALL.
+
+**Effects and expiry**
+* Fixed: an effect with an `ActivityOverTime` change logged "activity not found" each turn for its other changes, and could take the roll mode from a change value that happened to be an activity UUID.
+* Fixed: reaction and bonus action markers could outlast turn start or combat end; the combat-end reset wrote the wrong flag.
+* Fixed: changing the same status on an actor twice at once showed an error.
+* Fixed: Custom D&D 5e's Conditions config dropped midi's flanking, reaction and bonus action statuses.
+* Fixed: an over-time action save with nothing to roll posted an empty card; README Hold Person example corrected ([#1569](https://gitlab.com/tposney/midi-qol/-/issues/1569)).
+* Fixed: region *Once per turn* was shared by unlinked tokens of one actor ([#1580](https://gitlab.com/tposney/midi-qol/-/issues/1580)).
+* Fixed: region *Once per turn* let entry and turn end both trigger in one turn ([#1568](https://gitlab.com/tposney/midi-qol/-/issues/1568)).
+* Added: region setting *Move Each Turn* (away from the caster or a chosen direction, at turn start or end) ([#1568](https://gitlab.com/tposney/midi-qol/-/issues/1568)).
+* Fixed: a cast that rolls a save and places a region made creatures already inside save twice.
+* Fixed: an *Always Apply* effect went to every target once any target passed the *Active Effect Condition*.
+* Changed: applied effects record their source as dnd5e 6 does (activity, concentration, card); see DAE 14.6.2.
+* Fixed: a replacement effect's `ItemMacro` was not found when its item was deleted; `resolveDAEItemData` removed.
+
+**Targeting**
+* Fixed: with *Walls block*, a self-centred area (dnd5e 6's Radius, e.g. Sword Burst) missed creatures inside it whenever a wall lay between them and the scene's top-left corner; cover from such an area was worked out from there too.
+
+**Combat and API**
+* Added: GM warning and TroubleShooter Auto Fixes for settings that conflict with other modules.
+* Fixed: TroubleShooter's Auto Fix buttons did nothing.
+* Fixed: other modules' activities could not be a *Trigger Activity* ([#1570](https://gitlab.com/tposney/midi-qol/-/issues/1570)).
+* Fixed: *Auto reroll initiative* did not recover uses that recover on initiative.
+* Added: `MidiQOL.getCoverBonus(attacker, target, activity?)`.
+* Added: `MidiQOL.highlightTokens(tokens, { color? })`.
+* Changed: Chris Premades integration needs CPR 2.0.0 or later (older versions are ignored); CAT is recognised.
+* Fixed: deprecation warnings for global `Token` and `SettingsConfig`.
+
+**Chat cards**
+* Fixed: a save's natural 20/1 was marked critical/fumble even when it disagreed with the result.
+* Fixed: dark theme hit and save highlights were unreadable.
+* Fixed: damage tray rows with save or resistance icons were taller.
+* Added: the damage tray shows each target's multiplier when they differ.
+* Added: setting *Show damage after each save*: the damage each target takes after its save.
+* Fixed: *Save summary style* dnd5e laid out dnd5e's summaries wrongly.
+* Added: targets added to a card after its roll are listed and marked unchecked.
+* Fixed: later card updates undid targets added to the card.
+
+**Teleport activity**
+* Added: dnd5e 6's Teleport activity runs a midi workflow.
+* Added: *Who Teleports*: controlled tokens, caster, caster and targets, or targets.
+* Added: the card lists who will teleport; its Teleport button moves them.
+* Added: tokens that will teleport are ringed while destinations are chosen.
+* Added: destination checks (free, not through walls, *Destination Must Be Seen*) and *Blocked Destination* (pick again, or fail and use the damage activity).
+* Added: on-use passes `preTeleport`/`postTeleport`, hooks `midi-qol.preTeleport`/`midi-qol.postTeleport`.
+* Changed: `MidiQOL.moveToken` with `teleport: true` uses `blink`, not `displace`.
+* Fixed: `MidiQOL.completeActivityUse` on a non-midi activity waited 90 seconds.
+
+**Settings**
+* Fixed: *Confirm targets if targeting allies and hostiles* had no effect (saved under a misspelt key); existing settings carry over.
+* Fixed: *Show Active Defence DC* had no effect; the DC was always shown. Existing worlds keep showing it until the box is unticked.
+* Fixed: some Quick Settings presets wrote settings that don't exist.
+
+**Sample items**
+* Changed: Moonbeam's cast is a utility activity; its region rules run the save.
+* Added: Cloudkill, built from region behaviours only ([#1568](https://gitlab.com/tposney/midi-qol/-/issues/1568)).
+* Fixed: 11 sample items used an outdated DAE flag; Weird's and Prismatic Spray's over-time DC was 0.
+* Fixed: Slayer's Prey did not remove the previous mark.
+* Changed: Elemental Attunement reads `lastArg.source`.
+* Fixed: Arcane Ward used the deprecated `ChatMessage.applyRollMode`.
+* Fixed: Longsword of Wounding logged an error on every hit.
+* Fixed: 20 sample effects used DAE's old boolean `stackable` flag.
+
+### 14.6.2
+
+**Conditions and macros**
+* Fixed: with *Debug* on, actors failed to prepare, so on-use macros never ran.
+
+### 14.6.1
+* Requires Foundry 14.369, dnd5e 6.0.6 and DAE 14.6.1.
+
+**Rolls and saves**
+* Fixed: *Default saving throw multiplier* was ignored.
+* Changed: changing ability in midi's save/check dialog builds the roll as dnd5e 6 does.
+* Changed: `flags.midi-qol.concentrationSaveBonus` maps to `system.attributes.concentration.roll.bonus`.
+* Fixed: with *Roll saves before damage* and hits unchecked, attacks missed every target and the workflow ended before damage.
+
+**Damage**
+* Fixed: the card context menu's Apply Damage ignored resistances, immunities and vulnerabilities.
+
+**Targeting**
+* Fixed: a hidden *Confirm targets if none selected* still asked with target confirmation off.
+* Added: `MidiQOL.requiresTargetConfirmation(activity, options)`.
+
+**Conditions and macros**
+* Fixed: `damageTypes`/`defaultDamageType` were empty in conditions before damage was rolled.
+* Fixed: `MidiQOL.addRollTo` failed on an unevaluated roll; added `MidiQOL.addRollToAsync` for rolls with dice.
+* Fixed: `@item.actionType` and `itemData.actionType` were always empty.
+* Fixed: DAE's effect editor would not open for ActivityOverTime effects.
+* Fixed: OverTime values containing a comma were cut short.
+
+**Activities**
+* Fixed: *Select Form* transform activities applied every form to the targets.
+* Fixed: forward activity sheets would not open (14.6.0).
+* Fixed: challenge mode EC and AR missing from the armor class dialog.
+* Fixed: Enchant and Forward activity sheets would not open.
+* Fixed: AoE Behaviours section missing from activity Effect tabs.
+
+**Effects and expiry**
+* Changed: reaction, bonus action, flanking and flanked markers use native expiry.
+* Fixed: an applied enchantment expired by midi was disabled instead of deleted.
+* Changed: effects with an activity's duration no longer use DAE's retired *Elapsed Time* expiry.
+
+**Chat messages**
+* Fixed: skill, check, save and Active Defence rolls used the deprecated `rollMode` option.
+* Fixed: *Active Defence show* listed deprecated roll modes and did not show the saved choice.
+* Fixed: whispered, blind and emote messages lost dnd5e's coloured bottom border.
+* Fixed: *Colored Border Messages* None still drew a left bar.
+* Fixed: *Colored Border Messages* "Border + Name Text" did not colour names on dnd5e cards.
+* Changed: changing *Colored Border Messages* redraws existing cards.
+* Changed: the left bar uses the owning player's colour on every client.
+* Fixed: dark theme Attack/Damage buttons and tooltips had a light background.
+
+**Settings**
+* Removed: *DR.all per damage detail* and *Display if save had Advantage/Disadvantage*, which did nothing.
+* Fixed: the *Allow GM to fudge damage application* quick setting threw.
+
+**Foundry 14 compatibility**
+* Changed: deletions use `ForcedDeletion` instead of `-=` keys.
+* Fixed: Regeneration, Goggles of Night, Lantern and Bullseye Lantern used `-=` keys.
+
+**Removed**
+* Removed: code that could not run on Foundry 14 / dnd5e 6.
+
+### 14.6.0 (dnd6 branch)
+
+**Requirements**
+* Supports dnd5e 6.0.0–6.999 only (verified 6.0.5); requires DAE 14.6.0+ and Foundry 14.368.
+* Versions are Foundry-major.dnd5e-major: 14.0.x for dnd5e 5.x, 14.6.x for 6.x.
+
+**Breaking: transfer effects with a duration**
+* A transfer effect's duration no longer runs; add the effect to the activity's Effects list to get an expiring copy.
+
+#### Changes you will notice
+
+**Breaking: saving throw messages and summaries**
+* midi posts a message for every save it rolls; dnd5e's "Summarize chat cards" decides whether saves show on the card.
+* Save messages are public except with Auto check Saves "whisper" or "gmOnly"; NPC save visibility still follows Auto check Saves.
+* Added: setting *Save summary style*: "midi" (default) or "dnd5e".
+
+**Attacks and targeting**
+* Changed: an attack dialog targets and pans to its target.
+* Changed: "Roll a separate attack per target" handles one target at a time.
+* Fixed: "Roll a separate attack per target" skipped attacks with no template type.
+* Fixed: a triggered activity inherited the trigger's target confirmation and per-target attack setting.
+* Changed: target confirmation on an activity sheet shows the effective value.
+* Fixed: "Choose Targets" forced confirmation after the template was cleared.
+* Fixed: attacks of opportunity were classified for the first target only.
+* Fixed: attacks of opportunity warned of out-of-range targets.
+* Fixed: a closed reaction dialog's countdown kept running and threw.
+* Fixed: a creature immune to the dead condition got no status at 0 HP; it gets Dead.
+* Fixed: a trap template's delayed removal threw if already deleted.
+* Fixed: targeting, flanking, range, cover and push used a token's drawn position, not where it moved to.
+
+**Templates and regions**
+* Added: activity templates have a height by area type.
+* Added: optional rule *Template Origin Height* (base, top or eye), overridable per activity.
+* Fixed: template targeting failed for templates with no elevation.
+* Added: targets update live while a template is dragged.
+* Fixed: attached emanations were not centred on their token.
+* Fixed: trap templates were the wrong size.
+* Fixed: region effects stayed when a token left; origin `@` values were not filled in.
+
+**Damage and traits**
+* Fixed: "Ignore Damage Immunity/Resistance/Vulnerability" for all types left "All Damage" traits in force.
+* Added: activity option *Downgrade Immunity*.
+* Fixed: per-type ignore/downgrade and `ddi.<type>` did not work against "All Damage" traits.
+* Fixed: extra crit dice were placed differently to dnd5e inside `*`, `/`, `%` and subtracted terms.
+* Fixed: conditional Spell Sniper and Sharpshooter flags were always true.
+
+**Advantage, saves and rolls**
+* Fixed: midi overwrote dnd5e 6's own advantage and disadvantage on d20 rolls.
+* Changed: noAdvantage/noDisadvantage cancel dnd5e's advantage too.
+* Changed: dnd5e's roll modes for tools, attacks and checks combine with midi's flags.
+* Changed: `dnd5e.advantage` effect changes combine with midi's advantage flags.
+* Fixed: initiative check flags always used dex.
+* Fixed: a failed roll requested from another player left the use waiting.
+* Added: DDB Game Log attack and damage rolls are recognised.
+
+**Over-time effects, durations and initiative**
+* Fixed: over-time effects ran on the wrong turn after an initiative reroll; skipped turns lost their start and end.
+* Changed: *Auto reroll initiative* rolls as the round advances; a player's advance goes to the GM.
+* Fixed: death saves triggered over-time save effects.
+* Added: special durations `isMissed`, `1Miss`, `1Miss:<actionType>`, `isAttacked:<actionType>`, `isHit:<actionType>`.
+* Fixed: expiry on a failed concentration save did not work.
+* Fixed: Long Rest, Short Rest and New Day labels.
+* Fixed: expiring reaction and bonus action markers threw "does not exist".
+* Fixed: bonus actions were not recorded with Enforce Bonus Actions "Display status icon".
+
+**Concentration, consumption and effects**
+* Fixed: a recast linked to an inactive concentration; `getConcentrationEffect` returns active ones only.
+* Fixed: aborting for wrong target count or cancelling confirmation did not refund consumption.
+* Changed: concentration starts only once targeting completes.
+* Fixed: consecutive uses picked up the previous use's configuration.
+* Fixed: activity effects referenced by uuid were not applied.
+* Fixed: an item's other activity and its ammunition's activity could not both run; `otherActivityId: "none"` silenced ammunition.
+* Fixed: ammunition activity effects were not always applied.
+* Fixed: ammunition base damage counted twice.
+* Fixed: Convenient Effects did not end with concentration.
+* Changed: sample items using caster values are marked for DAE's legacy application.
+* Added: Aid sample item.
+
+**Chat cards and damage tray**
+* Changed: "Show players when the GM rolls privately" (was "Always display attack/damage cards for hidden merge cards") shows a stand-in; no hidden extra dnd5e messages.
+* Changed: attack and damage rolls are linked to the card as dnd5e links its rolls; other modules' message flags are kept.
+* Changed: `dnd5e.preApplyDamage`/`applyDamage` carry the card as `origin`/`originatingMessage`; `applyDamage` uses `callAll`.
+* Changed: save, check and tool rolls record `system.activity`, `system.item` and the DC.
+* Fixed: hidden target names leaked to players on parts of the card.
+* Added: *Hide NPC names* (Misc) is back.
+* Changed: target AC on hits follows dnd5e's Attack Result Visibility.
+* Fixed: save tooltips showed players dice or a hidden DC.
+* Changed: *Save summary style* dnd5e: summaries sit under midi's save heading.
+* Added: Flash Rolls saves carry the card's message id.
+* Fixed: a cancelled Epic Rolls request left the workflow waiting.
+* Fixed: "Select Hit Targets" selected misses.
+* Fixed: over-time roll requests (actionSave=roll) failed; posted as a dnd5e 6 prompt.
+* Fixed: an initiative roll was taken as a pending save.
+* Fixed: `MidiQOL.showItemInfo` used a missing template.
+* Fixed: weapon mastery line and midi's highlights missing on dnd5e cards.
+* Removed: CSS for markup dnd5e 6 no longer has.
+* Fixed: save and check dropdown buttons rolled the first ability against DC 0.
+* Fixed: blind and obscured rolls showed their result to players.
+* Changed: one damage card for GM and players; `hidePlayerDamageCard` removed; "View as player" menu entry.
+* Changed: dnd5e decides who sees the damage and effect trays; "Add chat damage buttons" removed.
+* Fixed: the damage button briefly showed the plain label on a critical.
+* Fixed: a usage card kept buttons after its item was deleted.
+* Fixed: GM and player *Remove chat card buttons after roll* did not both apply.
+* Changed: chat buttons use the dnd5e 6 style and follow the language setting.
+* Changed: damage type icons sit left of the total.
+* Fixed: bonus damage rolls were not shown in their section.
+* Fixed: other and bonus damage rolls rendered inside the section label.
+* Fixed: the damage tray listed selected tokens rather than the use's targets.
+* Fixed: the tray's per-target detail ignored reaction effects such as uncanny dodge.
+* Added: resistance and immunity icons on tray target rows.
+* Changed: smaller chat messages (use card 9.9kB → 7.2kB, per attack 19.0kB → 4.1kB).
+
+**Distance**
+* Changed: the distance fudge factor applies on every scene and measurement mode.
+
+#### Implementation details
+
+**Workflow and API**
+* Added: `MidiQOL.registerWorkflowOptionsSchema(namespace, schema)`, `encodeWorkflowOptions`, `decodeWorkflowOptions`.
+* Fixed: a remote `completeActivityUse` returned token sets as arrays; added `MidiQOL.restoreWorkflowTokenSets`.
+* Fixed: a use wrote its target snapshot into the caller's `workflowOptions`.
+* Changed: per-target attacks wait for the previous target; `completeItemUse`/`completeActivityUse` resolve after the last.
+* Added: `proceedChecks.checkAoO`.
+* Fixed: `moveTokenAwayFromPoint` resolved before the push landed.
+* Changed: game logic reads a token's committed position (`document._source`).
+* Changed: `getDistance` is available in conditions and macros and preferred over `computeDistance`.
+* Changed: condition data `riderStatuses` includes a status's own riders.
+
+**Over-time and special durations**
+* Changed: over-time effects run from core's turn events, by combatant.
+* Changed: over-time saves read dnd5e 6 message sub-types.
+* Changed: midi registers its special durations; `isConcentrationSaveFail` also accepted.
+
+**Regions and templates**
+* Removed: the `AbilityTemplate` API and the `refreshMeasuredTemplate`, `preCreateMeasuredTemplate`, `dnd5e.preCreateActivityTemplate` handlers.
+* Changed: template regions carry `elevation.bottom`/`top` from `templateElevation`.
+* Changed: trap templates convert sizes with `convertLength`.
+* Changed: region effects use dnd5e's apply-effect behaviour; midi's behaviour only runs activities.
+
+**Chat card data**
+* Changed: usage cards are a chat-message sub-type rendered from `dnd5e.card-face`.
+* Removed: `usage.chatCard`, `_usageChatContext` override, content splicing, `activity-card.hbs`.
+* Changed: roll sections stored in `system.midi.sections`, rendered from `message.rolls`.
+* Changed: button visibility resolved per viewer at render.
+* Changed: save rolls are carried on the card.
+* Changed: the attack roll is found by roll type.
+* Fixed: target rows' `data-uuid` was empty.
+* Changed: no `flags.dnd5e` on midi messages: targets in `system.targets`, save/check rolls name their card in `system.origin`.
+* Changed: `system.targets` carries midi's per-target save and damage detail.
+* Changed: synthetic item snapshot in `flags.midi-qol.itemData`.
+* Removed: `ChatMessage#collectRolls` and the hidden `mergeCardMultiDamage` setting.
+
+**Removed and deprecated**
+* Removed: times-up checks.
+* Removed: CAT 0.0.7 OverTime workaround.
+* Changed: `DocumentSheetConfig`, `CanvasOcclusionMask` and `Scene#templates` replaced with v14 equivalents.
+
+### 14.0.12
+
+**Damage cards**
+* Damage cards show which modifications applied (DR, resistance, immunity) again.
+* Damage card totals update after a multiplier is used.
+* Damage cards are a chat-message sub-type (`midi-qol.damage`) rendered on display.
+* Removed the classic (table) damage card style and its setting.
+* Damage cards store ~53% less in `flags.midi-qol.undoDamage`; the socket payload is unchanged.
+* Damage cards no longer embed a base64 thumbnail for animated tokens.
+* Damage cards no longer store `midi.updates`/`midi.amount`.
+* Damage cards no longer store other modules' `calcDamageOptions` scopes or the target/source uuids already on the message.
+* The HP status header updates on damage cards written with the old classic layout.
+* Attack/damage/bonus/other damage rolls are no longer stored twice; `utilityRolls` is unchanged.
+* Chat card updates write the full roll list.
+* Chat card markup is stored without template indentation.
+* Target rows store one name span when the gm and player names match.
+* Save row styles moved to the stylesheet.
+
+**Range and targeting**
+* Drag and drop targeting works again.
+* Long range disadvantage applies to weapons again.
+* Thrown weapons are range checked.
+* Range is measured from a token's committed position rather than its animated one.
+* Default `constrainTemplatePlacement` to false (MR [!408](https://gitlab.com/tposney/midi-qol/-/merge_requests/408), thanks @thatlonelybugbear).
+* Target confirmation: added `includeTargets` support and a "not allowed" overlay when hovering a non-selectable token (MR [!433](https://gitlab.com/tposney/midi-qol/-/merge_requests/433), thanks @pgervais70).
+* Fixed template targeting with Volumetric Templates on v14; the Troubleshooter warns when its "Target on Placement" setting would override midi.
+* Walled Templates is not v14 compatible; selecting it for auto target now falls through to the other targeting paths instead of targeting nothing.
+* Templates start at the caster's elevation, for the placement preview and the placed template.
+* AoE elevation is bounded above by the shape's height.
+
+**Activities**
+* The Forward activity sheet renders its activation tab.
+* Instantaneous summons no longer expire at the next time advance.
+* Turn durations keep their turn count instead of being converted to one round.
+* Added "Other Activity Default" setting (auto/none) for activities that have never had an other activity chosen, e.g. from the SRD compendia.
+* Added `workflowOptions.attackMode`; a thrown weapon no longer forces the attack dialog when one is supplied.
+* Activities marked automation only are no longer listed on the item sheet.
+* The character sheet reaction filter finds reactions declared on an activity, and skips cached cast-spell copies.
+
+**Rolls, saves and conditions**
+* Added "Blind roll display" setting: forced-blind saves/checks/skills can show a public card with the result obscured as `??`.
+* Fixed an error applying an effect when a `flags.midi-qol.optional.*` or `onUseMacroName` change value is not a string.
+* Damage modification (`system.traits.dm`) and midi damage reduction apply once per activity rather than once per damage category. Added "Single Damage Calculation" setting, default on.
+* Multi-target save/check/skill chat cards use each target's own token as the speaker.
+* `stackCount` is available in condition and roll data.
+
+**Compatibility and settings**
+* Added `MidiQOL.convertDuration`, `MidiQOL.isRangeCheckable` and `MidiQOL.activityRanges`.
+* Default `surfaceVisionFog` to false.
+* Added the `icon` CSS class to the dnd5e header-control button (MR [!429](https://gitlab.com/tposney/midi-qol/-/merge_requests/429), thanks @olegbol2005).
+* Work around Coven's Automation Toolkit passing an effect UUID where a document is expected.
+* Removed built-in chat log pruning; use the `chatlog-prune` module instead.
+* Removed the "Center + Levels" walls-block-range option; existing worlds migrate to "Center Check".
+
+**Sample items**
+* Added an "Undead Fortitude" sample item.
+
+### 14.0.11
+* Organise the Midi activity settings into subtabs (MR [!423](https://gitlab.com/tposney/midi-qol/-/merge_requests/423), thanks @garrysmod367).
+* Fix socketed (GM-executed) workflows (MR [!428](https://gitlab.com/tposney/midi-qol/-/merge_requests/428), thanks @baconnugget).
+* Fix temp-max HP handling on the undo card (MR [!418](https://gitlab.com/tposney/midi-qol/-/merge_requests/418), thanks @baconnugget).
+* Updated pt-BR translation (MR [!425](https://gitlab.com/tposney/midi-qol/-/merge_requests/425), thanks @cardosomafrasantana).
+* Offer spell reactions castable with a higher-level slot when no slot of the spell's own level is available (e.g. Shield with only level 3 slots) (MR [!431](https://gitlab.com/tposney/midi-qol/-/merge_requests/431), thanks @thatlonelybugbear).
 * Fix chat cards from a sequence of rolls displaying out of order / with stale timestamps — content updates no longer overwrite the message's creation timestamp.
 * Activity choice dialog applies the `midi-qol.itemUseActivitySelect` prune hook before prompting — a single surviving activity is used with no dialog, an empty list skips the use; hook fires once.
-* Fix concurrent summon spells stealing each other's created tokens. The `dnd5e.postSummon` handler used a one-shot `Hooks.once`, so when two summon workflows overlapped one could capture the other's tokens; it now listens with a per-activity filter and only reacts to its own summon.
-* Fix triggered-activity loop detection producing false positives. Visited activities are now tracked by full `uuid` instead of `id`, so distinct activities that happen to share an `id` are no longer wrongly flagged as a loop while genuine loops are still caught.
-* Fix pre-attack reactions (`reactionpreattack`) receiving the wrong triggering item. `doActivityReactions` referenced `this` (undefined in a standalone function) for the item and source UUID; it now uses the activity's item.
-* Fix "self-only trigger" / triggered-activity handling on non-Cast/Forward activity types. The base getter was named `selfOnlyTriggerActivity` but every call site and subclass override used `isSelfTriggerableOnly`, so the check silently read a nonexistent property on most activity types; the getter is renamed to match.
-* Fix `use()` and `completeItemUse` continuing past the ownership check for non-owners. The "you don't own this document" branch showed the warning but fell through; it now returns.
-* Fix healing rolled from a chat card carrying a stale activity reference — `HealActivity` now sets `workflow.activity` before rolling healing.
-* Fix `Workflow.getWorkflow`, `removeWorkflow`, and `DDBGameLogWorkflow.get` reading the workflow map with bracket indexing (always `undefined` on a `Map`); they now use `.get(id)`.
-* Fix a throw when converting a non-damage roll to a damage roll — `convertRollToDamageRoll` called the nonexistent `DamageRoll.fromRoll`; it now constructs a `DamageRoll` directly and stamps the damage type.
-* Fix broken migration of the "roll blind" options. Legacy boolean `true` values for `rollChecksBlind`/`rollSavesBlind`/`rollSkillsBlind` are now migrated to `["all"]` before the filter/default logic runs (previously the migration ran too late and, for skills, wrote to a typo'd key), so these settings are no longer silently lost on upgrade. The `showReactionAttackRoll` default (`"all"`) now applies correctly as well.
-* Fix target confirmation being spuriously cancelled. Closing the Target Confirmation dialog after it had already resolved (e.g. by rolling) could invoke the callback a second time with a `false`/cancel result; a guard now ensures only the first result wins.
-* Fix undo not capturing chat cards from token-based speakers. Undo groups its cards by actor UUID, but token-actor cards were matched against the token UUID and dropped; the token is now resolved to its actor UUID first.
-* Fix activation-condition evaluation exposing only one of the `evalTypeOrRace` / `evalTypeOrRaceEval` aliases depending on whether the condition ran synchronously or asynchronously. Both aliases now work in both paths.
-* Fix several places where errors were silently swallowed by returning from a `finally` block — skill/ability roll patches (`patching.ts`) now propagate roll errors instead of hiding them, and the damage-application element and player damage card paths are similarly corrected. `ConfigPanel` now awaits settings save/import before continuing, and auto-reroll initiative and volumetric-template computation are guarded so a missing optional module or a rejected promise no longer throws.
-* GM-side `completeItemUse`/`completeActivityUse` requests now guard against a missing actor or workflow instead of crashing, and the player damage card correctly awaits its damage-list preparation before deciding whether there is anything to show.
-* Internal: migrated ~30 chat-card-backed `Workflow` fields (targets, hit/saved/failed target sets, damage rolls and details, abort/suspended flags, etc.) from hand-written cache/getter/setter pairs to the shared `PersistedFieldStore`, and consolidated the sync/async safe-eval implementations. No intended behaviour change; roll rehydration is now more defensive (falls back and records a Troubleshooter error rather than throwing).
-* Counter Mage sample item: the *Antimagic Shot* effect applied on a critical Gut Shot now expires together with *Gut Shot* via `MidiQOL.addDependent` and a fixed 10-round duration, replacing the previous duration-copy + `flags.dnd5e.dependentOn` approach.
-* Elemental Attunement (Monk Warrior of the Elements) sample item reworked: *Imbue Elements* is now a bonus action that applies a self-effect (10 minute duration) rather than running everything inline; the Unarmed Strike enchantment is created/removed by a DAE on/off macro and now only grants +10 ft reach. The elemental damage type is chosen at `postDamageRoll`, the push/pull prompt is distance-aware (a target can no longer be pulled through the caster's space, and grapple/grappling effects are preserved), and *Elemental Push* now uses a Wisdom save DC (`@abilities.wis.dc`), is `automationOnly`, and is invoked programmatically via `completeActivityUse`.
 
-### 13.0.63
+### 14.0.10
+* Migrated from the deprecated `core.rollMode` to v14's `core.messageMode` throughout (chat-card visibility, roll-mode save/restore, "Hidden Roll" gating); stored legacy values are normalized on read.
+* Activity Roll Mode picker uses v14 values and migrates a legacy stored value on open/save.
+* Fix: hidden NPC saving throws were leaked to players; a save with no explicit roll mode against a hidden-challenge NPC is now forced to GM-only.
+* Fix: save DC on save-result cards now follows the caster, not per-target ownership; NPC save results now show only when the challenge is fully public.
+* Fix: save/ability-check 3D dice (DSN) visibility now follows `autoCheckSaves` (or a per-activity `saveDisplay`) rather than the message mode.
+* Fix: self/GM/blind whispered DSN rolls were not shown to the rolling user.
+* Fix: v14 roll modes are translated back to legacy values for Monk's TokenBar / Flash Rolls 5e.
+* Fix: Active Defence default/migration, over-time roll modes, and concentration re-rolls updated to v14 modes.
+* Internal: exported `toMessageMode`/`toLegacyRollMode`/`rollModeToMessageMode`, added `safeSetGameSetting`, extended `displayDSNForRoll` with `saveDisplay`.
+
+### 14.0.9
+* Allow regions to be attached for non emanation templates. If more than 1 target (AoE templates) is possible a confirmation dialog to identify which target to attach the template/region to.
+    - Emanation templates continue to auto-attach to the caster by default (the "default" Attach Region To setting preserves the previous behaviour); choose caster/target explicitly to override.
+* Fix: clicking "+" in the actor On-Use Macros config threw `Missing helper: "select"` (the Foundry v12 `select` helper was removed); migrated to `selectOptions`.
+* Fix: the "Show reaction attack roll" setting default was never applied.
+* Fix: the legacy "Roll Saves Blind = all" migration silently did nothing (property typo).
+* Fix: DDB Game Log pending attack/damage/heal rolls could not resolve their actor, breaking the integration.
+* Fix: an activity could still be used after the "you do not own this item" warning; the use is now aborted.
+* Fix: skill/ability/saving-throw rolls that errored were silently swallowed and returned empty; errors now surface, and rolls redirected to another actor (concentration/overtime requests) return their result.
+* Fix: a chain of triggered activities that loops indirectly (A→B→C→B) now aborts with a notification instead of hanging.
+* Fix: the player damage card could render empty when a target used a video (webm) token texture.
+* Fix: the target confirmation dialog ran its callback twice.
+* Fix: pre-attack reactions were passed the wrong item reference.
+* Fix: sync activation conditions now expose `evalTypeOrRace` (previously only available in async conditions).
+* Fix: rolls on workflows rebuilt from a chat card (e.g. region-behaviour triggers) are now reconstructed correctly instead of left as raw data.
+* Fix: undo could miss re-created effects and chat cards spoken by a token; both are now captured.
+* Fix: the roll mode chosen in the save/check roll dialog (e.g. self) was ignored — the seeded mode now uses v14 message-mode values so it matches the dialog and is honoured.
+* Fix: the Concentration Save special durations (isConcentrationSave / success / failure) did not expire effects. NOTE: the failure key was renamed `isConcentrationSaveFail` → `isConcentrationSaveFailure`, so existing effects using the "Concentration Save: failure" special duration must re-select it on the effect.
+
+Internal changes (no functional/user impact):
+* Workflow persisted-field accessors consolidated behind a single helper.
+* Unified the sync/async safe-eval implementations and the activity self-trigger getters; removed the resulting dead code.
+* Added missing guards/error handling (region preview without Levels, initiative reroll, activity-use failure, GM socket actor lookups) and removed leftover debug logging.
+* Sample item metadata version stamps refreshed.
+
+### 14.0.8
 * Fix template placement for spells whose range uses a unit different from the scene grid (e.g. Meteor Swarm with range 1 mile in a foot-grid scene). Templates were being clamped to the caster's perimeter; range is now converted to scene grid units before the placement range check.
 * Fix `midi-qol.preTargetSave` hook contract: `saveDetails.advantage`/`disadvantage` set by external hook handlers is now applied to the resulting save roll. Previously the values were stored on the roll config but were not seeded into the advantage tracker, so the hook had no effect on midi-driven saves.
-* Switched the player damage card's healing label from the removed `DND5E.Healing` localisation key to `DND5E.HEAL.HealingButton` (introduced in dnd5e 5.3). Feature-detected via `i18n.has` so dnd5e 5.2.x continues to work.
-* Critical/fumble highlighting in chat is now applied to all d20 rolls (saving throws and ability checks), not only attacks and death saves.
-* Optional bonus flags (`flags.midi-qol.optional.*`) set on an item — typically via an enchantment effect — are now offered in the attack/damage bonus dialog alongside the actor's optional flags. Counts and activation conditions on the item-sourced flag are evaluated against the item; consumption checks (combat turns, reactions, item/activity uses) still resolve against the actor.
+* Switched all `DND5E.Healing` references to `DND5E.HEAL.HealingButton` (the older key was removed in dnd5e 5.3). Affects the player damage card healing label, the damage-roll button on midi chat cards, and the action flavor text for healing activities.
+* Region behaviour-triggered activities (e.g. Spirit Guardians' damage save, Moonbeam's emanation save) are now attributed to the source actor's player owner rather than the GM. Chat messages, rolls, and speaker attribution show the player as the roller; falls back to the GM when no player owner is online. The trigger is dispatched directly to the source player's client when possible to avoid an extra GM hop.
 * The dnd5e damage application tray on midi chat cards now opens or collapses based on whether midi auto-applied damage. When midi auto-applies, the tray is collapsed; when midi did not auto-apply, the tray is expanded so the apply controls are visible without an extra click. This overrides the dnd5e "Auto Collapse Chat Trays" setting for midi cards only.
 * Optional bonus dialog for missed attacks (`flags.midi-qol.optional.*.attack.fail.*`) now uses the same effective AC as the hit check (the AC captured at roll time via `targetDescriptor.ac`), instead of the live `actor.system.attributes.ac.value`. Previously the two could disagree when AC changed between roll time and the bonus-flag evaluation (e.g. when a preAttackRoll macro toggled effects on the target), so the dialog could fire for an attack that would still hit.
-* Counter Mage sample item: fixed the Abjuration-Breaker cleanup effect not being deleted at the end of the attack workflow. Stale cleanup effects from prior attacks were being removed by DAE stacking when a new cleanup effect was created, which fired their `off` macro pass and prematurely restored the freshly-suppressed magic effects on the target. The cleanup effect is now removed explicitly in `postActiveEffects`.
+* Fix: with "Auto Apply Item Effects" set to "Do not display button" or "Remove button", the dnd5e effects-application tray is now removed from midi chat cards. 
+* Removed the deprecated `activity.targets` getter/setter — use `workflow.targets` instead.
 
-### 13.0.62 skipped
+### 14.0.7
+* Fix for midi-qol region behaviours throwing an error when cast by a non-gm.
+* Correct Spirit Guardians to be end of turn rather than start of turn.
 
-### 13.0.61
-* GM Roll Hiding refactored: the single "Hide Roll Details" dropdown has been replaced with four independent settings — Attack Roll Display, Damage Roll Display, Attack DSN, and Damage DSN. Each can be configured separately. Existing settings are automatically migrated.
-* Fix attack roll critical/fumble highlighting not showing icons when "Only highlight critical/fumble hits" is enabled.
+### 14.0.6
 * Fix for concentration auto roll being done twice when "Chat Message + Auto Roll" is selected.
-* Fix for double consumption when using a spell from an item with item uses (e.g. Staff of Power).
-* New "Flanking requires target can sense flanker" setting. When enabled, invisible or hidden allies won't contribute to flanking unless the target can sense them.
+* Fix for double consumption when using a spell from an item with item uses (e.g. Staff of Power casting Cone of Cold consumed 10 charges instead of 5).
+* Fix attack roll critical/fumble highlighting not showing icons or colours when "Only highlight critical/fumble hits" is enabled. Regression from 13.0.58.
+* Fix numeric `forcedMode` values from modules causing crash in DAE effect config (`forcedMode.toLowerCase is not a function`). Changed all midi-qol spec registrations from numeric `-1` to string `""`.
+* New "Flanking requires target can sense flanker" setting (Rules tab, Flanking box). When enabled, invisible or hidden allies won't contribute to flanking unless the target can sense them.
 * Flanking settings are now grouped in their own box within Optional Rules.
-* Overtime workflows now include `overTimeEffectUuid` in `workflowOptions`.
-* New sample items: Elemental Attunement (Monk Warrior of the Elements), Dragonhide Belt +2.
+* New "Midi Active Effects" compendium with sample enchantment effects (Dragon Slayer variants, Life Stealer, Wounding Weapon) extracted from sample items.
+* Overtime workflows now include `overTimeEffectUuid` in `workflowOptions`, accessible from hooks, macros, and save roll options.
+* Fix target snapshot race condition — targets are now captured at the start of `use()` to prevent concurrent workflows from clearing each other's targets.
 
-### 13.0.60
-* Same as 13.0.60 but marked as 5.2 compatible
+### 14.0.5
+* The "Vision test point height" setting overrides the source token's vision origin (where the token sees from - foundry default 1/2 of the tokens height), not just the target test points. Setting to "Top" means both the viewing token's eye point and the target's visibility test points use the top of the token height. This improves visibility through holes in surfaces for tokens standing near edges.
+* New token flags `token.flags.midi-qol.visionSourceHeight` and `token.flags.midi-qol.visionTargetHeight` allow per-token override of the vision height as a percentage (0–100) of the token's height. When not set, falls back to the midi setting. These can be set via DAE active effects (e.g. a "Crouch" or "Prone" effect setting both to 25). Vision automatically refreshes when these flags change.
+* midi-qol uses these settings in determining tokens can see/sense other tokens and for walls block tests.
+* New "Dim lower floors through surface holes" setting (Workflow tab). In multi-level scenes, areas visible through gaps in floor surfaces are dimmed where the token's viewing angle means the floor edge blocks line of sight to the level below.
+  - This helps distinguish areas the token can actually see from areas that appear lit but are blocked by the floor surface. Default foundry behaviour is to show all of the floor below even if the token can't see it.
+  - If you use the restored tower free map pack and position a token on the gallery above the chapel (which has a hole down to the first floor) and enable/disable the midi setting you will see what the behaviour is.
+  - Give a token on the top level the tippy toes activity and make sure it is enabled to see the effect of changing the vision height on a token.
+* New "Occlude upper floor surfaces" setting (Workflow tab). In multi-level scenes, makes upper floor surfaces transparent when viewing from a lower floor, even if the token is not directly underneath the surface. Without this, tokens near the edge of a floor hole may have their vision clipped by the floor above.
+* New "Midi Active Effects" compendium with sample vision height effects (Crouching, Prone, Tippy Toes).
+* Not done: these settings do not interact with wall height - they are simply for shadowing the floor below if you can't see it.
 
-### 13.0.59
-* Fix for double consumption when using a spell from an item with item uses.
+### 14.0.4
+* Removed some spurious debug console.errors
 
-### 13.0.58
-* Fix Active Defence display icons/colours to match saving throw presentation — defence success now shows as a positive result (MR !413, thanks @morepurplemorebetter).
-* Fix Active Defence Modifier hint text to match the actual code formulas (MR !413, thanks @Bacon).
-* Fix capitalization typo in `bonusActionUsed` and `reactionUsed` status effect changes — `Flags.midi-qol` → `flags.midi-qol` (MR !415, thanks @baconnugget).
-* Updated pt-BR translation (MR !410, !411, thanks @Kharmans).
+
+### 14.0.2
+* Fix active defence rolls displaying hit/miss icons inverted — defence rolls now display results like saving throws (success = check, failure = X) (MR [!412](https://gitlab.com/tposney/midi-qol/-/merge_requests/412)).
+* Fix bonus action and reaction used status effects not tracking usage — `Flags.midi-qol` (capital F) typo in change keys prevented the flags from being set (MR [!414](https://gitlab.com/tposney/midi-qol/-/merge_requests/414)).
+* Updated pt-BR translation (MR [!410](https://gitlab.com/tposney/midi-qol/-/merge_requests/410), [!411](https://gitlab.com/tposney/midi-qol/-/merge_requests/411), thanks @Kharmans).
+* Auto-placed emanation templates now respect the `stationary` targeting option — stationary emanations remain where they are cast instead of following the caster.
 * Fix `workflow.damageList` being empty during `preDamageApplication` OnUse macros — damage entries are now added to the list before the macro is called.
 * Fix `dnd5e.preUseActivity` hook receiving stale targets from a previous item use in `messageConfig.data.flags.dnd5e.targets`. Targets now correctly reflect the current use.
 * Fix re-rolling attack from a card button (after switching targets) still using the old target for damage application.
 * Fix targets not being displayed on the attack card when "Auto Check Hit" is set to "Don't check".
-* Fix for always highlighting roll success/failure for dnd5e 5.3+. Moved the midi settings for highlighting roll success/failure to the midi-qol hits section.
-* Fix wall collision testing for token perimeter distance measurement. The perimeter distance path was using a 2D sight check instead of routing through the elevation-aware wall collision system, causing "Center + Levels" and other 3D wall-blocking modes (e.g. Wall Height) to be ignored.
-* Change to how other activity defaults. 
-  - For any activity created through the activity editor other activity will be force set to None, you can override it as required.
-  - For programatically created activities only AttackActivity will default to auto, all others will default to none unless overridden.
+* Fix `Workflow.templateId` always returning undefined (broken negative array index).
+* Fix save prompt missing flavor text when neither advantage nor disadvantage applies.
+* `DamageOnlyWorkflow` now exposes a `ready` promise that resolves when the workflow completes. Callers can `await workflow.ready` instead of guessing with `setTimeout`. The internal `performState` call is now properly awaited.
+* Fix for detecting if a target can be hit when there is a surface between them. Prior to the fix any surface between the attacker and target would trigger "blocked by a wall" even if there was clear line of sight "through" the level.
+  - Added a setting to change what elevation is used to compute los from one token to another. Foundry by default uses the mid point of the tokens z range. For humans and others with eyes at the top of their head this significantly reduces what they can see when look over a level with a hole in it (measures from the middle of the token's square and 1/2 way up the token) which I think feels overly restrictive. The setting allows you to use the top of the token significantly increasing what the token can see.
 
 
-### 13.0.57
-* Fix for flanking/flanked icons not displaying on the hits display line. Icons now render correctly in both light and dark themes (e.g. Carolingian).
-* Fix for damage application tray change-source icons (save, resistance, etc.) being unreadable in dark themes.
-* Fix for `getItemFromEffectOrigin` not resolving Activity origin UUIDs to their parent Item.
-* 2024 rules: frightened condition now grants disadvantage on attacks against the source of the fear effect.
-* Fix for `damage.critical.allow = false` on an activity not preventing critical damage when `grants.critical.all` forces critical on the workflow.
-* Improved attribution for attack advantage/disadvantage to show the effect that granted the flag (e.g. "Faerie Fire - Grants Advantage on All Attacks").
-* Added `deathSave` as a rollType for the `rollAbility` socket action, allowing death saves to be triggered via GM action.
-
-### 13.0.56
-* Fix for reactions for cast activities that do not override the spell targeting to respect self targeting on the underlying spell.
-* Fix for Heal and Damage activities not displaying targets.
-* Fix for the spell.system?.activities?.filter is not a function error for cast activities
-* Fix for save-only activities showing duplicate target lists (targets displayed once as hit targets and again as save targets).
+### 14.0.1
+* This release is v14 compatible. Tested with dnd5e 5.3 prerelease.
+* Supports tempmax damage.
+* I've migrated midi to use regions rather than templates throughout.
+  - Use dnd5e to place templates so there is still a template like interaction.
+  - Regions now support dependents.
+  - New Region behaviour created that allows you to apply effects, run activities (i.e. do damage) on enter/exit of the region, starting/ending turn in the region and so on. Allows managing only one application per turn.
+    * This should make many currently complex behaviours easy. Spirit Guardians, one of my favourites, is now trivial to implement and is included in the sample items compendium.
+    * You can attach the region behaviour to **any** region created by a spell, it does not need to be attached to the caster, so all sorts of other things can now be easily modelled.
+**New Features**
+* New `MidiRegionLightBehaviorType` — a custom region behavior that creates an AmbientLight at the region center, repositions it when the region moves, and deletes it when the region is removed. Configurable per-activity via the Region Behaviour editor (dim/bright radius, color, alpha, luminosity, animation).
+* New Region Behaviour editor on the activity sheet Targeting tab — configure which activities fire on entry/exit/turn-start/turn-end, which effects to apply/remove, disposition filtering, and light settings. Replaces the previous auto-derive-from-overtime fallback for spells with explicit region config.
+* Updated Moonbeam sample item to use the new region behavior and light config.
 
 ### 13.0.55
 **Bug Fixes**
@@ -127,7 +925,7 @@
 **New Features**
 * Updated Guidance sample item to allow rolling when the caster does not have a token on the map, i.e. always applies to self as a optional bonus action.
 * Some minor styling changes on the chat card.
-* Added a few additonal fields in roll statistics tracking
+* Added a few additional fields in roll statistics tracking
 
 **Movement API overhaul** — `moveToken`, `moveTokenAwayFromPoint`, and new `teleportToken` now use Foundry's `TokenDocument.move()` API, which means they properly trigger movement hooks and region events (e.g., `isMoved` specialDuration now fires correctly).
 
@@ -160,11 +958,11 @@
 
 ### 13.0.54
 * Fix for AC display in hit card being incorrect for some flags affecting target ac/to hit bonuses.
-* Fixed fast-forward for utility rolls, fixed activity range when reach is overridden, use utility formula name if provided instead of activity title for roll result (MR !409). Thanks @elwin.
+* Fixed fast-forward for utility rolls, fixed activity range when reach is overridden, use utility formula name if provided instead of activity title for roll result (MR [!409](https://gitlab.com/tposney/midi-qol/-/merge_requests/409)). Thanks @elwin.
 
 ### 13.0.53
 * Weapons attack single target setting now correctly enforces single target for weapons with no target specification
-* Fix false-positive Flash Rolls detection in getAdvantageSourceInfo (MR !406). Thanks @Carolingian.
+* Fix false-positive Flash Rolls detection in getAdvantageSourceInfo (MR [!406](https://gitlab.com/tposney/midi-qol/-/merge_requests/406)). Thanks @Carolingian.
 * Fix for error being thrown on CONFIG.specialStatusEffects.INVISIBLE being set to null.
 * Some changes to support the next version of macro autocomplete.
 
@@ -174,7 +972,7 @@
 * Fix for skill/tool checks when showing the configuration dialog to allow choosing the ability to use, matches dnd5e functionality.
 * For check activities you can now specify no skill/tool or ability, in which case midi will just do a normal d20 roll and compare against the dc.
 * If a utility activity has no damage, but the other activity does and the other activity condition prevents it from firing, midi would loop endlessly trying to roll damage until the failsafe cut in and the workflow is aborted.
-* Fix attack/save advantage mode label on chat cards showing the wrong mode after re-render. The displayed label now uses the resolved roll result rather than the pre-roll tracker state. (MR !407, @thatlonelybugbear).
+* Fix attack/save advantage mode label on chat cards showing the wrong mode after re-render. The displayed label now uses the resolved roll result rather than the pre-roll tracker state. (MR [!407](https://gitlab.com/tposney/midi-qol/-/merge_requests/407), @thatlonelybugbear).
 * The isAttacked special duration will only fire for activities that have an attack roll. It will now fire only when the attack roll completes, previously it was also checked at other points in the workflow, after the damage roll completed for example.
 * Reinstate gm sees all whispered messages setting, accidentally removed in 13.0.39.
 * Fix for another race condition in roll statistics that would cause some roll data to get dropped.
@@ -208,7 +1006,7 @@
 **For developers**
 * Midi's sample items is now build from pack-src by default, I have also structured the items into a folder structure to make it easier for developers to submit changes/browse for items as needed
 * All midi-qol hooks, now call the preMades version as well. Also call the midi-qol hooks with the workflowId, which is almost always the chart card uuid.
-* Added four new hooks, midi-qol.preSetReactionUsed, midi-qol.preSetBonusActionUsed, midi-qol.setBonusReactionUsed, midi-qol.setReactionUsed, all pass the same args actor, reactionEffect. The reaction effect is "live" so modifications via updateSource will be applied to the effect when it is created on the actor and the hooks are called via aysncHooksCall so they can await actions, like doing a Roll.
+* Added four new hooks, midi-qol.preSetReactionUsed, midi-qol.preSetBonusActionUsed, midi-qol.setBonusReactionUsed, midi-qol.setReactionUsed, all pass the same args actor, reactionEffect. The reaction effect is "live" so modifications via updateSource will be applied to the effect when it is created on the actor and the hooks are called via asyncHooksCall so they can await actions, like doing a Roll.
 * `WorkflowOptions` now accepts `templateUuid` and `coverOrigin: { x, y, elevation? }`, both passable via `completeActivityUse` as `{ midiOptions: { workflowOptions: { templateUuid, coverOrigin } } }`.
   - `templateUuid` sets the workflow's template UUID (e.g., for activities that reference a previously-placed template).
   - `coverOrigin` sets the origin point for DEX save cover calculations, overriding both template center and caster position. Useful when the template may be deleted by the time saves are rolled.
@@ -219,7 +1017,7 @@
 * Fix for AoE templates setting targets for all players, not just the client that rolled the item.
 * Fix for some template placements incorrectly including some tokens in the cover save bonus.* Various other fixes for template targeting not correctly recording targets.
 * When rolling a self target feature (for example action surge) the user's targets switch to self, which breaks the usage pattern of attack, action surge, attack, since the second attack will target the attacker (targets get swapped to the action surger).
-  - Midi now reverts targets back to what they were before the slef target activity ran.
+  - Midi now reverts targets back to what they were before the self target activity ran.
   - Midi should now remember the target you had selected before doing action surge, allowing attack, action surge, attack without needing to retarget.
 * More changes to cover calculation.
   - Midi will now always check the configured cover module and use the "best" cover of the token status and what the module returns.
@@ -231,7 +1029,7 @@
 * Fix for advantage/disadvantage condition expressions using the actor's own token as `target` instead of the opposing entity (e.g., the defender for attacks, the caster for saves).
 * Fix for `fail.attack`, `success.attack`, and `grants.attack.success/fail` condition flags incorrectly seeing the attacker's data as `target` instead of the actual target in condition expressions.* Fix for flanked not correctly setting flanked on diagonals when using perimeter distance measurement.
 * Fix for roll statistics dropping some rolls from recording. Rewrote stats recording so that clients send raw roll data to the GM which applies increments to a single authoritative copy, eliminating race conditions when multiple players roll simultaneously.
-* Merged target confirmation improvements (MR !405) - thanks @Elwin
+* Merged target confirmation improvements (MR [!405](https://gitlab.com/tposney/midi-qol/-/merge_requests/405)) - thanks @Elwin
   - Target validation now runs on initial render and on every target change, filtering out invalid targets (defeated, wrong disposition for enemy/ally-only activities, excluded targets from workflow options).
   - Targets are no longer re-rendered if the target set hasn't actually changed.
 * Fix for perimeter distance LoS check being too permissive, allowing attacks through walls in some multi-square token configurations. Replaced custom extreme-point geometry with `testCollision` ray casting using 17 boundary test points from attacker center to target, matching Foundry's native `_canSenseModes` approach.
@@ -414,9 +1212,9 @@ This is a fairly substantial update so don't update just before game time. You h
 * Fix for deleting the wrong damage part when deleting a damage part from an attack activity.
 
 **Merged Contributions**
-* Allow easy logging of sandbox evaluation data via `MidiQOL.logEvaluationData = true` (MR !396, thanks @thatlonelybugbear).
-* Updated pt-BR localization (MR !398, thanks @Kharmans).
-* Optional Bonus Value: critical — allows optional bonuses to force critical on attacks, damage, checks, saves, and skills (MR !399, thanks @baconnugget).
+* Allow easy logging of sandbox evaluation data via `MidiQOL.logEvaluationData = true` (MR [!396](https://gitlab.com/tposney/midi-qol/-/merge_requests/396), thanks @thatlonelybugbear).
+* Updated pt-BR localization (MR [!398](https://gitlab.com/tposney/midi-qol/-/merge_requests/398), thanks @Kharmans).
+* Optional Bonus Value: critical — allows optional bonuses to force critical on attacks, damage, checks, saves, and skills (MR [!399](https://gitlab.com/tposney/midi-qol/-/merge_requests/399), thanks @baconnugget).
 
 **Others**
 * Migrated several standalone module settings into the midi-qol config panel for easier discovery:
@@ -538,8 +1336,8 @@ panel.
   - Midi still recognises the flags (in case they are directly set by code rather than an active effect) and will log a warning, use the flag, but not rewrite the flag.
   
 **Community Contributions:**
-* MR !393: Updated Portuguese (Brazil) translation. Thanks Kharmans.
-* MR !394: Fixed concentration checks not showing item names. Reworked logic to use `actor.concentration.items` Set instead of `effect.flags.dnd5e.itemUuid` which may be undefined. Thanks thatlonelybugbear.
+* MR [!393](https://gitlab.com/tposney/midi-qol/-/merge_requests/393): Updated Portuguese (Brazil) translation. Thanks Kharmans.
+* MR [!394](https://gitlab.com/tposney/midi-qol/-/merge_requests/394): Fixed concentration checks not showing item names. Reworked logic to use `actor.concentration.items` Set instead of `effect.flags.dnd5e.itemUuid` which may be undefined. Thanks thatlonelybugbear.
 
 **New Features:**
 * Significant rework for advantage/disadvantage processing for saves/checks/skills etc. The result of the midi flag advantage flags should now be fully passed through to other roller modules, such as MTB, Epic Rolls and flash rolls.
@@ -618,10 +1416,10 @@ panel.
 * The sample items compendium is now build from the pack-src directory. So suggesting changes to the sample items compendium can now simply attach the item json to the suggestion.
 
 **Community Contributions:**
-* MR !387: Fixed `game.combat?.turn` conditional always being false when turn is 0 or there's only one combatant. This affected optional uses remaining checks. Thanks thatlonelybugbear.
-* MR !390: Fixed deprecation warnings in TroubleShooter. Thanks thatlonelybugbear.
-* MR !391: Documentation improvements across FLAGS.md, MACROS.md, README.md, and workflow docs. Thanks Bacon.
-* MR !392: Updated Brazilian Portuguese (pt-BR) translation. Thanks Kharmans.
+* MR [!387](https://gitlab.com/tposney/midi-qol/-/merge_requests/387): Fixed `game.combat?.turn` conditional always being false when turn is 0 or there's only one combatant. This affected optional uses remaining checks. Thanks thatlonelybugbear.
+* MR [!390](https://gitlab.com/tposney/midi-qol/-/merge_requests/390): Fixed deprecation warnings in TroubleShooter. Thanks thatlonelybugbear.
+* MR [!391](https://gitlab.com/tposney/midi-qol/-/merge_requests/391): Documentation improvements across FLAGS.md, MACROS.md, README.md, and workflow docs. Thanks Bacon.
+* MR [!392](https://gitlab.com/tposney/midi-qol/-/merge_requests/392): Updated Brazilian Portuguese (pt-BR) translation. Thanks Kharmans.
 
 ### 13.0.36
 **New Features:**
@@ -638,14 +1436,14 @@ panel.
 * Damage card display improvements for cross-platform consistency:
   - Replaced HTML arrow entity with Font Awesome icon for consistent vertical alignment across macOS and Linux.
   - Fixed total damage display showing "-0" instead of "0" when no damage is applied.
-* Enhanced Simple Cover 5e integration (issue #1546):
+* Enhanced Simple Cover 5e integration (issue [#1546](https://gitlab.com/tposney/midi-qol/-/issues/1546)):
   - Now passes the activity to getCover() so cover rules (ignore/override logic based on item properties) are applied.
   - Added "Simple Cover 5e" as a "Walls Block Range" option which enables Line of Sight checking - blocked LoS is treated as total cover.
   - Uses the bonus value directly from the API for more accurate cover calculation.
 
 **Bug Fixes:**
-* Fixed `damageTypes.<type>` conditions not being available for optional damage bonuses (issue #1550). The damage type data was not being passed correctly during the bonus evaluation phase due to a timing issue where `workflow.damageRolls` was empty when condition evaluation occurred.
-* Issue #1549 (save rolls showing success/failure when DC should be hidden) resolved as part of the DC display refactoring below - the target DC is no longer passed to dnd5e when visibility settings would hide it from the player.
+* Fixed `damageTypes.<type>` conditions not being available for optional damage bonuses (issue [#1550](https://gitlab.com/tposney/midi-qol/-/issues/1550)). The damage type data was not being passed correctly during the bonus evaluation phase due to a timing issue where `workflow.damageRolls` was empty when condition evaluation occurred.
+* Issue [#1549](https://gitlab.com/tposney/midi-qol/-/issues/1549) (save rolls showing success/failure when DC should be hidden) resolved as part of the DC display refactoring below - the target DC is no longer passed to dnd5e when visibility settings would hide it from the player.
 
 **Breaking Changes:**
 Since this change affects what players see please check your settings and the displayed cards before game time since I might have screwed up.
@@ -703,7 +1501,7 @@ Since this change affects what players see please check your settings and the di
 
 **Bug Fixes:**
 * Levels Volumetric Templates: Now pre-filters tokens for incapacitated/defeated status before passing to VolumetricTemplates, matching the behavior when not using volumetric templates.
-* Fixed Activity Visibility "Level Limit" being ignored when midi-qol is enabled (#1548). Activities now properly respect dnd5e visibility settings (level limits, attunement requirements, etc.) on both default dnd5e sheets and Tidy5e sheets.
+* Fixed Activity Visibility "Level Limit" being ignored when midi-qol is enabled ([#1548](https://gitlab.com/tposney/midi-qol/-/issues/1548)). Activities now properly respect dnd5e visibility settings (level limits, attunement requirements, etc.) on both default dnd5e sheets and Tidy5e sheets.
 
 **Documentation**
 - new directory docs, which includes documentation of significant changes.
@@ -722,8 +1520,8 @@ Since this change affects what players see please check your settings and the di
   - Fixed TrapWorkflow infinite loop when using activities with attacks. The `WorkflowState_WaitForAttackRoll` now properly checks `context.attackRoll` to detect when resuming after attack completion.
   - Fixed TrapWorkflow not syncing `game.user.targets` from targets passed to constructor. Targets are now synced immediately in the constructor for proper workflow execution.
   - Fixed D20Roll.buildPost error in TrapWorkflow by not passing `shiftOnlyEvent` (which lacks required `target` property) to `rollAttack`.
-* !385: Fixed targeting logic for "Weapon's attack single target" setting with activities that have emanation shapes (like Steel Wind Strike) - thanks @thatlonelybugbear
-* !386: Updated pt-BR.json - thanks @Kharmans
+* [!385](https://gitlab.com/tposney/midi-qol/-/merge_requests/385): Fixed targeting logic for "Weapon's attack single target" setting with activities that have emanation shapes (like Steel Wind Strike) - thanks @thatlonelybugbear
+* [!386](https://gitlab.com/tposney/midi-qol/-/merge_requests/386): Updated pt-BR.json - thanks @Kharmans
 
 **Code Improvements:**
 * Refactored `skipConcentrationCheck` from actor flags to module-level Set for tracking actors that should skip concentration checks. Avoids database writes so is faster.
@@ -732,7 +1530,7 @@ Since this change affects what players see please check your settings and the di
 * Midi-qol uses AI (Claude) for test and documentation generation and some bug fixes.
 
 **New Features:**
-* !381: Added option to skip concentration checks when HP is consumed for activity activation - thanks @baconnugget
+* [!381](https://gitlab.com/tposney/midi-qol/-/merge_requests/381): Added option to skip concentration checks when HP is consumed for activity activation - thanks @baconnugget
 * Expanded `ignoreTraits` to support individual damage types. You can now specify specific damage types to bypass:
   - `idi.fire` - Ignore fire immunity only (other immunities still apply)
   - `idr.cold` - Ignore cold resistance only
@@ -746,8 +1544,8 @@ Since this change affects what players see please check your settings and the di
 * Fixed grants.noAdvantage/grants.noDisadvantage not working correctly for saves.
 * Fixed flanking advantage being applied when `checkFlanking` is not set to "advonly". Expects the status effect to provide advantage.
 * Fixed chat log DOM duplication when scrolling to the top after messages were deleted.
-* !382: Improve flash-rolls-5e integration for automatic saving throws (switch to flash-rolls-5e.rollComplete hook, use request.token for NPC matching) - thanks @carolingian
-* !380: Bugfix - edge cases for optional bonus check.all and save.all (tool checks and death saves now properly trigger optional bonuses) - thanks @Bacon
+* [!382](https://gitlab.com/tposney/midi-qol/-/merge_requests/382): Improve flash-rolls-5e integration for automatic saving throws (switch to flash-rolls-5e.rollComplete hook, use request.token for NPC matching) - thanks @carolingian
+* [!380](https://gitlab.com/tposney/midi-qol/-/merge_requests/380): Bugfix - edge cases for optional bonus check.all and save.all (tool checks and death saves now properly trigger optional bonuses) - thanks @Bacon
 
 **Translations:**
 * Updated pt-BR.json - thanks @Kharmans
@@ -888,7 +1686,7 @@ Since this change affects what players see please check your settings and the di
 * Fix for players seeing "missed" color highlight when settings are to disable everything.
 * Fix for TroubleShooter not loading older troubleshooter files.
 * Target confirmation knows about whether the chat log is expanded or hidden and positions accordingly.
-* Fix for case where damage bonus not being correctly applied - thanks @thatlonelybugber.
+* Fix for case where damage bonus not being correctly applied - thanks @thatlonelybugbear.
 * Introduced a change in emanation/radius targeting. Instead of using "self" use "-self" to indicate that the caster should not be included. Use of "self" will generate a deprecation warning and will be removed eventually.
 * Updated pt.br.json and it.json - thanks @kharmans and GregoryWarn
 * New setting to control if using an item waits for damage application to complete before finishing. In mechanics tab. 
@@ -3474,7 +4272,7 @@ await  MidiQOL.contestedRoll({
 });
 ```
 * Which says, roll an acrobatics check for token and an athletics or acrobatics check for the target token.   
-The flavor is the item name (in this case Shove), on success call the function success, display the results to a chat message (and since this is an item onUse macro wtih merge cards enabled I pass in the itecCardId) of the item chat card and the results will be displayed in that card.  
+The flavor is the item name (in this case Shove), on success call the function success, display the results to a chat message (and since this is an item onUse macro with merge cards enabled I pass in the itecCardId) of the item chat card and the results will be displayed in that card.  
 The rolls are not fastForwarded so the appropriate players get presented with a roll configuration dialog and the results of each roll are displayed as ability/skill chat cards.
 
 ## 11.0.6
@@ -3589,7 +4387,7 @@ The rolls are not fastForwarded so the appropriate players get presented with a 
 * **Breaking** Actions/reactions and bonus actions are recorded in actor.flags["midi-qol"].actions.bonus/reaction/action true or false, the flag denoting the combat round the bonus action or reaction was use is stored in actor.flags["midi-qol"].actions.reactionCombatRound/bonusActionCombatRound.
 
 ### 10.0.45
-* Fix for fey ancestry item macro typo - thanks @thatlonelybugber
+* Fix for fey ancestry item macro typo - thanks @thatlonelybugbear
 * Fix for shield macro typo - thanks @thatlonelybugear
 * Fix for broach of shielding and 10.0.45 argument calling.
 * Fix for erroneous preTargetdamageApplication macro call - thanks @Elwin
@@ -4125,7 +4923,7 @@ Bug Fixes
 
 * Roll flavors that are not dnd5e damage types now are treated as the default damage type for the item.
 * Confirming damage flavours can be upper or lower case.
-* **BREAKING** When rolling damage the diceflavor will be set to the damage for each dice roll which means DSN daamge rolls will be correctly colored and the damage type of each damage roll will be displayed in the chat card.
+* **BREAKING** When rolling damage the diceflavor will be set to the damage for each dice roll which means DSN damage rolls will be correctly colored and the damage type of each damage roll will be displayed in the chat card.
 
 * Added support for spell sniper, flags.dnd5e.spellSniper.
 

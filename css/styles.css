@@ -1,3 +1,5 @@
+@layer modules {
+
 .dnd5e.sheet .item-buttons button {
   font-size: 10px;
   line-height: 12px;
@@ -147,7 +149,7 @@
 .midi-qol-tooltip .midi-qol-tooltiptext {
   visibility: hidden;
   width: max-content;
-  background-color: var(--dnd5e-color-card);
+  background-color: var(--dnd5e-background-card);
   text-align: center;
   border-radius: 6px;
   padding: 3px;
@@ -325,7 +327,7 @@
   overflow: hidden;
 
   .tooltip-part {
-    border-bottom: 1px solid var(--color-border-light-1);
+    border-bottom: var(--dnd5e-border-dotted);
     padding: 0.125rem 0;
 
     &:last-child {
@@ -409,13 +411,8 @@
   }
 }
 
-.midi-bonus-damage-flavor {
-  text-align: center;
-}
-
 .dnd5e2 .midi-buttons button {
-  background: var(--button-background-color);
-  color: var(--button-text-color);
+  background: var(--dnd5e-background-card);
   font-family: var(--dnd5e-font-roboto);
   font-weight: bold;
   font-size: var(--font-size-11);
@@ -460,17 +457,30 @@
 /* CHAT - DND5E 3 AND MIDI
 /* ----------------------------------------- */
 
-.midi-results {
-  --midi-qol-failure-background: color-mix(in srgb, #b32e2e 18%, transparent);
-  --midi-qol-success-background: color-mix(in srgb, #22833d 18%, transparent);
-}
-
 /* Chat log consolidated styles */
 :is(.chat-popout, #chat-log, .chat-log) {
-  .message {
+  /* Colored Border Messages setting: a left bar in the owning player's colour (set inline by
+     colorChatMessageHandler). With the setting off, dnd5e's own card border is left alone. */
+  .message.midi-qol-colored-border {
     border-width: 0;
-    border-left: 0.2rem solid;
-    border-color: var(--user-color);
+    border-left: 0.2rem solid var(--midi-qol-player-color);
+  }
+
+  .message.midi-qol-colored-name .message-sender,
+  .message.midi-qol-colored-name .message-sender .title {
+    color: var(--midi-qol-player-color);
+    text-shadow: 1px 1px 1px var(--midi-qol-player-color);
+  }
+
+  .message.midi-qol-colored-name-background .message-sender {
+    background-color: var(--midi-qol-player-color);
+    text-shadow: 1px 1px 1px #FFFFFF;
+  }
+
+  /* Keep dnd5e's roll-mode marker: a 3px bottom border on whispered, blind and emote messages,
+     coloured by dnd5e's own rules. */
+  .message.midi-qol-colored-border:is(.whisper, .blind, .emote) {
+    border-block-end-width: 3px;
   }
 
   .message.whisper::before {
@@ -508,12 +518,20 @@
 
       &.failure {
         border-color: rgba(110,0,0,0.4);
-        background-color: var(--midi-qol-failure-background);
+        background-color: var(--dnd5e-color-failure-background);
       }
 
       &.success {
         border-color: rgba(0,108,0,0.4);
-        background-color: var(--midi-qol-success-background);
+        background-color: var(--dnd5e-color-success-background);
+      }
+
+      .theme-dark &.failure {
+        background-color: rgba(110, 0, 0, 0.35);
+      }
+
+      .theme-dark &.success {
+        background-color: rgba(0, 108, 0, 0.3);
       }
     }
 
@@ -525,112 +543,44 @@
   .midi-qol-player-dmg-msg {
     padding: 0;
     border: none;
-    border-left: 0.2rem solid var(--user-color);
   }
 }
 
 /* Additional target styling for non-chat-log contexts */
 .midi-results .target.failure {
   border-color: rgba(110,0,0,0.4);
-  background-color: var(--midi-qol-failure-background);
+  background-color: var(--dnd5e-color-failure-background);
 }
 
 .midi-results .target.success {
   border-color: rgba(0,108,0,0.4);
-  background-color: var(--midi-qol-success-background);
+  background-color: var(--dnd5e-color-success-background);
 }
 
-/* The system's compact v6 totals put icons in the flex flow. Midi keeps totals
-   centered in both full-width and condensed cards, with icons beside the number. */
-.midi-chat-card .dice-total {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  min-height: 1.75rem;
-  line-height: 1.4;
-  font-variant-numeric: tabular-nums;
+/* dnd5e's success/failure backgrounds are light and its highlights set dark text; midi's rows keep the theme's text,
+   so on the dark theme they take a dark tint instead. */
+.theme-dark .midi-results .target.failure {
+  background-color: rgba(110, 0, 0, 0.35);
 }
 
-.midi-chat-card .dice-total > .total {
-  flex: 1;
-  min-width: 0;
-  text-align: center;
+.theme-dark .midi-results .target.success {
+  background-color: rgba(0, 108, 0, 0.3);
 }
 
-.midi-chat-card .midi-damage-type-icons {
-  position: absolute;
-  inset-inline-start: 0.3rem;
-  display: flex;
-  align-items: center;
-  gap: 0.15rem;
-  pointer-events: none;
+/* The attack total and the save totals in the tooltips use dnd5e's roll styling, whose success/failure backgrounds are
+   light; on the dark theme midi's card gives them the rows' dark tint, keeping dnd5e's borders and icons. */
+.theme-dark :is(.midi-attack-roll, .midi-qol-save-tooltip) .dice-total:is(.success:not(.fumble), .critical) {
+  background: rgba(0, 108, 0, 0.3);
 }
 
-.midi-chat-card .midi-damage-type-icons dnd5e-icon {
-  width: 1rem;
-  height: 1rem;
-  margin: 0;
+.theme-dark :is(.midi-attack-roll, .midi-qol-save-tooltip) .dice-total:is(.failure:not(.critical), .fumble) {
+  background: rgba(110, 0, 0, 0.35);
 }
 
-.midi-chat-card .dice-total:has(.midi-damage-type-icons > :nth-child(2)) {
-  padding-bottom: 1.2rem;
-}
-
-.midi-chat-card .midi-damage-type-icons:has(> :nth-child(2)) {
-  inset-inline-start: 50%;
-  bottom: 0.2rem;
-  transform: translateX(-50%);
-}
-
-.midi-chat-card .dice-total .icons {
-  position: absolute;
-  inset-inline-end: 0.3rem;
-}
-
-.midi-chat-card .dice-tooltip .label,
-.midi-chat-card .dice-tooltip .sign,
-.midi-results .target,
-.midi-results .target .name-stacked .title {
+/* Their ✓/✗ icons in the text colour, as the rows' symbols, rather than dnd5e's faded green or red. */
+:is(.midi-attack-roll, .midi-qol-save-tooltip) .dice-total > .icons {
   color: var(--color-text-primary);
-}
-
-.midi-chat-card .midi-results > .flexrow > div {
-  min-width: 0;
-}
-
-.midi-chat-card .midi-buttons button {
-  min-height: 1.75rem;
-  height: auto;
-  line-height: 1.3;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
-.midi-chat-card .dice-formula {
-  overflow-wrap: anywhere;
-}
-
-.midi-chat-card .card-content,
-.midi-chat-card .card-content p,
-.midi-chat-card .card-content strong,
-.midi-chat-card .card-content em {
-  color: var(--color-text-primary);
-}
-
-.midi-chat-card .midi-dice-tooltip .dice .total {
-  flex: 0 0 40%;
-  min-width: 0;
-}
-
-.midi-chat-card .midi-dice-tooltip .dice .total .label {
-  font-size: var(--font-size-12);
-  color: var(--color-text-primary);
-  text-transform: none;
-  overflow-wrap: anywhere;
-}
-
-.midi-chat-card .midi-dice-tooltip .dice .dice-rolls .constant .sign {
-  color: var(--color-text-primary);
+  opacity: 1;
 }
 
 .midi-qol-tooltiptext.midi-qol-save-tooltip {
@@ -649,10 +599,6 @@
   background-color: var(--dnd5e-background-10);
   width: 30px;
   height: 30px;
-}
-
-.midi-qol-save-name .midi-qol-playerTokenName {
-  text-align: right;
 }
 
 .midi-qol-saves-display {
@@ -686,27 +632,6 @@
   font-weight: bold;
 }
 
-
-/* Condensed Item description */
-.dnd5e2.chat-card .description {
-  padding: 0.4rem;
-  margin-bottom: 0.4rem;
-}
-
-.dnd5e2.chat-card .description:not(:has(p),.collapsed) .details {
-  margin-top: 0.4rem;
-}
-
-/* Condensed footer pills */
-.card-footer.pills.unlist {
-  gap: 0.2rem;
-  margin-top: 0.1rem;
-
-  li.pill.pill-sm {
-    font-size: 9px;
-    padding: 0.2rem 0.3rem;
-  }
-}
 
 /* Midi Attack and Damage buttons */
 /* When card-buttons has no visible buttons, collapse gap so empty flex items don't create blank space */
@@ -765,6 +690,79 @@
   font-weight: bold;
 }
 
+/* Damage type icons sit in their own out-of-flow slot beside the total.
+   dnd5e's `.icons` slot cannot be used: _applyMidiHighlightSettings clears it to rebuild the
+   crit/fumble markers. Positioned as dnd5e positions `.icons`, so the total stays centred and its
+   flanking gradient rules stay visible. */
+.dice-result .dice-total > .midi-damage-icons {
+  position: absolute;
+  inset: 0 auto 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0.6;
+}
+
+/* Attack roll reasons (flanking, granted bonuses), placed as the damage type icons are;
+   green for what helps the attack, red for a penalty */
+.midi-attack-roll .dice-total > .midi-attack-reasons {
+  position: absolute;
+  inset: 0 auto 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.midi-attack-reason,
+.midi-attack-reason-icon {
+  display: inline-block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  font-size: 14px;
+  line-height: 16px;
+  text-align: center;
+}
+.midi-attack-reason-icon {
+  width: 14px;
+  height: 14px;
+  font-size: 12px;
+  line-height: 14px;
+}
+.midi-attack-reason-mask {
+  background-color: currentColor;
+  -webkit-mask: var(--midi-reason-icon) center / contain no-repeat;
+  mask: var(--midi-reason-icon) center / contain no-repeat;
+}
+img.midi-attack-reason-effect {
+  border: none;
+  border-radius: 3px;
+  outline: 1.5px solid currentColor;
+  object-fit: cover;
+}
+.midi-attack-reason.plus,
+.midi-attack-reason-chip.plus {
+  color: var(--color-level-success);
+}
+.midi-attack-reason.minus,
+.midi-attack-reason-chip.minus {
+  color: var(--color-level-error);
+}
+.midi-attack-reason-chips {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  text-align: left;
+}
+.midi-attack-reason-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  white-space: nowrap;
+}
+
 /* Damage type icon next to total */
 .midi-damage-type-icon {
   display: inline-block;
@@ -774,10 +772,63 @@
   margin-left: 0.25em;
 }
 
-/* Section separators between filled sections */
-.midi-results > .midi-qol-section-filled ~ .midi-qol-section-filled {
-  border-top: 1px solid var(--color-border-light-1, rgba(0, 0, 0, 0.1));
+/* Section separators: between the card's groups of sections (attack and hits, damage, utility, saves), as dnd5e divides */
+.midi-results > .midi-qol-section-filled ~ :is(.midi-qol-damage-roll, .midi-qol-other-damage-roll, .midi-qol-bonus-damage-roll, .midi-qol-utility-roll, .midi-qol-saves-display).midi-qol-section-filled {
+  border-top: var(--dnd5e-border-dotted);
   padding-top: 0.15rem;
+}
+.midi-results > :is(.midi-qol-damage-roll, .midi-qol-other-damage-roll).midi-qol-section-filled ~ :is(.midi-qol-other-damage-roll, .midi-qol-bonus-damage-roll) {
+  border-top: none;
+}
+
+.midi-qol-card-note {
+  padding: 0.15rem 0;
+}
+
+.chat-message.midi-qol-undone .message-content {
+  background-color: var(--midi-qol-undone-color, transparent);
+}
+
+.midi-qol-contest-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-bottom: var(--dnd5e-border-dotted);
+  margin-bottom: 0.25rem;
+}
+
+.midi-qol-contest-heading span,
+.midi-qol-contest-waiting {
+  font-style: italic;
+  color: var(--color-text-secondary, inherit);
+}
+
+.midi-qol-contest-result {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-top: 0.3rem;
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+  font-weight: bold;
+  border: 1px solid var(--color-fieldset-border);
+}
+
+.midi-qol-contest-result .midi-qol-contest-totals {
+  margin-left: auto;
+  font-weight: normal;
+}
+
+.midi-qol-contest-result.success {
+  color: var(--dnd5e-color-success);
+  background: var(--dnd5e-color-success-background);
+  border-color: var(--dnd5e-color-success);
+}
+
+.midi-qol-contest-result.failure {
+  color: var(--dnd5e-color-failure);
+  background: var(--dnd5e-color-failure-background);
+  border-color: var(--dnd5e-color-failure);
 }
 
 .midi-qol-tooltiptext {
@@ -923,7 +974,6 @@
 :is(.chat-popout, #chat-log, .chat-log) .midi-qol-dmg-app-msg {
   padding: 0;
   border: none;
-  border-left: 0.2rem solid var(--user-color);
 }
 
 /* Item sheet midi tab */
@@ -1182,80 +1232,6 @@ section.midi-qol.tab > .sheet-tabs [data-tab] label {
 }
 
 /* ----------------------------------------- */
-/* ----------------------------------------- */
-/* Condition Update Cards                    */
-/* ----------------------------------------- */
-
-.midi-qol-condition-card {
-  padding: 2px 0;
-}
-
-.chat-message.message.flexcol:has(.midi-qol-condition-card) .message-header {
-  display: none;
-}
-
-.midi-qol-cond-header {
-  font-size: 0.9em;
-  padding: 2px 4px;
-  border-bottom: 1px solid rgba(128, 128, 128, 0.3);
-  margin-bottom: 2px;
-}
-
-.midi-qol-cond-meta {
-  font-size: 0.8em;
-  padding: 0 4px 3px 4px;
-  opacity: 0.8;
-}
-
-.midi-qol-cond-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 4px;
-  flex-wrap: wrap;
-}
-
-.midi-qol-cond-actor-row {
-  padding-bottom: 0;
-}
-
-.midi-qol-cond-effect-row {
-  padding-top: 0;
-  padding-left: 30px;
-}
-
-.midi-qol-cond-effect-row .midi-qol-cond-op {
-  min-width: 56px;
-}
-
-.midi-qol-condition-card .midi-qol-target-name {
-  border: 0;
-  border-radius: 2px;
-  flex-shrink: 0;
-}
-
-.midi-qol-cond-name-stack {
-  width: 170px;
-}
-
-.midi-qol-cond-name-stack .midi-qol-playerTokenName {
-  text-align: right;
-}
-
-.midi-qol-cond-actor,
-.midi-qol-cond-effect {
-  font-weight: 600;
-}
-
-.midi-qol-cond-op {
-  opacity: 0.85;
-}
-
-.midi-qol-cond-status {
-  font-size: 0.85em;
-  opacity: 0.75;
-}
-
 /* Advantage/Disadvantage Indicator
 /* ----------------------------------------- */
 /* Attribution info icon - shows tooltip with advantage/disadvantage sources */
@@ -1291,7 +1267,7 @@ section.midi-qol.tab > .sheet-tabs [data-tab] label {
   font-weight: bold;
   margin-bottom: 0.25rem;
   padding-bottom: 0.25rem;
-  border-bottom: 1px solid var(--color-border-light-1);
+  border-bottom: var(--dnd5e-border-dotted);
 }
 
 .midi-attribution-tooltip .attribution-list {
@@ -1391,11 +1367,6 @@ section.midi-qol.tab > .sheet-tabs [data-tab] label {
   display: block;
   width: 18px;
   height: 18px;
-}
-
-/* Damage Application tray change-source icons - mid-grey readable on both light/dark themes */
-.dnd5e2 :is(.card-tray, .effects-tray, .targets-tray) .targets .target .change-source > dnd5e-icon {
-  --icon-fill: #777;
 }
 
 /* OverTime Editor */
@@ -1775,21 +1746,34 @@ section.midi-qol.tab > .sheet-tabs [data-tab] label {
 /*  Condition Field Editor Button               */
 /* -------------------------------------------- */
 
+/* The wrapper's children join the field's row, so CAT's quick conditions (+) can sit between the text and the
+   editor button; little spacing, so the condition itself gets the room */
+.form-fields:has(> .midi-condition-field-wrapper) {
+  gap: 2px;
+}
+
 .midi-condition-field-wrapper {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  width: 100%;
+  display: contents;
 }
 
 .midi-condition-field-wrapper input {
   flex: 1;
+  min-width: 0;
+  order: 0;
+}
+
+.form-fields:has(> .midi-condition-field-wrapper) > i.cat-quick-conditions {
+  order: 1;
+  margin: 0;
+  padding: 0 2px;
 }
 
 .midi-condition-editor-btn {
+  order: 2;
   flex: 0 0 auto;
   width: 24px;
   height: 24px;
+  margin: 0;
   padding: 0;
   display: flex;
   align-items: center;
@@ -1804,6 +1788,12 @@ section.midi-qol.tab > .sheet-tabs [data-tab] label {
 .midi-condition-editor-btn:hover {
   background: var(--dnd5e-color-gold);
   color: var(--dnd5e-background-card);
+}
+
+/* Conditions are expressions; Macro Autocomplete's block editor rewrites them as statements.
+   !important: midi's CSS is in a cascade layer, Macro Autocomplete's toolbar rule is not. */
+.midi-qol.condition-editor .mac-editor-toolbar {
+  display: none !important;
 }
 
 /* Module Review Dialog */
@@ -1939,36 +1929,65 @@ section.midi-qol.tab > .sheet-tabs [data-tab] label {
   margin-left: auto;
 }
 
-/* AC modifier icons in hit/save display (cover, flanking, reaction, grants) */
+/* AC modifier icons in hit/save display (cover, flanking, reaction, grants): one row, each in the same 14px box */
+.midi-qol-ac-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.midi-qol-ac-icon,
+.midi-qol-ac-icon-img,
+.midi-qol-ac-icon-fa {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 14px;
+}
+
 .midi-qol-ac-icon {
   --icon-fill: #777;
   --icon-size: 14px;
-  display: inline-block;
-  vertical-align: text-bottom;
-  margin-right: 1px;
+  display: block;
 }
 
 /* Image-based AC icons (Sharpshooter/Spell Sniper .webp, core SVGs with hardcoded fills) */
 .midi-qol-ac-icon-img {
-  display: inline !important;
+  display: block !important;
   width: 14px !important;
   height: 14px !important;
-  vertical-align: -0.125em;
-  margin-right: 1px;
+  border: none;
   filter: brightness(0) invert(0.5);
 }
 
 /* Font Awesome icons (grants AC bonus) */
 .midi-qol-ac-icon-fa {
-  font-size: 8px;
-  vertical-align: -0.125em;
-  margin-right: 1px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  line-height: 1;
   color: #777;
 }
 
 /* Make unchecked checkboxes more visible in dark theme */
 body.theme-dark input[type="checkbox"] {
   --checkbox-background-color: #6a6a6a;
+}
+
+/* Move region direction dialog (DialogV2): compass buttons in a 3x3 grid */
+.midi-qol-move-region .form-footer {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+}
+
+.midi-qol-move-region .form-footer button {
+  margin: 0;
+}
+
+.midi-qol-move-region .form-footer button[data-action="stay"] {
+  grid-column: 1 / -1;
 }
 
 /* Choose Effect dialog (DialogV2) */
@@ -1994,4 +2013,431 @@ body.theme-dark input[type="checkbox"] {
   overflow: hidden;
   text-overflow: ellipsis;
   text-align: left;
+}
+
+/* Region Behavior Editor — rules grid */
+.rules-header, .rule-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr auto;
+  gap: 4px;
+  align-items: center;
+}
+.rules-header {
+  font-weight: bold;
+  padding: 2px 0;
+}
+.rules-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  flex: 1;
+  min-height: 0;
+}
+.rule-row select { width: 100%; }
+
+/* Region Behavior Config sheet — wider target column for document-tags */
+.midi-region-behavior-config .rules-header,
+.midi-region-behavior-config .rule-row {
+  grid-template-columns: 1fr 1fr 1.5fr auto;
+}
+.midi-region-behavior-config .rule-row document-tags {
+  min-width: 0;
+}
+
+} /* @layer modules */
+
+/* ----------------------------------------- */
+/* Damage tray: change sources on the row     */
+/* ----------------------------------------- */
+/* dnd5e 6.0 shows resistance/immunity controls only inside the target pill's popover, which opens on
+   right-click. midi also shows them on the row, as dnd5e did up to 5.3.
+
+   The row carries dnd5e's own `.target-pane > .menu-change-sources` classes so its styling for these
+   buttons applies unchanged and keeps following the system. All that is overridden here is the
+   pane's chrome, since this one is inline rather than a floating popover. */
+.dnd5e2 .pills target-pill.pill .target-pane.midi-inline-changes {
+  display: flex;
+  /* One text line, icons centred on it: a pill with icons is no taller than one without. */
+  align-items: center;
+  block-size: 1lh;
+  overflow: visible;
+  position: static;
+  inline-size: auto;
+  margin: 0;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.dnd5e2 .pills target-pill.pill .target-pane.midi-inline-changes .menu-change-sources {
+  display: flex;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+
+.dnd5e2 .pills target-pill.pill .target-pane.midi-inline-changes .menu-change-sources li {
+  padding-inline-end: 0;
+}
+
+.dnd5e2 .pills target-pill.pill .midi-target-multiplier {
+  font-size: var(--font-size-11);
+  font-weight: bold;
+  padding-inline: 2px;
+  white-space: nowrap;
+}
+
+/* Item images are full-colour raster, not the tintable monochrome SVGs dnd5e's icons assume, so they
+   get a ring and a neutral backing to stay legible against both the parchment card and a dark theme. */
+/* Slightly larger than the 13px system glyphs: these are detailed artwork rather than a symbol, and
+   at glyph size they read as a smudge. Negative margin keeps the row visually level. */
+.midi-inline-changes .icon.midi-icon-image,
+.menu-change-sources .icon.midi-icon-image {
+  inline-size: 16px;
+  block-size: 16px;
+  margin-block: -2px;
+}
+
+.midi-change-source-img {
+  inline-size: 100%;
+  block-size: 100%;
+  object-fit: cover;
+  border-radius: 3px;
+  background: var(--color-light-1, #fff);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 55%), 0 0 0 2px rgb(255 255 255 / 25%);
+}
+
+.change-source[aria-pressed="true"] .midi-change-source-img {
+  opacity: 0.4;
+}
+
+/* dnd5e pads these for a menu row; inline they only need to be the icon. */
+.dnd5e2 .pills target-pill.pill .target-pane.midi-inline-changes .change-source {
+  padding: 0;
+  gap: 0;
+}
+
+.midi-qol-overlaps .midi-qol-overlap-buttons {
+  display: flex;
+  gap: 4px;
+}
+
+/* CAT's description block (midi's automation notes, CPR's chosen options): set off from the item's own text. */
+.cat-description {
+  margin-top: 0.75em;
+  padding-top: 0.25em;
+  border-top: 1px solid var(--dnd5e-color-gold, var(--color-border));
+  opacity: 0.85;
+}
+
+/* Player waits: a badge on a player's row in the player list, and the GM's popover to answer for them */
+/* Foundry fades the player list until hovered: keep it at full strength while midi is waiting on someone */
+#players.faded-ui:has(.midi-qol-player-wait) {
+  opacity: 1;
+}
+#players li.player .midi-qol-player-wait {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: stretch;
+  gap: 0;
+  width: auto;
+  height: 1.3rem;
+  min-height: 0;
+  margin-left: 0.3rem;
+  padding: 0;
+  font-size: var(--font-size-12);
+  font-weight: bold;
+  line-height: 1;
+  color: #1c1406;
+  background: none;
+  border: none;
+  border-radius: 999px;
+  overflow: hidden;
+  cursor: pointer;
+  animation: midi-qol-player-wait-glow 1.6s ease-in-out infinite;
+}
+#players li.player .midi-qol-player-wait .segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0 0.15rem 0 0.45rem;
+  background: #f0a53a;
+}
+#players li.player .midi-qol-player-wait .segment.reaction {
+  background: #e8603c;
+}
+#players li.player .midi-qol-player-wait .count {
+  min-width: 1rem;
+  padding: 0.1rem 0.25rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.75);
+  color: #fff;
+  text-align: center;
+}
+#players li.player .midi-qol-player-wait:hover {
+  filter: brightness(1.15);
+}
+#players li.player .midi-qol-player-wait.read-only {
+  cursor: default;
+  animation: none;
+}
+#players li.player .midi-qol-player-wait.read-only:hover {
+  filter: none;
+}
+#tooltip.midi-qol-player-wait-tooltip,
+.locked-tooltip.midi-qol-player-wait-tooltip {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  min-width: 12rem;
+  max-width: 24rem;
+  padding: 0.5rem 0.7rem;
+  text-align: left;
+}
+.midi-qol-player-wait-tooltip .row,
+.midi-qol-player-wait-popover .row {
+  display: flex;
+  align-items: baseline;
+  gap: 1rem;
+}
+.midi-qol-player-wait-tooltip .row + .row {
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+}
+.midi-qol-player-wait-tooltip .what,
+.midi-qol-player-wait-popover .what {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  line-height: 1.25;
+}
+.midi-qol-player-wait-tooltip .hint {
+  padding-top: 0.4rem;
+  border-top: 1px solid rgba(255, 255, 255, 0.15);
+  font-style: italic;
+  opacity: 0.8;
+}
+.midi-qol-player-wait-tooltip .time,
+.midi-qol-player-wait-popover .time {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+@keyframes midi-qol-player-wait-glow {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(240, 165, 58, 0.7); }
+  50% { box-shadow: 0 0 0.45rem 0.1rem rgba(240, 165, 58, 0.9); }
+}
+/* Gambit's Premades prompts mirrored to the GM, listed in the player list, stay hidden until the GM shows one */
+body.midi-qol-hide-gambit-mirrors .gps-dialog-mirror:not(.midi-qol-gambit-shown) {
+  display: none !important;
+}
+.midi-qol-player-wait-popover {
+  position: fixed;
+  z-index: calc(var(--z-index-tooltip, 1000) - 1);
+  min-width: 18rem;
+  max-width: 28rem;
+  padding: 0.75rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  background: var(--color-cool-5, #1b1d24);
+  color: var(--color-text-primary, #e7e7e7);
+  border: 1px solid var(--color-border, #444);
+  border-radius: 6px;
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.6);
+  font-size: var(--font-size-13);
+}
+.midi-qol-player-wait-popover header {
+  font-weight: bold;
+}
+.midi-qol-player-wait-popover .midi-qol-player-wait-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  line-height: 1.3;
+}
+.midi-qol-player-wait-popover .midi-qol-player-wait-row + .midi-qol-player-wait-row {
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--color-border, #444);
+}
+.midi-qol-player-wait-popover .midi-qol-player-wait-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.midi-qol-player-wait-popover .midi-qol-player-wait-choices button {
+  flex: 1 1 auto;
+  width: auto;
+  font-size: var(--font-size-12);
+}
+
+/* Countdown on a dialog that answers itself (reactions, optional bonuses, effect choice): a bar that drains from green
+   to red, the seconds left, and a pause button */
+.midi-qol-countdown {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0 0 0.5rem;
+}
+.midi-qol-countdown .track {
+  flex: 1;
+  height: 0.4rem;
+  border-radius: 999px;
+  background: rgba(128, 128, 128, 0.25);
+  overflow: hidden;
+}
+.midi-qol-countdown .bar {
+  height: 100%;
+  border-radius: inherit;
+  transition: width 0.2s linear, background-color 0.5s linear;
+}
+.midi-qol-countdown .label {
+  min-width: 3.5em;
+  text-align: right;
+  font-size: var(--font-size-12);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.85;
+}
+.midi-qol-countdown button.pause {
+  flex: 0 0 auto;
+  width: 1.6rem;
+  height: 1.6rem;
+  min-height: 0;
+  padding: 0;
+  font-size: var(--font-size-11);
+  line-height: 1;
+}
+.midi-qol-countdown.urgent .label {
+  color: hsl(0 75% 55%);
+  font-weight: bold;
+  opacity: 1;
+  animation: midi-qol-countdown-pulse 1s ease-in-out infinite;
+}
+.midi-qol-countdown.paused .bar {
+  background-image: repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.25) 0 0.3rem, transparent 0.3rem 0.6rem);
+  opacity: 0.6;
+}
+@keyframes midi-qol-countdown-pulse {
+  50% { opacity: 0.55; }
+}
+
+/* Buttons of midi's reaction and optional bonus dialogs: one per line, an item image beside its name */
+.midi-qol-dialog-buttons {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.midi-qol-dialog-buttons .dialog-button {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  min-height: 2.75rem;
+  text-align: left;
+}
+.midi-qol-dialog-buttons .midi-qol-dialog-button-img {
+  flex: 0 0 auto;
+  width: 2.25rem;
+  height: 2.25rem;
+  border: none;
+  object-fit: contain;
+}
+.midi-qol-dialog-buttons .dialog-button.decline {
+  justify-content: center;
+  min-height: 2rem;
+}
+
+/* Confirm a reroll: the original and the new roll, one above the other */
+.midi-qol-confirm-reroll {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.midi-qol-confirm-reroll label {
+  font-weight: bold;
+}
+
+/* ConfigPanel quick settings: one preset per button, its name left aligned */
+.import-quick-setting {
+  text-align: left;
+}
+
+/* Monk's TokenBar 14.01: a two-digit total wraps in its roll card's result box, hiding the second digit and the
+   pass/fail icons. Remove when Monk's TokenBar fixes it. */
+.monks-tokenbar li.item .dice-roll .dice-total .dice-result {
+  flex: 1 0 auto;
+  white-space: nowrap;
+}
+
+.midi-qol-condition-card {
+  padding: 2px 0;
+}
+
+.chat-message.message.flexcol:has(.midi-qol-condition-card) .message-header {
+  display: none;
+}
+
+.midi-qol-cond-header {
+  font-size: 0.9em;
+  padding: 2px 4px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.3);
+  margin-bottom: 2px;
+}
+
+.midi-qol-cond-meta {
+  font-size: 0.8em;
+  padding: 0 4px 3px 4px;
+  opacity: 0.8;
+}
+
+.midi-qol-cond-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 4px;
+  flex-wrap: wrap;
+}
+
+.midi-qol-cond-actor-row {
+  padding-bottom: 0;
+}
+
+.midi-qol-cond-effect-row {
+  padding-top: 0;
+  padding-left: 30px;
+}
+
+.midi-qol-cond-effect-row .midi-qol-cond-op {
+  min-width: 56px;
+}
+
+.midi-qol-condition-card .midi-qol-target-name {
+  border: 0;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+.midi-qol-cond-name-stack {
+  width: 170px;
+}
+
+.midi-qol-cond-name-stack .midi-qol-playerTokenName {
+  text-align: right;
+}
+
+.midi-qol-cond-actor,
+.midi-qol-cond-effect {
+  font-weight: 600;
+}
+
+.midi-qol-cond-op {
+  opacity: 0.85;
+}
+
+.midi-qol-cond-status {
+  font-size: 0.85em;
+  opacity: 0.75;
 }

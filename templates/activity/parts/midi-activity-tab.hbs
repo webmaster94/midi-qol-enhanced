@@ -14,6 +14,72 @@
         {{ formField fields.midiProperties.fields.skipConcentrationCheck value=source.midiProperties.skipConcentrationCheck input=@root.inputs.createCheckboxInput }}
       {{/if}}
     </fieldset>
+    <fieldset>
+      <legend>
+        <span>{{ localize "midi-qol.ActivityStatuses.Label" }}</span>
+        <button type="button" class="unbutton control-button" data-action="addMidiStatus" data-tooltip
+                aria-label="{{ localize 'midi-qol.ActivityStatuses.Add' }}">
+          <i class="fas fa-plus" inert></i>
+        </button>
+      </legend>
+      <p class="hint">{{ localize "midi-qol.ActivityStatuses.Hint" }}</p>
+      <ul class="separated-list flexcol unlist">
+        {{#each midiStatuses}}
+        <li>
+          <div class="form-group">
+            <label>{{ localize "midi-qol.ActivityStatuses.Status" }}</label>
+            <div class="form-fields">
+              <select name="midiProperties.statuses.{{ @index }}.id">
+                {{ selectOptions @root.midiStatusOptions selected=this.id blank="" }}
+              </select>
+              <div class="list-controls flexrow">
+                <button type="button" class="unbutton control-button" data-action="deleteMidiStatus" data-index="{{ @index }}"
+                        data-tooltip aria-label="{{ localize 'midi-qol.ActivityStatuses.Delete' }}">
+                  <i class="fa-solid fa-trash" inert></i>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>{{ localize "midi-qol.ActivityStatuses.SpecialDuration" }}</label>
+            <div class="form-fields">
+              <select data-midi-status-duration="{{ @index }}">
+                {{ selectOptions @root.specialDurationOptions blank=(localize "midi-qol.ActivityStatuses.AddDuration") }}
+              </select>
+            </div>
+          </div>
+          {{#if durations.length}}
+          <ul class="unlist">
+            {{#each durations}}
+            <li class="flexrow">
+              <span>{{ label }}</span>
+              <div class="list-controls flexrow">
+                <button type="button" class="unbutton control-button" data-action="deleteMidiStatusDuration"
+                        data-index="{{ @../index }}" data-key="{{ key }}" data-tooltip
+                        aria-label="{{ localize 'midi-qol.ActivityStatuses.DeleteDuration' }}">
+                  <i class="fa-solid fa-trash" inert></i>
+                </button>
+              </div>
+            </li>
+            {{/each}}
+          </ul>
+          {{/if}}
+          <select multiple hidden name="midiProperties.statuses.{{ @index }}.specialDuration">
+            {{ selectOptions @root.specialDurationOptions selected=this.specialDuration }}
+          </select>
+          <div class="form-group">
+            <label>{{ localize "midi-qol.ActivityStatuses.OnSave" }}</label>
+            <div class="form-fields">
+              <select name="midiProperties.statuses.{{ @index }}.onSave">
+                <option value="false" {{#unless this.onSave}}selected{{/unless}}>{{ localize "midi-qol.ActivityStatuses.OnFailedSave" }}</option>
+                <option value="true" {{#if this.onSave}}selected{{/if}}>{{ localize "midi-qol.ActivityStatuses.WhateverTheSave" }}</option>
+              </select>
+            </div>
+          </div>
+        </li>
+        {{/each}}
+      </ul>
+    </fieldset>
   </section>
 
   <section class="tab activity-{{ tab.tabs.workflowSettings.id }} {{ tab.tabs.workflowSettings.cssClass }}"
@@ -28,7 +94,11 @@
         {{ formField fields.forceConsumeDialog value=../source.midiProperties.forceConsumeDialog options=../ConsumeDialogOptions localize=true}}
         {{ formField fields.forceRollDialog value=../source.midiProperties.forceRollDialog options=../RollDialogOptions localize=true}}
         {{ formField fields.forceDamageDialog value=../source.midiProperties.forceDamageDialog options=../DamageDialogOptions localize=true}}
-        {{ formField fields.confirmTargets value=../source.midiProperties.confirmTargets options=../ConfirmTargetOptions localize=true}}
+        {{#if ../confirmTargetsForced}}
+          {{ formField fields.confirmTargets value=../confirmTargetsValue options=../ConfirmTargetOptions localize=true disabled=true}}
+        {{else}}
+          {{ formField fields.confirmTargets value=../source.midiProperties.confirmTargets options=../ConfirmTargetOptions localize=true}}
+        {{/if}}
 
         {{#if ../hasAreaTarget}}
           {{ formField fields.autoTargetType value=../source.midiProperties.autoTargetType options=../AutoTargetTypeOptions localize=true}}
@@ -60,7 +130,9 @@
     {{#if (ne fields.otherActivityId undefined)}}
       <fieldset>
         {{ formField fields.otherActivityId value=source.otherActivityId options=otherActivityOptions}}
-        {{ formField fields.otherActivityAsParentType value=source.otherActivityAsParentType input=@root.inputs.createCheckboxInput}}
+        {{#if fields.otherActivityAsParentType}}
+          {{ formField fields.otherActivityAsParentType value=source.otherActivityAsParentType input=@root.inputs.createCheckboxInput}}
+        {{/if}}
       </fieldset>
     {{/if}}
     <fieldset>
@@ -76,6 +148,11 @@
           {{ formField fields.triggeredActivityConsume value=../source.midiProperties.triggeredActivityConsume }}
           {{ formField fields.triggeredActivityConfigure value=../source.midiProperties.triggeredActivityConfigure }}
         {{/if}}
+        {{ formField fields.followUp value=../source.midiProperties.followUp }}
+        {{#if ../source.midiProperties.followUp}}
+          {{ formField fields.followUpTargets value=../source.midiProperties.followUpTargets localize=true }}
+          {{ formField fields.followUpCondition value=../source.midiProperties.followUpCondition }}
+        {{/if}}
       {{/with}}
     </fieldset>
   </section>
@@ -85,6 +162,7 @@
     <fieldset>
       {{ formField fields.isOverTimeFlag value=source.isOverTimeFlag input=@root.inputs.createCheckboxInput }}
       {{#if source.isOverTimeFlag}}
+        <p class="hint">{{ localize "midi-qol.OVERTIME.Trigger" identifier=activity.identifier }}</p>
         {{#with fields.overTimeProperties.fields as |fields|}}
           {{ formField fields.turnChoice value=../source.overTimeProperties.turnChoice options=../turnChoiceOptions localize=true}}
           {{ formField fields.rollAs value=../source.overTimeProperties.rollAs options=../overTimeRollAsOptions localize=true}}

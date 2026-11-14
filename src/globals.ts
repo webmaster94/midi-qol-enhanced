@@ -12,9 +12,15 @@ import { TargetConfirmationConfig } from "./module/apps/TargetConfirmationConfig
 import { UndoWorkflow } from "./module/apps/UndoWorkflow";
 import { OverTimeEditor } from "./module/apps/OverTimeEditor";
 import { ConditionEditor } from "./module/apps/ConditionEditor";
-import { AttributionEntry, AttributionMap, AugmentedEvent, DamageDescriptionObject, DamageOnlyWorkflow, DDBGameLogWorkflow, DummyWorkflow, TrapWorkflow, UndoData, UserWorkflow, Workflow, WorkflowOptions, WorkflowRollOptions } from "./module/Workflow";
+import { AttributionMap, AugmentedEvent, DamageDescriptionObject, DamageOnlyWorkflow, DummyWorkflow, TrapWorkflow, UndoData, UserWorkflow, Workflow, WorkflowOptions, WorkflowRollOptions } from "./module/Workflow";
 import { MidiOptions } from "./module/utils";
 import * as utils from "./module/utils";
+import * as cardNotes from "./module/lib/cardNotes";
+import * as playerWaits from "./module/lib/playerWaits";
+import * as tokenNames from "./module/lib/tokenNames";
+import * as contestedRollModule from "./module/lib/contestedRoll";
+import * as tokenHighlight from "./module/lib/tokenHighlight";
+import * as workflowOptionsCodec from "./module/lib/workflowOptionsCodec";
 import * as settings from "./module/settings";
 import { RollStats, Stats } from "./module/RollStats";
 import { checkRule, configSettings, targetConfirmation } from "./module/settings";
@@ -26,14 +32,14 @@ import { ConfigPanel } from "./module/apps/ConfigPanel";
 import { createEffects, debug, log, moveToken, moveTokenAwayFromPoint, teleportToken, removeEffects, updateEffects, warn } from "./midi-qol";
 import { TargetConfirmationDialog } from "./module/apps/TargetConfirmation";
 import { MidiSounds } from "./module/midi-sounds";
-import { computeTargetsFromTemplates, resolveTargetConfirmation, selectTargetsFromTemplates } from "./module/activities/activityHelpers";
+import { computeTargetsFromTemplates, requiresTargetConfirmation, resolveTargetConfirmation, selectTargetsFromTemplates } from "./module/activities/activityHelpers";
 import { showUndoWorkflowApp } from "./module/apps/UndoWorkflow";
 import { TroubleShooter } from "./module/apps/TroubleShooter";
-import { ChatLogMidi } from "./module/ChatClasses/ChatLogMidi";
 import { ChatMessageMidi } from "./module/ChatClasses/ChatMessageMidi";
 import { DamageApplicationElementMidi } from "./module/ChatClasses/DamageApplicationElementMidi";
 import { MidiDependentsRegistry, RegistryChangeEvent } from "./module/lib/MidiDependentsRegistry";
 import { RollModifierTracker } from "./module/lib/RollModifierTracker";
+import { TokenDocumentSet } from "./module/lib/tokenDocumentSet";
 
 declare module "fvtt-types/configuration" {
   interface AssumeHookRan {
@@ -42,20 +48,41 @@ declare module "fvtt-types/configuration" {
   namespace Hooks {
     interface HookConfig {
       "dae.addSpecialDurations": (daeSpecialDurations: Record<string, string>) => void;
+      /** Foundry 14's region editor (fvtt-types 13 has no RegionConfig render hook). */
+      "renderRegionConfig": (app: foundry.applications.sheets.RegionConfig, html: HTMLElement) => void;
+      /** Custom D&D 5e, just before it replaces CONFIG.statusEffects with this list. */
+      "customDnd5e.setStatusEffectsConfig": (statusEffects: typeof CONFIG.statusEffects) => void;
+      "getChatMessageContextOptions": (app: unknown, options: ContextMenuEntryV14[]) => void;
       "dae.setFieldData": (fieldData: Record<string, string[]>) => void;
       "dae.addAutoFields": (addAutoFields: Function, fields: { BooleanFormulaField?: any }) => void;
       "dae.ready": (api: any) => void;
+      "catReady": () => void;
+      /** Condition data being built (createConditionData): add fields an item's conditions can refer to. */
+      "midi-qol.conditionData": (conditionData: Record<string, unknown>, data: { workflow?: unknown, actor?: unknown, item?: unknown, target?: unknown }) => void;
       "dae.setupComplete": (api: any) => void;
+      "dnd5e.preTeleport": (activity: Activity, config: { maxDistance: number, tokens: Token.Implementation[] }) => boolean | void;
+      "dnd5e.teleport": (activity: Activity, plans: { token: Token.Implementation, plan: unknown }[]) => boolean | void;
+      "dnd5e.postTeleport": (activity: Activity, results: { token: Token.Implementation, plan: unknown, moved: boolean }[]) => void;
       "dnd5e.activityConsumption": (activity: Activity, usageConfig: ActivityUseConfiguration, messageConfig: RollMessageConfig, updates: unknown) => boolean | void;
       "dnd5e.applyDamage": (actor: Actor.Implementation, amount: number, options: DamageApplicationOptions) => void;
+      // One target's hit result in checkHits, last: change targetAC (tested again) or the result (kept as set). A fumble
+      // loses every hit later in the workflow, so making a hit of a fumble also clears isFumble.
+      "midi-qol.premades.checkHitTarget": (hitCheck: { workflow: unknown, target: Token.Implementation | TokenDocument.Implementation, attackTotal: number, targetAC: number, isHit: boolean, isHitEC: boolean, isCritical: boolean, isFumble: boolean }) => Promise<void> | void;
+      "midi-qol.playerWaitStarted": (info: playerWaits.WaitInfo) => void;
+      "midi-qol.playerWaitEnded": (info: playerWaits.WaitInfo, result: { choice?: string, claimed?: boolean }) => void;
+      "midi-qol.playerWaitsChanged": (waits: playerWaits.WaitInfo[]) => void;
+      /** dnd5e's roll configuration dialogs (and midi's MidiRollChoiceDialog) when they render */
+      "renderRollConfigurationDialog": (app: foundry.applications.api.ApplicationV2, element: HTMLElement, context: unknown, options: unknown) => void;
       "dnd5e.calculateDamage": (actor: Actor.Implementation, damages: DamageDescription[], options: DamageApplicationOptions) => boolean | void;
       "dnd5e.postAbilityCheckRollConfiguration": (rolls: Roll[], config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
       "dnd5e.postAttackRollConfiguration": (rolls: Roll[], config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
+      "dnd5e.postRollConfiguration": (rolls: Roll[], config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
       "dnd5e.postBuildSkillRollConfig": (process: RollProcessConfig, config: BasicRollConfig, index: number) => void;
       "dnd5e.postBuildAbilityCheckRollConfig": (process: RollProcessConfig, config: BasicRollConfig, index: number) => void;
       "dnd5e.postBuildSavingThrowRollConfig": (process: RollProcessConfig, config: BasicRollConfig, index: number) => void;
       "dnd5e.postBuildDeathSaveRollConfig": (process: RollProcessConfig, config: BasicRollConfig, index: number) => void;
       "dnd5e.postBuildToolRollConfig": (process: RollProcessConfig, config: BasicRollConfig, index: number) => void;
+      "dnd5e.postBuildAttackRollConfig": (process: RollProcessConfig & { ability?: string, attackMode?: string }, config: BasicRollConfig, index: number) => void;
       "dnd5e.postSavingThrowRollConfiguration": (rolls: Roll[], config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
       "dnd5e.postSkillRollConfiguration": (rolls: Roll[], config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
       "dnd5e.postToolRollConfiguration": (rolls: Roll[], config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
@@ -67,13 +94,22 @@ declare module "fvtt-types/configuration" {
       "dnd5e.preApplyDamage": (actor: Actor.Implementation, amount: number, updates: Actor.UpdateData, options: DamageApplicationOptions) => boolean | void;
       "dnd5e.preCalculateDamage": (actor: Actor.Implementation, damages: DamageDescription[], options: DamageApplicationOptions) => boolean | void;
       "dnd5e.preConfigureInitiative": (actor: Actor.Implementation, rollConfig: { data: AnyMutableObject, parts: string[], options: D20RollOptions }) => void;
-      "dnd5e.preCreateActivityTemplate": (activity: Activity, templateData: MeasuredTemplateDocument.CreateData) => boolean | void;
+      /**
+       * dnd5e 6.0 template placement. Templates are Regions now, so the payloads are region data
+       * rather than MeasuredTemplate data. `preCreateActivityTemplate` still exists upstream but
+       * fires only from the deprecated `AbilityTemplate`, which midi no longer uses.
+       */
+      "dnd5e.preCreateMeasuredTemplate": (activity: Activity, placementConfig: Record<string, unknown>) => boolean | void;
+      "dnd5e.createMeasuredTemplate": (activity: Activity, regionData: Record<string, any>[]) => boolean | void;
+      "dnd5e.postCreateMeasuredTemplate": (activity: Activity, templates: RegionDocument.Implementation[]) => void;
       "dnd5e.preRollAbilityCheck": (config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
       "dnd5e.preRollAttack": (rollConfig: RollProcessConfig & { attackMode: string }, dialogConfig: RollDialogConfig, messageConfig: RollMessageConfig) => boolean | void;
       "dnd5e.preRollAttackV2": (rollConfig: RollProcessConfig & { attackMode: string }, dialogConfig: RollDialogConfig, messageConfig: RollMessageConfig) => boolean | void;
       "dnd5e.preRollConcentration": (config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
       "dnd5e.preRollDamage": (config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
       "dnd5e.preRollDeathSave": (config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
+      "dnd5e.preRollDeathSaveV2": (config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
+      "dnd5e.preRollD20TestV2": (config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
       "dnd5e.preRollSavingThrow": (config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
       "dnd5e.preRollSkill": (config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
       "dnd5e.preRollTool": (config: RollProcessConfig, dialog: RollDialogConfig, message: RollMessageConfig) => boolean | void;
@@ -85,6 +121,9 @@ declare module "fvtt-types/configuration" {
       "dnd5e.rollDeathSave": (rolls: Roll[], data: { chatString: string; updates: Actor.UpdateData; subject: Actor.Implementation }) => boolean | void;
       "midi-qol.ConfigSettingsChanged": () => void;
       "midi-qol.RollComplete": (workflow: Workflow) => Promise<void>;
+      "midi-qol.postCleanup": (workflow: Workflow) => Promise<void | boolean>;
+      "midi-qol.workflowRebuilt": (workflow: Workflow, card: ChatMessage.Implementation, options: { readOnly: boolean }) => void;
+      "midi-qol.preAbort": (workflow: Workflow) => Promise<void | boolean>;
       "midi-qol.dnd5ePreCalculateDamage": (actor: Actor.Implementation, damages: DamageDescription[], options: DamageApplicationOptions) => boolean | void;
       "midi-qol.dnd5eCalculateDamage": (actor: Actor.Implementation, damages: DamageDescription[], options: DamageApplicationOptions) => void;
       "midi-qol.preItemRoll": (workflow: Workflow) => Promise<void | boolean>;
@@ -110,51 +149,85 @@ declare module "fvtt-types/configuration" {
       "simplecover5eReady": () => void;
     }
   }
+  interface ModuleConfig {
+    /** AutoCover 5.0.1+ (the parts midi uses) */
+    levelsautocover: {
+      api?: {
+        computeCover(attacker: TokenDocument.Implementation | object, target: TokenDocument.Implementation, options?: object): { percent: number, tier?: { id: string } };
+        area: { POINT_HEIGHT?: number, pointSource(scene: Scene.Implementation, point: { x: number, y: number, elevation: number }, caster?: TokenDocument.Implementation | null): object };
+      };
+    };
+  }
   interface SettingConfig {
     "dnd5e.disableConcentration": boolean;
     "dnd5e.metricLengthUnits": boolean;
     "dnd5e.attackRollVisibility": string;
     "dnd5e.challengeVisibility": string;
+    "dnd5e.chatCardSummary": boolean;
     "midi-qol.MidiSoundSettings": Record<string, any>;
     "midi-qol.playerControlsInvisibleTokens": boolean;
-    "midi-qol.pruneChatLog"
     "midi-qol.RollStats": Record<string, Stats>;
+    "midi-qol.acknowledgedOverlaps": string[];
     "midi-qol.ConfigSettings": typeof configSettings;
     "midi-qol.CriticalDamage": string;
     "midi-qol.CriticalDamageGM": string;
-    "midi-qol.ConditionUpdateCard": string;
     "midi-qol.showGM": boolean;
     "midi-qol.ColoredBorders": string;
     "midi-qol.AutoFastForwardAbilityRolls": boolean;
     "midi-qol.AutoRemoveTargets": string;
     "midi-qol.ForceHideRoll": boolean;
     "midi-qol.EnableWorkflow": boolean;
+    "midi-qol.ConditionUpdateCard": string;
+    "midi-qol.hiddenGroundCue": boolean;
+    "midi-qol.ownChatCardSummary": string;
+    "midi-qol.hiddenGroundCueStyle": string;
+    "midi-qol.hiddenGroundCueColor": foundry.data.fields.ColorField<{ nullable: boolean; initial: string }>;
+    "midi-qol.hiddenGroundCueOpacity": number;
     "midi-qol.DragDropTarget": boolean;
-    "midi-qol.DebounceInterval": number;
+    "midi-qol.ChatCardUpdates": string;
     "midi-qol.TargetConfirmation": typeof targetConfirmation;
     "midi-qol.Debug": string;
     "midi-qol.ReplaceDefaultActivities": boolean;
     "midi-qol.UseWeakReferences": boolean;
-    "midi-qol.SaveToChatCard": boolean;
+    "midi-qol.tokenDocumentSets": boolean;
     "midi-qol.PreferredGM": string;
     "midi-qol.MidiSoundSettings-backup": Record<string, any>;
-    "midi-qol.notificationVersion": string;
-    "midi-qol.splashWarnings": boolean;
     "midi-qol.last-run-version": string;
     "midi-qol.instanceId": string;
-    "chris-premades.effectInterface": boolean;
   }
   interface FlagConfig {
+    /** Detect Magic: a region marked magical, and its school (a spell school key). */
+    Region: {
+      "midi-qol"?: {
+        magical?: boolean;
+        magicSchool?: string;
+        /** A use's template region (midiTemplateFlags): its use and caster, and how far from the caster it may be placed */
+        activityTemplate?: boolean;
+        itemUuid?: string;
+        actorUuid?: string;
+        sourceTokenUuid?: string;
+        maxRange?: number;
+        /** The use it was placed for: its workflow's id (its card's uuid) and card */
+        workflowId?: string;
+        itemCardUuid?: string;
+      }
+    };
     ActiveEffect: {
       ActiveAuras?: {
         isAura?: boolean;
         ignoreSelf?: boolean;
       }
       dnd5e?: {
+        dependentOn?: string;
         dependents?: {
           uuid: string;
         }[];
         itemUuid?: string;
+        activity?: {
+          type: string;
+          id: string;
+          uuid: string;
+        }
         item?: {
           type: string;
           id: string;
@@ -175,6 +248,7 @@ declare module "fvtt-types/configuration" {
         dontApply?: boolean;
         durationExpression?: string;
         enableCondition?: string;
+        expiryMode?: "default" | "delete" | "suppress";
         itemData?: Item.InitializedData;
         itemMacro?: string;
         itemUuid?: string;
@@ -210,7 +284,14 @@ declare module "fvtt-types/configuration" {
           failsRemaining?: number;  // Remaining fails needed for failCount
         };
         overtimeChatCardUuids?: string[];
+        /** A hide (sample Hide action): the Stealth total to find the creature */
+        hidden?: { dc?: number };
         transformedActorUuids?: string[];
+        /** Detect Magic (Vision): the auras the caster sees, until `expires` (ms). Colours are 0xRRGGBB, levels 1-9. */
+        magicSight?: {
+          expires: number;
+          entries: { tokenUuid?: string; regionUuid?: string; rings: { color: number; level: number }[] }[];
+        };
       };
     };
     Actor: {
@@ -265,6 +346,7 @@ declare module "fvtt-types/configuration" {
           "reroll-kl"?: boolean;
         };
         deathSaveBonus?: number;
+        noDeathSaveFailureFromDamage?: boolean;
         disadvantage?: {
           ability?: {
             all?: string;
@@ -458,104 +540,78 @@ declare module "fvtt-types/configuration" {
       };
     };
     ChatMessage: {
+      // dnd5e 6 keeps a message's data in `system`; transform is the one flag it still uses.
       dnd5e?: {
-        item?: {
-          id: string;
-          type: string;
-          uuid: string;
-          data?: Item.CreateData;
-        };
-        scaling?: number;
-        "use.concentrationId"?: string;
-        "use.spellLevel"?: number;
-        "use.consumed"?: unknown;
         "transform.uuid"?: string;
         "transform.profile"?: string;
-        targets?: unknown;
-        messageType?: string;
-        roll?: {
-          type?: string;
-          itemId?: string;
-        };
       };
       "midi-qol"?: {
-        activityUuid?: string;
-        actorUuid?: string;
-        sourceActorUuid?: string;
-        advantageSaveUuids?: string[];
-        ammunitionOnUseMacros?: OnUseMacros;
-        AoO?: boolean;
-        attackTotal?: number;
-        attackRoll?: Roll.Data | Roll;
-        attackRollCount?: number;
-        bonusDamageDetail?: DamageDescriptionObject[];
-        bonusDamageRolls?: Roll.Data[] | Roll[];
-        bonusDamageTotal?: number;
-        concentrationRolled?: boolean;
-        criticalSaveUuids?: string[];
-        currentAction?: [string, string];
-        d20AttackRoll?: number;
-        damageDetail?: DamageDescriptionObject[];
-        damageList?: DamageListEntry[];
-        damageRollCount?: number;
-        damageRolls?: Roll.Data[] | Roll[];
-        damageTotal?: number;
-        defaultDamageType?: string;
-        diceRoll?: number;
-        effectsAlreadyExpired?: string[];
-        failedSaveUuids?: string[];
-        fumbleSaveUuids?: string[];
-        hitTargetUuids?: string[];
-        hitECTargetUuids?: string[];
-        inCombat?: boolean;
-        isCritical?: boolean;
-        isFumble?: boolean;
-        itemUseComplete?: boolean;
-        expectedTemplateCount?: number;
-        noOptionalRules?: boolean;
-        OnUseMacros?: OnUseMacros;
-        otherDamageDetail: DamageDescriptionObject[];
-        otherDamageRolls?: Roll.Data[] | Roll[];
-        otherDamageTotal?: number;
-        rawBonusDamageDetail?: DamageDescriptionObject[];
-        rawDamageDetail?: DamageDescriptionObject[];
-        rawOtherDamageDetail?: DamageDescriptionObject[];
-        saveDisplayData?: unknown;
-        saveUuids?: string[];
-        /** Structured save attribution map: targetUuid -> type -> source -> displayName */
-        saveAttribution?: Record<string, AttributionMap>;
-        semiSuperSaverUuids?: string[];
-        superSaverUuids?: string[];
-        suspended?: boolean;
-        targets?: { uuid: string; name: string }[];
-        targetsCanSeeUuids?: string[];
-        targetsCanSenseUuids?: string[];
-        transformedActors: string[];
-        tokenCanSeeUuids?: string[];
-        tokenCanSenseUuids?: string[];
-        attackingTokenUuid?: string;
-        templateUuid?: string;
-        templateUuids?: string[];
-        workflowOptions?: WorkflowOptions;
-        // written as PersistedUndoEntry; messages predating the prune carry the full socket shape
-        undoDamage?: (PersistedUndoEntry | SerializedDamageListEntry)[];
-        utilityRolls?: Roll.Data[] | Roll[];
-        "use.consumed"?: any;
-        "use.otherScaling"?: number | false;
-        aborted?: boolean;
-        type?: number;
-        overtimeActorUuid?: string;
-        messageType?: string;
-        roll?: unknown[];
-        syntheticItem?: boolean;
-        isHit?: boolean;
-        otherActivityConsumed?: object;
-        playerDamageCard?: boolean;
-        playerConditionCard?: boolean;
         conditionUpdateCard?: boolean;
+        playerConditionCard?: boolean;
         conditionUpdateGroupId?: string;
-        conditionUpdateData?: any;
+        conditionUpdateData?: Record<string, any>;
         actorUuids?: string[];
+        /** A synthetic item's data, on its usage card */
+        itemData?: Item.CreateData;
+        /** Damage card: the attacker */
+        actorUuid?: string;
+        /** Damage card: what was applied, for its undo; messages predating the prune carry the full socket shape */
+        undoDamage?: (PersistedUndoEntry | SerializedDamageListEntry)[];
+        /** The workflow was undone: the card is drawn with the undo colour */
+        undone?: boolean;
+        /** One of a card note's messages (MidiQOL.cardNoteMessageData): its role, for the note's renderer */
+        cardNote?: { role?: string };
+        /** A save rolled from a usage card's button: the token it was rolled for */
+        targetUuid?: string;
+        /** A concentration check request has been rolled */
+        concentrationRolled?: boolean;
+        /** An over-time roll request: the actor it is for, and the message mode it asks for */
+        overtimeActorUuid?: string;
+        overtimeRollMode?: string;
+        messageType?: string;
+        /** A roll hidden from players (its result and dice) */
+        obscureRoll?: boolean;
+        forcedBlind?: boolean;
+        isConcentrationCheck?: boolean;
+        /** The actor that used the card's activity: read with cardSourceActor (CAT reads the flag) */
+        sourceActorUuid?: string;
+        // Read only from cards made before 14.6.9 (the deprecated getters, until 14.8.0): the card's workflow has them now
+        /** @deprecated read the card's workflow */ targets?: { uuid: string; name: string }[];
+        /** @deprecated */ hitTargetUuids?: string[];
+        /** @deprecated */ hitECTargetUuids?: string[];
+        /** @deprecated */ saveUuids?: string[];
+        /** @deprecated */ failedSaveUuids?: string[];
+        /** @deprecated */ superSaverUuids?: string[];
+        /** @deprecated */ semiSuperSaverUuids?: string[];
+        /** @deprecated */ criticalSaveUuids?: string[];
+        /** @deprecated */ fumbleSaveUuids?: string[];
+        /** @deprecated */ advantageSaveUuids?: string[];
+        /** @deprecated */ otherDamageMatchUuids?: string[];
+        /** @deprecated */ ammunitionDamageMatchUuids?: string[];
+        /** @deprecated */ isHit?: boolean;
+        /** @deprecated */ isHitEC?: boolean;
+        /** @deprecated */ isCritical?: boolean;
+        /** @deprecated */ isFumble?: boolean;
+        /** @deprecated */ templateUuid?: string;
+        /** @deprecated */ templateUuids?: string[];
+        /** @deprecated */ workflowOptions?: WorkflowOptions;
+        /** @deprecated */ currentAction?: [string, string];
+        /** @deprecated Structured save attribution map: targetUuid -> type -> source -> displayName */ saveAttribution?: Record<string, AttributionMap>;
+        /** @deprecated */ damageDetail?: DamageDescriptionObject[];
+        /** @deprecated */ otherDamageDetail?: DamageDescriptionObject[];
+        /** @deprecated */ bonusDamageDetail?: DamageDescriptionObject[];
+        /** @deprecated */ otherDamageTotal?: number;
+        /** @deprecated */ bonusDamageTotal?: number;
+        /** @deprecated */ attackRoll?: Roll.Data | Roll;
+        /** @deprecated */ damageRolls?: Roll.Data[] | Roll[];
+        /** @deprecated */ bonusDamageRolls?: Roll.Data[] | Roll[];
+        /** @deprecated */ otherDamageRolls?: Roll.Data[] | Roll[];
+        /** @deprecated */ utilityRolls?: Roll.Data[] | Roll[];
+        /** @deprecated what the use consumed, and the other activity's scaling */ use?: { consumed?: object | false; otherScaling?: number | false };
+        /** @deprecated */ ammunitionData?: object;
+        /** @deprecated */ type?: number;
+        /** @deprecated */ playerDamageCard?: boolean;
+        /** @deprecated */ gmHide?: boolean;
       };
     };
     Item: {
@@ -566,6 +622,7 @@ declare module "fvtt-types/configuration" {
           value?: number;
         };
         cachedFor?: Item;
+        dependentOn?: string;
         riders?: {
           activity?: string[];
         }
@@ -576,6 +633,8 @@ declare module "fvtt-types/configuration" {
         onUseMacroName?: string;
         noProvokeReaction?: boolean;
         isConcentrationCheck?: boolean;
+        /** An item midi made for a use (an actor without the item, an over-time activity), never stored on the actor */
+        syntheticItem?: boolean;
         // Optional bonus flags applied to the item (e.g. via enchantment effects), checked
         // alongside the actor's optional flags when the item is used.
         optional?: Record<string, any>;
@@ -595,24 +654,11 @@ declare module "fvtt-types/configuration" {
         origin?: string;
         dependentOn?: string;
       };
-      "midi-qol"?: {
-        itemUuid?: string;
-        actorUuid?: string;
-        activityUuid?: string;
-        workflowId?: string;
-        itemCardUuid?: string;
-        dependentOn?: string; // UUID of parent document (Actor/Item) for midi-qol dependent tracking
-        anchorToToken?: boolean; // Whether cone/ray template origin is anchored to caster's token border
-      };
     };
     MeasuredTemplateDocument: {
       dnd5e?: {
         origin?: string;
         dependentOn?: ActiveEffect.Implementation | null;
-      };
-      "midi-qol"?: {
-        dependentOn?: string; // UUID of parent document (Actor/Item) for midi-qol dependent tracking
-        anchorToToken?: boolean; // Whether cone/ray template origin is anchored to caster's token border
       };
     }
     TokenDocument: {
@@ -621,6 +667,10 @@ declare module "fvtt-types/configuration" {
       };
       "midi-qol"?: {
         dependentOn?: string; // UUID of parent document (Actor/Item) for midi-qol dependent tracking
+        // Per-token override (0-100) for vision source elevation as a fraction of token height.
+        visionSourceHeight?: number;
+        // Per-token override (0-100) for vision target elevation as a fraction of token height.
+        visionTargetHeight?: number;
       };
     }
     AmbientLightDocument: {
@@ -632,10 +682,33 @@ declare module "fvtt-types/configuration" {
 };
 
 declare global {
-  /** fvtt-types brands module sub-types, so "midi-qol.damage" needs declaring to be assignable. */
+  namespace ChatMessage.Database {
+    interface Create<Temporary extends boolean | undefined = boolean | undefined> {
+      /** Foundry 14: a CONFIG.ChatMessage.modes key; replaces the deprecated rollMode option. */
+      messageMode?: string;
+    }
+  }
+  // v14 data field operators, not yet in fvtt-types. `{ key: new ForcedDeletion() }` replaces the
+  // `{ "-=key": null }` deletion syntax that v14 deprecates.
+  namespace foundry.data.operators {
+    class ForcedDeletion {
+      constructor(value?: unknown);
+    }
+  }
+
+  /** fvtt-types brands module sub-types, so midi's message types need declaring to be assignable. */
   interface DataModelConfig {
     ChatMessage: {
       "midi-qol.damage": typeof import("./module/ChatClasses/DamageCardMessage.js").MidiDamageMessageData;
+      "midi-qol.note": typeof import("./module/ChatClasses/CardNoteMessage.js").MidiNoteMessageData;
+    };
+  }
+
+  /** fvtt-types' v14 ChatLog is a stub; merged into `ui.chat`'s type. */
+  interface UI {
+    chat?: {
+      /** Re-render a message in the log, or insert it if it has become visible to this user. */
+      updateMessage(message: ChatMessage.Implementation, options?: { notify?: boolean }): Promise<void>;
     };
   }
 
@@ -643,10 +716,72 @@ declare global {
     interface _Options {
       /** dnd5e D20Roll advantage mode: -1 (disadvantage), 0 (normal), 1 (advantage) */
       advantageMode?: number;
+      /** dnd5e DamageRoll damage type. */
+      type?: string;
+      /** dnd5e DamageRoll properties (e.g. "mgc"). */
+      properties?: string[];
     }
   }
 
+  // Foundry v14 TokenDocument additions not yet in fvtt-types.
+  interface TokenDocument {
+    /** Token vertical depth in grid units; affects collision and elevation math. */
+    depth: number;
+    /** Movement-origin computation point (token center adjusted by half its depth). */
+    getMovementOrigin(data?: { x?: number; y?: number; elevation?: number; width?: number; height?: number; depth?: number }): { x: number; y: number; elevation: number };
+  }
+
+  // Foundry v14 movement planning and token placement, not yet in fvtt-types (used by the teleport activity).
+  interface TokenDocument {
+    /** Start a movement planned with Token#planMovement. */
+    startMovement(id: string): Promise<boolean>;
+  }
+  interface Token {
+    planMovement(options?: { allowedActions?: string[]; direct?: boolean; maxDistance?: number; preventDrop?: boolean }): Promise<{
+      id: string; origin: { x: number; y: number; elevation?: number }; destination: { x: number; y: number; elevation?: number }; waypoints: unknown[];
+    } | null>;
+  }
+  interface TokenLayer {
+    placeTokens(data: object[], options?: {
+      create?: boolean; allowRotation?: boolean;
+      preConfirm?: (args: { document: TokenDocument.Implementation }) => boolean | void;
+      preSkip?: (args: { document: TokenDocument.Implementation }) => boolean | void;
+    }): Promise<TokenDocument.Implementation[]>;
+  }
+
   // Note: Intentional `var` use here to add to the `globalThis`
+  var DAE: {
+    actionQueue: foundry.utils.Semaphore;
+    createSyntheticMacro: (command: string, name?: string) => Macro.Implementation;
+    createFunctionMacro: (functionPath: string) => Macro.Implementation;
+    resolveWorldMacro: (nameOrUuid: string) => Promise<Macro.Implementation | undefined>;
+    getItemMacroCommand: (source: unknown) => string | undefined;
+    /** DAE 14.6.2+ (dnd5e 6): where an effect came from */
+    getEffectSource: (effect: unknown) => { actorUuid?: string; itemUuid?: string; activityUuid?: string; controllingEffectUuid?: string; sourceEffectUuid?: string; messageUuid?: string };
+    /** DAE 14.6.2+ (dnd5e 6): an effect's item as data (live, else its card's snapshot) */
+    getEffectItemData: (effect: unknown) => Item.Source | undefined;
+    getActorItemData: (actor: Actor.Implementation, uuid: string) => Item.Source | undefined;
+    /** Ends an effect as its expiry settings say: delete, or suppress (disable) and keep */
+    expireEffect: (effect: ActiveEffect.Implementation, options?: object) => Promise<void>;
+    doEffects: (...args: any[]) => Promise<any>;
+    doActivityEffects: (...args: any[]) => Promise<any>;
+    DIMEditor: any;
+    localizationMap: Record<string, { name?: string; description?: string }>;
+    [key: string]: any;
+  };
+  /** Coven's Automation Toolkit, when active: the parts midi uses. */
+  var cat: {
+    api: {
+      registerAutomationModule: (id: string, options?: {
+        ignoredPackIds?: string[];
+        infoFetcherCallback?: (entry: { flags?: { cat?: { automation?: { version?: string } } } }) => object;
+      }) => Promise<unknown>;
+    };
+    utils: {
+      automationUtils: { updateItem: (item: Item.Implementation, options?: object) => Promise<unknown> };
+      effectUtils: { getOriginActivitySync: (effect: ActiveEffect.Implementation) => unknown };
+    };
+  } | undefined;
   var MidiDAEEval: {
     testfunc: (...args: any[]) => void;
     canSee: typeof utils.canSee;
@@ -658,9 +793,21 @@ declare global {
     checkActivityRange: typeof utils.checkActivityRange;
     checkRule: typeof checkRule;
     computeCoverBonus: typeof utils.computeCoverBonus;
+    getCoverBonus: typeof utils.getCoverBonus;
+    highlightTokens: typeof tokenHighlight.highlightTokens;
+    tokenAtPosition: typeof utils.tokenAtPosition;
     computeDistance: typeof utils.computeDistance;
     getDistance: typeof utils.getDistance;
-    contestedRoll: typeof utils.contestedRoll;
+    playerWaits: { begin: typeof playerWaits.beginPlayerWait, track: typeof playerWaits.trackPlayerWait, settle: typeof playerWaits.settlePlayerWait, claim: typeof playerWaits.claimPlayerWait, known: typeof playerWaits.knownPlayerWaits };
+    addCardNote: typeof cardNotes.addCardNote;
+    removeCardNote: typeof cardNotes.removeCardNote;
+    registerCardNoteRenderer: typeof cardNotes.registerCardNoteRenderer;
+    cardNoteMessageData: typeof cardNotes.cardNoteMessageData;
+    renderLinkedMessage: typeof cardNotes.renderLinkedMessage;
+    visibleRollTotal: typeof cardNotes.visibleRollTotal;
+    tokenName: typeof tokenNames.tokenName;
+    tokenNameMarkup: typeof tokenNames.tokenNameMarkup;
+    contestedRoll: typeof contestedRollModule.contestedRoll;
     displayDSNForRoll: typeof utils.displayDSNForRoll;
     doConcentrationCheck: typeof utils.doConcentrationCheck;
     chooseEffect: typeof utils.chooseEffect;
@@ -668,6 +815,7 @@ declare global {
     findNearbyCount: typeof utils.findNearbyCount;
     getTraitMult: typeof utils.getTraitMult,
     hasCondition: typeof utils.hasCondition;
+    hasUsedAction: typeof utils.hasUsedAction;
     hasUsedBonusAction: typeof utils.hasUsedBonusAction;
     hasUsedReaction: typeof utils.hasUsedReaction;
     humanoid: string[];
@@ -675,6 +823,7 @@ declare global {
     raceOrType: typeof utils.raceOrType;
     typeOrRace: typeof utils.typeOrRace;
     safeGetGameSetting: typeof settings.safeGetGameSetting;
+    setActionUsed: typeof utils.setActionUsed;
     setBonusActionUsed: typeof utils.setBonusActionUsed;
     setReactionUsed: typeof utils.setReactionUsed;
   }
@@ -688,13 +837,17 @@ declare global {
     addConcentrationDependent: typeof utils.addConcentrationDependent;
     addDependent: typeof utils.addDependent;
     addRollTo: typeof utils.addRollTo;
+    addRollToAsync: typeof utils.addRollToAsync;
     addUndoChatMessage: typeof undo.addUndoChatMessage;
     RollModifierTracker: typeof RollModifierTracker;
+    TokenDocumentSet: typeof TokenDocumentSet;
     applyTokenDamage: typeof utils.applyTokenDamage;
     canSee: typeof utils.canSee;
     canSense: typeof utils.canSense;
     canSenseModes: typeof utils.canSenseModes;
     checkActivityRange: typeof utils.checkActivityRange;
+    isRangeCheckable: typeof utils.isRangeCheckable;
+    activityRanges: typeof utils.activityRanges;
     checkDistance: typeof utils.checkDistance;
     checkIncapacitated: typeof utils.checkIncapacitated;
     checkNearby: typeof utils.checkNearby;
@@ -704,22 +857,40 @@ declare global {
     exportSettingsToJSON: typeof settings.exportSettingsToJSON;
     importSettingsFromJSON: typeof settings.importSettingsFromJSON;
     resetConfigSettingsToDefaults: typeof settings.resetConfigSettingsToDefaults;
+    registerWorkflowOptionsSchema: typeof workflowOptionsCodec.registerWorkflowOptionsSchema;
+    restoreWorkflowTokenSets: typeof utils.restoreWorkflowTokenSets;
     completeActivityUse: typeof utils.completeActivityUse;
     completeItemUse: typeof utils.completeItemUse;
     computeAbilityAdvantage: typeof patching.computeAbilityAdvantage;
     computeCoverBonus: typeof utils.computeCoverBonus;
+    getCoverBonus: typeof utils.getCoverBonus;
+    highlightTokens: typeof tokenHighlight.highlightTokens;
+    tokenAtPosition: typeof utils.tokenAtPosition;
     computeDistance: typeof utils.computeDistance;
+    convertDuration: typeof utils.convertDuration;
     getDistance: typeof utils.getDistance;
     computeSkillAdvantage: typeof patching.computeSkillAdvantage;
     computeTargetsFromTemplates: typeof computeTargetsFromTemplates;
     computeToolAdvantage: typeof patching.computeToolAdvantage;
     ConfigPanel: typeof ConfigPanel;
     configSettings: () => typeof configSettings;
-    contestedRoll: typeof utils.contestedRoll;
+    playerWaits: { begin: typeof playerWaits.beginPlayerWait, track: typeof playerWaits.trackPlayerWait, settle: typeof playerWaits.settlePlayerWait, claim: typeof playerWaits.claimPlayerWait, known: typeof playerWaits.knownPlayerWaits };
+    addCardNote: typeof cardNotes.addCardNote;
+    removeCardNote: typeof cardNotes.removeCardNote;
+    registerCardNoteRenderer: typeof cardNotes.registerCardNoteRenderer;
+    cardNoteMessageData: typeof cardNotes.cardNoteMessageData;
+    renderLinkedMessage: typeof cardNotes.renderLinkedMessage;
+    visibleRollTotal: typeof cardNotes.visibleRollTotal;
+    tokenName: typeof tokenNames.tokenName;
+    tokenNameMarkup: typeof tokenNames.tokenNameMarkup;
+    contestedRoll: typeof contestedRollModule.contestedRoll;
     createConditionData: typeof utils.createConditionData;
     createDamageDetail: typeof utils.createDamageDetail;
+    decodeWorkflowOptions: typeof workflowOptionsCodec.decodeWorkflowOptions;
+    encodeWorkflowOptions: typeof workflowOptionsCodec.encodeWorkflowOptions;
     createEffects: typeof createEffects;
     DamageOnlyWorkflow: typeof DamageOnlyWorkflow;
+    /** @deprecated use ChatMessage#update */
     debouncedUpdate: typeof utils.throttledUpdate;
     debug: typeof debug;
     displayDSNForRoll: typeof utils.displayDSNForRoll;
@@ -751,6 +922,7 @@ declare global {
     getVitalityMax: typeof utils.getVitalityMax,
     getVitalityValue: typeof utils.getVitalityValue,
     hasCondition: typeof utils.hasCondition,
+    hasUsedAction: typeof utils.hasUsedAction,
     hasUsedBonusAction: typeof utils.hasUsedBonusAction,
     hasUsedReaction: typeof utils.hasUsedReaction,
     hasVitalitySystem: typeof utils.hasVitalitySystem,
@@ -793,10 +965,12 @@ declare global {
     removeInvisibleCondition: typeof utils.removeInvisibleCondition;
     removeMostRecentWorkflow: typeof undo.removeMostRecentWorkflow;
     removeReactionUsed: typeof utils.removeReactionUsed;
+    requiresTargetConfirmation: typeof requiresTargetConfirmation;
     resolveTargetConfirmation: typeof resolveTargetConfirmation;
     safeGetGameSetting: typeof settings.safeGetGameSetting;
     shouldDisplaySaveDC: typeof settings.shouldDisplaySaveDC;
     selectTargetsFromTemplates: typeof selectTargetsFromTemplates;
+    setActionUsed: typeof utils.setActionUsed;
     setBonusActionUsed: typeof utils.setBonusActionUsed;
     setReactionUsed: typeof utils.setReactionUsed;
     showItemInfo: (item: Item.Implementation) => Promise<ChatMessage.Implementation | undefined>;
@@ -826,10 +1000,8 @@ declare global {
       DamageOnlyWorkflow: typeof DamageOnlyWorkflow;
       TrapWorkflow: typeof TrapWorkflow;
       DummyWorkflow: typeof DummyWorkflow;
-      DDBGameLogWorkflow: typeof DDBGameLogWorkflow;
     };
     ChatClasses: {
-      ChatLogMidi: typeof ChatLogMidi,
       ChatMessageMidi: typeof ChatMessageMidi,
       DamageApplicationElementMidi: typeof DamageApplicationElementMidi
     }
@@ -881,10 +1053,15 @@ declare global {
         label: string;
         subtypes?: Record<string, string>;
       }>;
+      // Whether the damage card merges its rolls by damage type for display.
+      aggregateDamageDisplay: boolean;
       // This one's added by midi
       customDamageResistanceTypes: Record<string, string>;
       damageTypes: Record<string, {
         label: string;
+        // Only healingTypes are localized with a short label today, but dnd5e reads
+        // `config?.labelShort ?? config?.label` off either config, so both carry it.
+        labelShort?: string;
         icon: string;
         isPhysical?: boolean;
         reference?: string;
@@ -893,6 +1070,7 @@ declare global {
       equipmentTypes: Record<string, string>;
       healingTypes: Record<string, {
         label: string;
+        labelShort?: string;
         icon: string;
         color?: Color;
       }>;
@@ -939,6 +1117,8 @@ declare global {
         mastery?: boolean;
       }>
       weaponMasteries: Record<string, { label: string, reference?: string }>;
+      /** Source book codes to names (dnd5e and content modules add to it) */
+      sourceBooks: Record<string, string>;
       weaponTypes: Record<string, string>;
     }
   }
@@ -947,7 +1127,18 @@ declare global {
 export type SelectOptionValue = string | { label: string; hint: string };
 export type SelectOptions = Record<string, SelectOptionValue>;
 
+/** A Foundry v14 context-menu entry; fvtt-types still describes the v13 shape (name/callback/condition). */
+export interface ContextMenuEntryV14 {
+  label: string;
+  icon?: string;
+  visible?: (li: HTMLElement) => boolean;
+  onClick: (event: Event, li: HTMLElement) => unknown;
+}
+
 export type TokenOrDocument = foundry.canvas.placeables.Token.Implementation | TokenDocument.Implementation;
+
+/** v14 change values are an AnyField; fvtt-types declares `string`. Forces narrowing before string ops. */
+export type MidiChangeData = Omit<ActiveEffect.ChangeData, "value"> & { value: unknown };
 
 export interface MoveTokenOptions {
   /** Animate the movement (default: true). When false, movement is instant but still respects wall/token constraints. */
@@ -1002,8 +1193,16 @@ export type DamageApplicationOptions = {
     semiSuperSaver?: boolean;
     saved?: boolean;
     saveMultiplier?: number
+    /** From midi's tray, which lists other damage for every target: whether each source's damage applies to this one. */
+    otherApplies?: boolean;
+    ammunitionApplies?: boolean;
+    ammunitionSaveMultiplier?: number;
     sourceActorUuid?: string;
+    /** The card the damage came from, for dnd5e's damage hooks (origin / originatingMessage) */
+    itemCardUuid?: string;
     uncannyDodge?: boolean;
+    /** Image of whatever granted uncanny dodge; resolved while the reaction's effect still exists. */
+    uncannyDodgeIcon?: string;
   };
   midiIgnoreComputed?: boolean;
   midiVitalityHandled?: boolean;
@@ -1016,7 +1215,6 @@ export type CalcDamageOptions = DamageApplicationOptions & {
   multiplier: number;
   midi: {
     challengeModeAR?: number;
-    applyDamage?: boolean; // is this used?
     criticalSave: boolean;
     fumbleSave: boolean;
     isCritical: boolean;
@@ -1028,6 +1226,8 @@ export type CalcDamageOptions = DamageApplicationOptions & {
     saveMultiplier: number;
     semiSuperSaver: boolean;
     sourceActorUuid?: string;
+    /** The card the damage came from, for dnd5e's damage hooks (origin / originatingMessage) */
+    itemCardUuid?: string;
     superSaver: boolean;
     targetUuid?: string;
     uncannyDodge: boolean;
@@ -1057,8 +1257,7 @@ export type PreSetupDamageListEntry = {
     },
     bonusDamage?: DamageDescription[];
     combinedDamage: DamageDescription[];
-    // Entries midi injects during calculation (the aggregate DR entry). Cross-category by nature,
-    // so they belong to the application total rather than to any one category's display.
+    // Entries midi injects during calculation (the aggregate DR entry) - cross-category.
     injectedDamage?: DamageDescription[];
     defaultDamage?: DamageDescription[];
     otherDamage?: DamageDescription[];
@@ -1074,6 +1273,8 @@ export type PreSetupDamageListEntry = {
   oldVitality?: number;
   // vitalityItem fields (for items with uses as vitality pool)
   oldVitalitySpent?: number;
+  oldDeathFailures?: number;
+  newDeathFailures?: number;
   newVitalitySpent?: number;
   rawDamageDetail: DamageDescription[];
   rawTotalDamage?: number;
@@ -1105,7 +1306,6 @@ export type DamageListEntry = PreSetupDamageListEntry & {
   oldTempHP: number;
   oldTempMax?: number;
   tempDamage: number;
-  useDamageDetail: boolean;
   wasHit: boolean;
 }
 
@@ -1129,14 +1329,24 @@ export type ActivityCheck = {
   };
 }
 
+/**
+ * A dnd5e 6 activity effect profile: a local effect on the item by `_id`, or a standalone one (such as
+ * a compendium effect) by `uuid`. `getEffect()` is synchronous for a local effect, async for a uuid.
+ */
 export interface ActivityEffectData {
-    _id: string;
-    get effect(): ActiveEffect.Implementation | undefined;
+    _id: string | null;
+    uuid?: string | null;
+    level?: { min?: number | null, max?: number | null };
     onSave?: boolean;
+    /** `.ActiveEffect.<id>` for a local effect, otherwise its uuid. */
+    readonly relativeUUID: string;
+    getEffect(): ActiveEffect.Implementation | undefined | Promise<ActiveEffect.Implementation | null>;
 }
 
 export interface Activity extends AnyMutableObject {
-  get applicableEffects(): ActiveEffect[] | null;
+  get applicableEffects(): ActivityEffectData[] | null;
+  /** The level effect profiles are filtered against. */
+  relevantLevel: number;
   actor?: Actor.Implementation;
   item: Item.Implementation;
   ammunitionItem?: Item.Implementation;
@@ -1278,6 +1488,7 @@ export interface Activity extends AnyMutableObject {
       width: string;
       height: string;
       units: string;
+      stationary?: boolean;
     };
     affects: {
       count: string;
@@ -1298,8 +1509,10 @@ export interface Activity extends AnyMutableObject {
   hasDamage: boolean;
   hasHealing: boolean;
   actionType: string;
+  id: string;
   uuid: string;
-  isOverTimeFlag?: boolean;
+  /** The activity's data (DataModel#toObject) */
+  toObject(source?: boolean): AnyMutableObject;
   otherActivity?: Activity | null;
   type: string;
   useCondition: string;
@@ -1311,6 +1524,9 @@ export interface Activity extends AnyMutableObject {
     ignoreTraits: Set<string>;
     triggeredActivityId: string;
     triggeredActivityConditionText?: string;
+    followUp?: boolean;
+    followUpCondition?: string;
+    followUpTargets?: string;
     triggeredActivityTargets: string;
     triggeredActivityRollAs?: string;
     triggeredActivityConsume?: boolean;
@@ -1330,12 +1546,15 @@ export interface Activity extends AnyMutableObject {
     chooseEffects?: boolean;
     toggleEffect?: boolean;
     ignoreFullCover?: boolean;
+    targetMustBeSeen?: boolean;
     removeChatButtons: string;
     magicEffect?: boolean;
     magicDamage?: boolean;
     noConcentrationCheck?: boolean;
     skipConcentrationCheck?: boolean;
     autoCEEffects: string;
+    /** Conditions applied to the targets as the condition itself, with extra special durations */
+    statuses?: { id: string; specialDuration: string[]; onSave: boolean }[];
   }
   // Midi mixin methods
   hasConsumption: () => boolean;
@@ -1379,6 +1598,10 @@ export type DamageDescription = {
   displayValue?: number; // original DR amount for tooltip display (when inlined)
   midiCategory?: "defaultDamage" | "otherDamage" | "bonusDamage";
   midiSaveMultiplier?: number;
+  /** Other damage from the ammunition's activity rather than the item's other activity. */
+  midiAmmunition?: boolean;
+  /** Absorbed damage as dealt, before the target's own reductions (set before dnd5e's calculation). */
+  midiAbsorbed?: { value: number; active?: DamageDescription["active"] };
 };
 
 type BasicRollConfig = {
@@ -1393,6 +1616,8 @@ type BasicRollConfig = {
     properties?: string[];
     maximum?: number;
     minimum?: number;
+    /** The minimum/maximum is midi's auto-success/fail, which forces the result without a natural crit/fumble */
+    midiAutoResult?: "fail" | "success";
     advantage?: boolean;
     disadvantage?: boolean;
     advantageMode?: number;
@@ -1452,9 +1677,85 @@ export type RollDialogConfig = {
     advantageByChoice?: Record<string, unknown>;
     /** Choice dropdown type: "ability" for saves, "skill" for skill checks, "tool" for tool checks */
     choiceType?: "ability" | "skill" | "tool";
+    /** Skill/tool choice dialog: the ability each choice rolls with */
+    abilityForChoice?: (id: string) => string | undefined;
     window?: { subtitle?: string };
   };
 };
+/**
+ * A dnd5e chat message, with the 6.0 accessors fvtt-types does not describe.
+ *
+ * dnd5e 6.0 moved the item/activity/actor a card came from out of `flags.dnd5e` and behind these
+ * accessors on `ChatMessage5e` (`chat-message.mjs`). They are optional here because a world can be
+ * running a dnd5e old enough not to have them.
+ */
+/**
+ * `game.system` with dnd5e's additions. fvtt-types' `System` is a default-exported class, which a
+ * module augmentation cannot extend, so this is applied as `(game.system as Dnd5eSystem)`.
+ */
+export type Dnd5eSystem = foundry.packages.System & {
+  dice: {
+    aggregateDamageRolls(rolls: Roll[], options?: { respectProperties?: boolean }): Roll[];
+    DamageRoll: typeof Roll;
+  };
+};
+
+/** Core v14 region members fvtt-types 13 lacks. */
+export type V14RegionDocument = Omit<RegionDocument.Implementation, "shapes"> & {
+  attachment: { token: string | null };
+  shapes: Array<{
+    origin: { x: number; y: number };
+    clone(data: object, options: { parent: Scene.Implementation }):
+      { move(origin: { x: number; y: number }): void; _source: RegionDocument.Source["shapes"][number] };
+  }>;
+};
+
+/** Core v14's emanation region shape, which fvtt-types' shape union does not include. */
+export type EmanationShapeData = {
+  type: "emanation";
+  radius: number;
+  base: { type: string; x: number; y: number; width: number; height: number; shape?: number; rotation?: number };
+};
+
+export type Dnd5eChatMessage = ChatMessage.Implementation & {
+  getAssociatedActivity?(options?: { scaled?: boolean }): Activity | undefined;
+  getAssociatedActor?(): Actor.Implementation | undefined;
+  getAssociatedItem?(options?: { scaled?: boolean }): Item.Implementation | undefined;
+  /** dnd5e's registry of messages linked to this one (`system.origin`), optionally of one message type. */
+  getAssociatedRolls?(type?: string): ChatMessage.Implementation[];
+  getAssociatedToken?(): TokenDocument.Implementation | undefined;
+};
+
+/**
+ * Render options passed down to `ChatMessageDataModel#_prepareContext`.
+ *
+ * `summary` is the only field the system itself reads — it selects `summaryTemplate` over
+ * `template` in `render()`. Left open because the options object is forwarded from `renderHTML`,
+ * where callers may add their own.
+ */
+export type ChatMessageRenderOptions = AnyObject & {
+  summary?: boolean;
+};
+
+/**
+ * The usage-card render context, as midi extends it.
+ *
+ * dnd5e supplies the rest (item, activity, description, subtitle, buttons, effects, summaries);
+ * these are the decisions midi settles when the activity is used and stores on the card, because
+ * they depend on a workflow that no longer exists by the time the card is re-rendered.
+ */
+export type MidiUsageChatContext = AnyMutableObject & {
+  hasAttack?: boolean;
+  hasDamage?: boolean;
+  hasEffects?: boolean;
+  condensed?: boolean;
+  mergeCardMulti?: boolean;
+  confirmAttackDamage?: boolean;
+  hideItemDetails?: boolean;
+  displayProperties?: boolean;
+  dmgBtnText?: string;
+};
+
 export type RollMessageConfig = {
   create?: boolean;
   document?: ChatMessage.Implementation;
@@ -1509,10 +1810,12 @@ export type D20RollOptions = {
   minimum?: number;
 };
 
+/** An entry of a usage card's `system.targets` (dnd5e's TargetsField): actor and token are uuids. */
 export type DND5ETargetDescriptor = {
   name: string,
   img: string,
-  uuid: string,
+  actor: string,
+  token?: string,
   ac: number | null,
 };
 
@@ -1524,10 +1827,10 @@ export type MidiTargetDescriptor = {
     otherDamage: number;
     defaultDamage: number;
     bonusDamage: number;
+    ammunition?: number;
   };
-  itemType?: string;
   uncannyDodge?: boolean;
-  flankingBonus?: number;
+  uncannyDodgeIcon?: string;
 };
 
 export type CombinedTargetDescriptor = MidiTargetDescriptor & DND5ETargetDescriptor;
@@ -1619,6 +1922,7 @@ export type SaveDetails = {
   isConcentrationCheck: boolean | undefined;
   rollDC: number;
   saveItemUuid: string;
+  saveActivityUuid?: string;
   workflowId: string;
   itemCardUuid: string;
   workflowOptions: object;
@@ -1632,24 +1936,30 @@ export type SaveDetails = {
   rollTools?: string[];
   /** Activity's item ID */
   itemId: string;
+  /** The roll's message is one of a card note's (itemCardUuid is the note): its role, e.g. a contested roll's check */
+  cardNote?: { role?: string };
   /** The save roll for this target */
   saveRoll?: Roll;
   /** Pre-computed advantage/disadvantage per choice (ability/skill/tool), for multi-choice dialogs.
    *  A roll is always ONE type (save, skill check, or tool check), so one object suffices.
    */
   advantageByChoice?: Record<string, PreComputedAdvantageData>;
+  /** The modifier keys held when the activity was used, for the roll of the creature that used it */
+  heldModifiers?: { altKey: boolean; ctrlKey: boolean; metaKey: boolean; shiftKey: boolean };
 };
 
 export type ProcessTargetSaveContext = {
   rollDC: number | undefined;
   rollAbility: string | undefined;
   rollType: string | undefined;
+  // v14: template placeable may not exist (Region-backed); use templateCoverOrigin for cover
   template: foundry.canvas.placeables.MeasuredTemplate.Implementation | undefined | null;
+  templateCoverOrigin?: { x: number, y: number, elevation?: number };
   D20Roll: typeof Roll;
 };
 
 export type QueueSaveRollOptions = {
-  target: Token;
+  target: TokenOrDocument;
   saveDetails: SaveDetails;
   rollInfo: SaveRollInfo;
   isMagicSave: boolean;
@@ -1658,3 +1968,4 @@ export type QueueSaveRollOptions = {
   moduleFlags: ModuleIntegrationFlags;
   moduleRequests: ModuleIntegrationRequests;
 };
+

@@ -1,4 +1,6 @@
-import { criticalDamage, criticalDamageChoices, nsaFlag, coloredBorders, coloredBordersOptions, importSettingsFromJSON, exportSettingsToJSON, enableWorkflow, wallsBlockRangeOptionsNew, coverCalculationOptions, hiddenAdvantageOptions, addDeadOptions, rollNPCSavesOptions, playerRollSavesOptions, autoCheckHitOptions, autoTargetOptions, rangeTargetOptions, requiresTargetsOptions, autoCheckSavesOptions, autoRollDamageOptions, removeButtonsOptions, autoApplyDamageOptions, playerDamageCardOptions, damageImmunitiesOptions, showItemDetailsOptions, doReactionsOptions, gmDoReactionsOptions, autoCEEffectsOptions, rollOtherDamageOptions, showReactionAttackRollOptions, recordAOOOptions, EnforceReactionsOptions, autoEffectsOptions, requireMagicalOptions, hideRollDetailsOptions, gmAttackDisplayOptions, gmDamageDisplayOptions, gmDsnDisplayOptions, blindRollDisplayOptions, checkFlankingOptions, flankingBonusOptions, playerRollSavesOptionsReduced, rollAlternateOptions, consumeResourceOptions, averageDamageOptions, removeConcentrationEffectsOptions, incapacitatedOptions, checkRangeOptions, invisAdvantageOptions, confirmAttackDamageOptions, challengeModeArmorOptions, saveDROrderOptions, doConcentrationCheckOptions, addChatDamageButtonsOptions, activationAutomationOptions, safeGetGameSetting, resetConfigSettingsToDefaults, distanceMeasurementOptions } from "../settings.js"
+import { chooseJsonFile } from "../lib/fileDialogs.js";
+import { rulesTextCompendiumChoices } from "../lib/rulesText.js";
+import { criticalDamage, criticalDamageChoices, coloredBorders, coloredBordersOptions, importSettingsFromJSON, exportSettingsToJSON, enableWorkflow, wallsBlockRangeOptionsNew, visionTestHeightOptions, templateOriginHeightOptions, templatePlacedOriginOptions, coverCalculationOptions, hiddenAdvantageOptions, addDeadOptions, rollNPCSavesOptions, playerRollSavesOptions, autoCheckHitOptions, autoTargetOptions, rangeTargetOptions, requiresTargetsOptions, autoCheckSavesOptions, saveSummaryStyleOptions, chatCardSummariesOptions, autoRollDamageOptions, removeButtonsOptions, autoApplyDamageOptions, playerDamageCardOptions, damageImmunitiesOptions, showItemDetailsOptions, doReactionsOptions, gmDoReactionsOptions, autoCEEffectsOptions, showReactionAttackRollOptions, recordAOOOptions, EnforceReactionsOptions, autoEffectsOptions, requireMagicalOptions, gmAttackDisplayOptions, gmDamageDisplayOptions, gmDsnDisplayOptions, blindRollDisplayOptions, checkFlankingOptions, flankingBonusOptions, rollAlternateOptions, consumeResourceOptions, averageDamageOptions, removeConcentrationEffectsOptions, incapacitatedOptions, checkRangeOptions, targetMustBeSeenOptions, invisAdvantageOptions, confirmAttackDamageOptions, challengeModeArmorOptions, saveDROrderOptions, defaultOtherActivityOptions, doConcentrationCheckOptions, activationAutomationOptions, safeGetGameSetting, distanceMeasurementOptions } from "../settings.js"
 import { configSettings } from "../settings.js"
 import { warn, i18n, error, debug, debugEnabled, log, GameSystemConfig, ceInterface } from "../../midi-qol.js";
 import { installedModules } from "../setupModules.js";
@@ -87,16 +89,13 @@ export class ConfigPanel extends HandlebarsApplicationMixin(ApplicationV2) {
     }
     let wallsBlockRangeOptions: SelectOptions = foundry.utils.duplicate(wallsBlockRangeOptionsNew);
     let CoverCalculationOptions: SelectOptions = foundry.utils.duplicate(coverCalculationOptions);
-    [{ id: "levelsautocover", name: "'Levels Auto Cover'" }, { id: "simbuls-cover-calculator", name: "'Simbuls Cover Calculator'" }, { id: "simplecover5e", name: "'Simple Cover 5e'" }, { id: "tokencover", name: "'Alternative Token Cover'" }].forEach(module => {
+    [{ id: "levelsautocover", name: "'Levels Auto Cover'" }, { id: "simplecover5e", name: "'Simple Cover 5e'" }, { id: "tokencover", name: "'Alternative Token Cover'" }].forEach(module => {
       if (!installedModules.get(module.id)) {
         const notInstalled = game.i18n?.format("MODMANAGE.DepNotInstalled", { missing: "" }) ?? "";
         wallsBlockRangeOptions[module.id] = withOptionLabel(wallsBlockRangeOptions[module.id], `${i18n(wallsBlockRangeOptions[module.id])} - ${notInstalled}`);
         CoverCalculationOptions[module.id] = withOptionLabel(CoverCalculationOptions[module.id], `${i18n(CoverCalculationOptions[module.id])} - ${notInstalled}`);
       }
     });
-    if (!installedModules.get("levels")) {
-      wallsBlockRangeOptions["centerLevels"] = withOptionLabel(wallsBlockRangeOptions["centerLevels"], `${i18n(wallsBlockRangeOptions["centerLevels"])} - ${game.i18n?.format("MODMANAGE.DepNotInstalled", { missing: "Levels" })}`);
-    }
     // Mark walledtemplates option as "not installed" when the module is not active
     const autoTargetOptionsLocalized: SelectOptions = foundry.utils.duplicate(autoTargetOptions);
     if (!installedModules.get("walledtemplates")) {
@@ -118,8 +117,6 @@ export class ConfigPanel extends HandlebarsApplicationMixin(ApplicationV2) {
     if (configSettings.addWounded > 0 && ["none", undefined].includes(configSettings.addWoundedStyle))
       configSettings.addWoundedStyle = "normal";
     */
-    const AddWoundedOptions = foundry.utils.duplicate(addDeadOptions);
-    delete AddWoundedOptions["none"];
     const rollNPCSavesOptionsLocalized: SelectOptions = foundry.utils.duplicate(rollNPCSavesOptions);
     for (let key of Object.keys(rollNPCSavesOptions)) {
       const notInstalled = game.i18n?.format("MODMANAGE.DepNotInstalled", { missing: "" }) ?? "";
@@ -189,22 +186,28 @@ export class ConfigPanel extends HandlebarsApplicationMixin(ApplicationV2) {
       quickSettingsOptions,
       autoCheckHitOptions,
       autoTargetOptions: autoTargetOptionsLocalized,
+      defaultOtherActivityOptions,
       rangeTargetOptions,
       requiresTargetsOptions,
       autoCheckSavesOptions,
+      saveSummaryStyleOptions,
+      chatCardSummariesOptions,
       autoRollDamageOptions,
       removeButtonsOptions,
       criticalDamage,
       criticalDamageChoices,
       autoApplyDamageOptions,
+     
       playerDamageCardOptions,
       damageImmunitiesOptions,
       showItemDetailsOptions,
       doReactionsOptions,
       wallsBlockRangeOptions,
+      visionTestHeightOptions,
+      templateOriginHeightOptions,
+      templatePlacedOriginOptions,
       gmDoReactionsOptions,
       AutoCEEffectsOptions: autoCEEffectsOptionsLocalized,
-      rollOtherDamageOptions,
       showReactionAttackRollOptions,
       CoverCalculationOptions,
       distanceMeasurementOptions,
@@ -212,32 +215,25 @@ export class ConfigPanel extends HandlebarsApplicationMixin(ApplicationV2) {
       EnforceReactionsOptions: EnforceReactionsOptions,
       AutoEffectsOptions: autoEffectsOptions,
       RequireMagicalOptions: requireMagicalOptions,
-      itemTypeLabels: Object.keys(CONFIG.Item.typeLabels).filter(key => !["backpack", "base"].includes(key)).reduce((acc, key) => { acc[key] = CONFIG.Item.typeLabels[key]; return acc }, {}),
       hasConvenientEffects: installedModules.get("dfreds-convenient-effects"),
-      hideRollDetailsOptions,
       gmAttackDisplayOptions,
       gmDamageDisplayOptions,
       gmDsnDisplayOptions,
       blindRollDisplayOptions,
       checkFlankingOptions: checkFlankingOptionsLocalized,
       flankingBonusOptions,
-      nsaFlag,
       coloredBorders,
       coloredBordersOptions,
       playerRollSavesOptions: playerRollSavesOptionsLocalized,
       rollNPCSavesOptions: rollNPCSavesOptionsLocalized,
-      customSoundsPlaylistOptions: game.playlists?.contents.reduce((acc, e) => { acc[e.id] = e.name; return acc }, {}) || {},
-      customSoundOptions: game.playlists?.get(configSettings.customSoundsPlaylist)?.sounds.reduce((acc, s) => { acc[s.id ?? ""] = s.name; return acc }, { "none": "" }),
-      rollSoundOptions: CONFIG.sounds,
-      isBetterRolls: installedModules.get("betterrolls5e"),
       rollAlternateOptions,
       ConsumeResourceOptions: consumeResourceOptions,
       AddDeadOptions: addDeadOptions,
-      AddWoundedOptions,
       AverageDamageOptions: averageDamageOptions,
       RemoveConcentrationEffectsOptions: removeConcentrationEffectsOptions,
       IncapacitatedOptions: incapacitatedOptions,
       CheckRangeOptions: checkRangeOptions,
+      TargetMustBeSeenOptions: targetMustBeSeenOptions,
       InvisAdvantageOptions: invisAdvantageOptions,
       HiddenAdvantageOptions,
       ConfirmAttackDamageOptions: confirmAttackDamageOptions,
@@ -246,6 +242,7 @@ export class ConfigPanel extends HandlebarsApplicationMixin(ApplicationV2) {
       RollSavesBlindOptions: foundry.utils.mergeObject({ "all": "All", "death": i18n("DND5E.DeathSave") }, Object.keys(GameSystemConfig.abilities).reduce((acc, s) => { acc[s] = GameSystemConfig.abilities[s].label; return acc }, {})),
       RollChecksBlindOptions: foundry.utils.mergeObject({ "all": "All" }, Object.keys(GameSystemConfig.abilities).reduce((acc, s) => { acc[s] = GameSystemConfig.abilities[s].label; return acc }, {})),
       midiPropertiesTabOptions: CONST.USER_ROLE_NAMES,
+      rulesTextCompendiumOptions: rulesTextCompendiumChoices(),
       templateSnappingOptions: {
         "full": i18n("midi-qol.TemplateSnapping.Full"),
         "half": i18n("midi-qol.TemplateSnapping.Half"),
@@ -255,9 +252,9 @@ export class ConfigPanel extends HandlebarsApplicationMixin(ApplicationV2) {
       SaveDROrderOptions: saveDROrderOptions,
       ColorOptions: colorList.reduce((acc, c) => { acc[c] = c; return acc }, { "Delete": "Delete" }),
       DoConcentrationCheckOptions: doConcentrationCheckOptions,
-      AddChatDamageButtonsOptions: addChatDamageButtonsOptions,
       ActivationAutomationOptions: activationAutomationOptions,
-      rollModes: CONFIG.Dice.rollModes,
+      // @ts-expect-error fvtt-types lacks v14 CONFIG.ChatMessage.modes
+      messageModes: Object.fromEntries(Object.entries(CONFIG.ChatMessage.modes).filter(([mode]) => mode !== "ic").map(([mode, { label }]) => [mode, label])),
       fastForwardOptions: {
         attack: i18n("midi-qol.fastForwardOptions.attack"),
         damage: i18n("midi-qol.fastForwardOptions.damage"),
@@ -390,13 +387,6 @@ export class ConfigPanel extends HandlebarsApplicationMixin(ApplicationV2) {
     if (this.configHookId) Hooks.off("midi-qol.ConfigSettingsChanged", this.configHookId);
   }
 
-  // async _playList(event) {
-  //   event.preventDefault();
-  //   configSettings.customSoundsPlaylist = `${$(event.currentTarget).children("option:selected").val()}`;
-  //   await this.submit({ preventClose: true });
-  //   this.render();
-  // }
-
   // onReset() {
   //   this.render(true);
   // }
@@ -435,52 +425,24 @@ export class ConfigPanel extends HandlebarsApplicationMixin(ApplicationV2) {
 }
 
 async function importFromJSONDialog() {
-  const content = await foundry.applications.handlebars.renderTemplate("templates/apps/import-data.hbs", { entity: "midi-qol", name: "settings" });
-  let dialog = new Promise((resolve, reject) => {
-    new DialogV2({
-      window: { title: `Import midi-qol settings` },
-      position: {
-        width: 400,
-        height: "auto"
-      },
-      content: content,
-      buttons: [
-        {
-          action: "import",
-          icon: "fa-solid fa-file-import",
-          label: 'Import',
-          default: true,
-          callback: event => {
-            const form = (event.currentTarget as HTMLElement | null)?.querySelector("form");
-            if (!form?.data.files.length) return ui.notifications?.error("You did not upload a data file!");
-            foundry.utils.readTextFromFile(form.data.files[0]).then(json => {
-              importSettingsFromJSON(json).then(() => resolve(true))
-            });
-          }
-        },
-        {
-          action: "no",
-          icon: "fa-solid fa-xmark",
-          label: 'Cancel',
-          callback: event => resolve(false)
-        }
-      ],
-    }).render({ force: true });
-  });
-  return await dialog;
+  const file = await chooseJsonFile(i18n("midi-qol.Import.SettingsTitle"));
+  if (!file) return false;
+  try {
+    await importSettingsFromJSON(file.text);
+    return true;
+  } catch (err) {
+    error("importing settings from", file.name, err);
+    ui.notifications?.error(i18n("midi-qol.Import.BadFile"));
+    return false;
+  }
 }
 
 async function fetchConfigFile(filename: string | undefined): Promise<string> {
   if (!filename) return "{}";
-  return new Promise((resolve, reject) => {
-    fetch(filename).then(response => response.text())
-      .then(data => {
-        resolve(data)
-      });
-  });
+  return (await fetch(filename)).text();
 }
 
-function showDiffs(current: any, changed: any, flavor: string = "", title: string = "") {
+function showDiffs(current: any, changed: any, flavor: string = "", title: string = ""): Promise<boolean> {
   const diffs = foundry.utils.diffObject(changed, current, { inner: true });
   const changes: string[] = [];
   for (let key of Object.keys(diffs)) {
@@ -498,37 +460,18 @@ function showDiffs(current: any, changed: any, flavor: string = "", title: strin
 
     changes.push(`${key.startsWith("gm") ? "GM " : ""}${longName} <strong>${currentVal} => ${changedVal}</strong>`)
   }
-  if (changes.length === 0) changes.push("No Changes");
-  const dialog = new Promise((resolve, reject) => {
-    let dialogTitle;
-    if (title !== "") dialogTitle = `${i18n("midi-qol.Config.Tabs.quick")} - ${title}`;
-    else dialogTitle = i18n("midi-qol.Config.Tabs.quick");
-    let d = new DialogV2({
-      classes: ["midi-qol-quick-config"],
-      window: { title: dialogTitle },
-      position: {
-        height: "auto"
-      },
-      content: changes.join("<br>"),
-      buttons: [
-        {
-          action: "apply",
-          default: true,
-          icon: "fa-solid fa-check",
-          label: 'Apply',
-          callback: () => resolve(true)
-        },
-        {
-          action: "abort",
-          icon: "fa-solid fa-xmark",
-          label: 'Don\'t Apply',
-          callback: () => resolve(false)
-        }
-      ],
-    }).render({ force: true });
-    warn("Quick Settings ", changes.join("\n"));
-  })
-  return dialog;
+  if (changes.length === 0) changes.push(i18n("midi-qol.QuickSettings.NoChanges"));
+  warn("Quick Settings ", changes.join("\n"));
+  const dialogTitle = title !== "" ? `${i18n("midi-qol.Config.Tabs.quick")} - ${title}` : i18n("midi-qol.Config.Tabs.quick");
+  // Closing the dialog is "don't apply"
+  return foundry.applications.api.DialogV2.confirm({
+    classes: ["midi-qol-quick-config"],
+    window: { title: dialogTitle },
+    content: changes.join("<br>"),
+    rejectClose: false,
+    yes: { label: "midi-qol.QuickSettings.Apply", icon: "fa-solid fa-check", default: true },
+    no: { label: "midi-qol.QuickSettings.DontApply", icon: "fa-solid fa-xmark", default: false }
+  }).then(apply => apply === true);
 }
 
 let quickSettingsDetails: any = {
@@ -550,7 +493,6 @@ let quickSettingsDetails: any = {
       gmAutoDamage: "onHit",
       gmAutoFastForward: ["attack", "damage"],
       gmRemoveButtons: "all",
-      gmTargetConfirmation: "none",
       autoItemEffects: "applyRemove",
       allowUseMacro: true,
     },
@@ -562,8 +504,7 @@ let quickSettingsDetails: any = {
       gmAutoAttack: false,
       gmAutoDamage: "none",
       gmAutoFastForward: [],
-      gmRemoveButtons: "none",
-      gmTargetConfirmation: "none"
+      gmRemoveButtons: "off"
     },
   },
   ShowItemInfo: {
@@ -583,8 +524,7 @@ let quickSettingsDetails: any = {
       autoRollAttack: true,
       autoRollDamage: "onHit",
       autoFastForward: ["attack", "damage"],
-      removeButtons: "all",
-      targetConfirmation: "none"
+      removeButtons: "all"
     },
   },
   PlayerManual: {
@@ -594,8 +534,7 @@ let quickSettingsDetails: any = {
       autoRollAttack: false,
       autoRollDamage: "none",
       autoFastForward: [],
-      removeButtons: "none",
-      targetConfirmation: "none"
+      removeButtons: "off"
     },
   },
   DamageAuto: {
@@ -627,14 +566,14 @@ let quickSettingsDetails: any = {
       autoCheckSaves: "none",
       playerRollSaves: "chat",
       playerSaveTimeout: 30,
-      rollNPCSaves: "chat",
+      rollNPCSaves: "none",
       autoTarget: "wallsBlockIgnoreDefeated",
       rangeTarget: "alwaysIgnoreDefeated",
-      rollNPCLinkedSaves: "chat",
+      rollNPCLinkedSaves: "none",
       autoCEEffects: "cepri",
       autoItemEffects: "off",
       allowUseMacro: true,
-      autoApplyDamage: "no"
+      autoApplyDamage: "none"
     }
   },
   EnableReactions: {
@@ -656,14 +595,6 @@ let quickSettingsDetails: any = {
       }
       if (current.autoCheckSaves === "none") {
         settings.autoCheckSaves = "whisper";
-        changesMade = true;
-      }
-      if (current.playerRollSaves === "none") {
-        settings.playerRollSaves = "chat";
-        changesMade = true;
-      }
-      if (current.rollNPCLinkedSaves === "none") {
-        settings.rollNPCLinkedSaves = "chat";
         changesMade = true;
       }
       if (current.autoApplyDamage === "none") {
@@ -702,10 +633,6 @@ let quickSettingsDetails: any = {
     shortDescription: "Allow GM to fudge damage application",
     configSettings: {
       autoApplyDamage: "noCard"
-    },
-    codeChecks: (current, settings) => {
-      //@ts-expect-error
-      game.settings.set("midi-qol", "AddChatDamageButtons", "gm");
     }
   },
   DisableConcentration: {
@@ -729,15 +656,13 @@ let quickSettingsDetails: any = {
       gmDamageDisplay: "hidden",
       gmAttackDsn: "none",
       gmDamageDsn: "none",
-      displaySaveAdvantage: false,
       hideNPCNames: "Unknown Creature",
-      showReactionAttackRoll: "none",
-      displayHitResultNumeric: false
+      showReactionAttackRoll: "none"
     },
     codeChecks: (current, settings) => {
       if (current.autoCheckHit !== "none") settings.autoCheckHit = "whisper";
       if (current.autoCheckSaves !== "none") settings.autoCheckSaves = "whisper";
-      if (!installedModules.get("anonymous")) ui.notifications?.warn("'Anonymous' is recommended to hide creature names for normal dnd5e rolls");
+      if (!installedModules.get("anonymous") && !game.modules.get("hide-npc-names")?.active) ui.notifications?.warn("'Hide NPC Names' is recommended to hide creature names for normal dnd5e rolls");
       game.settings.set("dnd5e", "challengeVisibility", "none");
     }
   },
@@ -749,10 +674,8 @@ let quickSettingsDetails: any = {
       gmDamageDisplay: "full",
       gmAttackDsn: "show",
       gmDamageDsn: "show",
-      displaySaveAdvantage: true,
       showReactionAttackRoll: "all",
-      hideNPCNames: "",
-      displayHitResultNumeric: true
+      hideNPCNames: ""
     },
     codeChecks: (current, settings) => {
       if (current.autoCheckHit !== "none") settings.autoCheckHit = "all";
@@ -782,8 +705,8 @@ export async function applySettings(key: string) {
       if (await showDiffs(configSettings, configData.configSettings, "", config.shortDescription)) {
         await importSettingsFromJSON(jsonText);
         log(`Loaded ${config.fileName}`);
+        return true;
       }
-      return true;
     } catch (err) {
       error("could not load config file", config.fileName, err);
     }

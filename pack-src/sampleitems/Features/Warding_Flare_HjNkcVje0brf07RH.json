@@ -3,14 +3,14 @@
   "type": "feat",
   "system": {
     "description": {
-      "value": "<p>The description is not part of the SRD so you will have to enter it yourself.</p>",
+      "value": "<div class=\"cat-description\"><p><em>midi-qol: As a reaction, the attacking creature has disadvantage on its attack roll.</em></p><p><em>No rules text (not SRD; Player's Handbook): give the character your own copy and apply this automation to it with CAT's medkit, which keeps your copy's description.</em></p></div>",
       "chat": ""
     },
     "source": {
       "custom": "Midi 12.4.7",
       "revision": 1,
-      "rules": "2014",
-      "book": "",
+      "rules": "2024",
+      "book": "Player's Handbook",
       "page": "",
       "license": ""
     },
@@ -155,25 +155,8 @@
     {
       "origin": "Actor.DMTSWfQs8whM5FtE.Item.ptRkrLPyRlajMmwz",
       "_id": "JINZvpJWYU63LMv9",
-      "changes": [
-        {
-          "key": "flags.midi-qol.grants.disadvantage.attack.all",
-          "mode": 0,
-          "value": "1",
-          "priority": 20
-        }
-      ],
       "disabled": false,
-      "duration": {
-        "startTime": null,
-        "seconds": null,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
-      },
-      "tint": "#ffffff",
+      "duration": {},
       "transfer": false,
       "flags": {
         "dae": {
@@ -222,7 +205,16 @@
       },
       "img": "icons/magic/light/hand-sparks-glow-yellow.webp",
       "type": "base",
-      "system": {},
+      "system": {
+        "changes": [
+          {
+            "key": "flags.midi-qol.grants.disadvantage.attack.all",
+            "value": "1",
+            "priority": 20,
+            "type": "custom"
+          }
+        ]
+      },
       "sort": 0,
       "_key": "!items.effects!HjNkcVje0brf07RH.JINZvpJWYU63LMv9"
     }
@@ -329,10 +321,9 @@
       "section": "",
       "actionSection": ""
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.58"
+    "cat": {
+      "automation": {
+        "version": "14.6.9"
       }
     }
   },

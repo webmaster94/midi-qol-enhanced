@@ -1,8 +1,15 @@
-import { getRollModes, activityEffectReferences, resolveActivityEffect, countTemplateShapes, usesSystemChatData, createActivityRegions } from "./compatibility.js";
-import { warn, debug, log, i18n, i18nFormat, busyWait, MESSAGE_TYPES, error, debugEnabled, MQItemMacroLabel, GameSystemConfig, MODULE_ID, MQActivityMacroLabel, gameStats, getHealingLabel } from "../midi-qol.js";
-import { preferredActiveGM, prepareDamageListToJSON, socketlibSocket, timedAwaitExecuteAsGM, timedExecuteAsGM, unTimedExecuteAsGM } from "./GMAction.js";
+import { warn, debug, log, i18n, i18nFormat, busyWait, MESSAGE_TYPES, error, debugEnabled, MQItemMacroLabel, GameSystemConfig, MODULE_ID, MQActivityMacroLabel, gameStats, MQDamageRollTypes } from "../midi-qol.js";
+import { MidiTeleportActivity, TeleportOption } from "./activities/TeleportActivity.js";
+import { decodeWorkflowOptions, encodeWorkflowOptions, inheritableWorkflowOptions } from "./lib/workflowOptionsCodec.js";
+import { eventModifiers } from "./lib/rollKeys.js";
+import { TokenDocumentSet, hookTarget } from "./lib/tokenDocumentSet.js";
+import { CardRecords, RECORD_SETS, RecordSet, RecordFacts, STATE_KEYS, StateKey, attributionMap, attributionTriples, cardMidi, rollTypeOf, cardOtherConsumption, cardPreSelected, messagesFrom, recordList, recordPath, storedMidiFlag } from "./lib/cardState.js";
+import { preferredActiveGM, socketlibSocket, timedAwaitExecuteAsGM, timedExecuteAsGM, unTimedExecuteAsGM } from "./GMAction.js";
+import { beginPlayerWait, rollDialogsFor, trackPlayerWait } from "./lib/playerWaits.js";
 import { installedModules } from "./setupModules.js";
-import { configSettings, autoRemoveTargets, checkRule, checkMechanic, safeGetGameSetting, useWeakReferences, saveToChatCard, onUseMacroOptions, shouldDisplaySaveDC, isDnd5e53 } from "./settings.js";
+import { offerFollowUps } from "./followUps.js";
+import { configSettings, autoRemoveTargets, checkRule, checkMechanic, safeGetGameSetting, useWeakReferences, onUseMacroOptions, chatCardUpdates } from "./settings.js";
+import { challengeVisibleToPlayers, saveDisplayMode } from "./lib/saveVisibility.js";
 import {
   createDamageDetail,
   processDamageRoll,
@@ -13,11 +20,11 @@ import {
   getAutoRollAttack,
   getRemoveDamageButtons,
   getRemoveAttackButtons,
-  getTokenPlayerName,
   checkNearby,
   hasCondition,
   expireMyEffects,
   validTargetTokens,
+  userTargetsKeepingUndrawn,
   getOrCreateTokenForActorAsSet,
   doReactions,
   playerFor,
@@ -25,17 +32,14 @@ import {
   evalActivationCondition,
   asyncHooksCallAll,
   asyncHooksCall,
-  midiRenderRoll,
+  renderSaveRollHTML,
   markFlanking,
   computeFlankingStatus,
   computeFlankedStatus,
-  canSense,
   tokenForActor,
   getOrCreateTokenForActor,
   createConditionData,
   evalCondition,
-  removeHidden,
-  hasDAE,
   computeCoverBonus,
   computeTargetAC,
   TOTAL_COVER,
@@ -45,7 +49,6 @@ import {
   isInCombat,
   displayDSNForRoll,
   setActionUsed,
-  removeInvisible,
   getTokenDocument,
   getToken,
   activityHasAutoPlaceTemplate,
@@ -58,13 +61,15 @@ import {
   midiRenderFormulaRoll,
   throttledUpdate,
   getCachedDocument,
+  getUpdatesCache,
   clearUpdatesCache,
   getDamageType,
   getTokenName,
+  tokenPortrait,
   setRollOperatorEvaluated,
+  evalAllConditions,
   evalAllConditionsAsync,
   getAppliedEffects,
-  canSee,
   CEAddEffectWith,
   getCEEffectByName,
   CEHasEffectApplied,
@@ -72,12 +77,15 @@ import {
   CEToggleEffect,
   getActivityDefaultDamageType,
   activityHasAreaTarget,
+  expectedTemplateCount,
   getSaveMultiplierForActivity,
   checkActivityRange,
+  isRangeCheckable,
   getDistance,
   getActivityAutoTargetAction,
   activityHasEmanationNoTemplate,
   completeActivityUse,
+  applyTriggeredActivityAsOverTime,
   getActor,
   getConcentrationEffect,
   convertDuration,
@@ -90,35 +98,41 @@ import {
   getOptionalCountRemainingShortFlag,
   bonusDialog,
   getTargetDescriptor,
-  getThrottlingFunction,
+  queueUpdate,
   addAttribution,
   renderAttributionTooltip,
   getAdvantageModeTitle,
   resolveItemMacro,
   resolveActivityMacro,
-  resolveDAEItemData,
   midiFlag,
-  getAoETargetType,
   updateUserTargets,
   popTargetSave,
   clearTargetSave,
-  getToolLabel,
   getConsumptionData,
-  applyTriggeredActivityAsOverTime,
+  toMessageMode,
+  toLegacyRollMode,
+  isDnd5eRollMessage,
+  rollAnswersRequest,
+  type SaveRequestKind,
+  dnd5eRollType,
+  tokenSourceElevation,
+  applyStatusCondition,
+  deleteCardAfterWrites,
 } from "./utils.js"
 import { OnUseMacros } from "./apps/Item.js";
-import { bonusCheck, collectBonusFlags, defaultRollOptions, computeAbilityAdvantage, buildPreComputedAdvantageMap } from "./patching.js";
-import { PreComputedAdvantage } from "./apps/MidiRollChoiceDialog.js";
+import { bonusCheck, collectBonusFlags, defaultRollOptions, buildPreComputedAdvantageMap, checkActivityAbilities } from "./patching.js";
 import { saveTargetsUndoData, saveUndoData } from "./undo.js";
 import { TroubleShooter } from "./apps/TroubleShooter.js";
+import { restoredUse, useChangesJson } from "./lib/useChanges.js";
+import { SECTION_TEMPLATES, USAGE_MESSAGE_TYPE, cardSaveRoll, type MidiCardSection, type SectionName } from "./ChatClasses/UsageCardMessage.js";
 import { MidiSummonActivity } from "./activities/SummonActivity.js";
-import { activityHasScaledTargetCount, computeTargetsFromTemplates, postTemplateConfirmTargets } from "./activities/activityHelpers.js";
-import { Activity, ActivitySave, ActivityCheck, ActivityUseConfiguration, DamageDescription, DamageListEntry, TokenOrDocument, DND5ETargetDescriptor, CombinedTargetDescriptor, ActivityEffectData, QueueSaveRollOptions, SaveDetails, ProcessTargetSaveContext, ModuleIntegrationFlags, ModuleIntegrationRequests, MonksTokenBarRequest, FlashRollsRequest, EpicRollsRequest, RollProcessConfig, RollDialogConfig } from "../globals.js";
+import { activityHasScaledTargetCount, computeActivityTemplateTargets, computeOffLevelTemplateTargets, createActivityTemplateRegions, postTemplateConfirmTargets, regionShapeOrigin, setDamageRollMinTerms } from "./activities/activityHelpers.js";
+import { Activity, Dnd5eChatMessage, ActivitySave, ActivityCheck, ActivityUseConfiguration, DamageDescription, DamageListEntry, TokenOrDocument, DND5ETargetDescriptor, CombinedTargetDescriptor, ActivityEffectData, QueueSaveRollOptions, SaveDetails, ProcessTargetSaveContext, ModuleIntegrationFlags, ModuleIntegrationRequests, MonksTokenBarRequest, FlashRollsRequest, EpicRollsRequest, RollProcessConfig, RollDialogConfig } from "../globals.js";
 import { AnyMutableObject, AnyObject, EmptyObject, InexactPartial } from "fvtt-types/utils";
 import Token = foundry.canvas.placeables.Token;
 import { MidiTransformActivity } from "./activities/TransformActivity.js";
-import { MidiAttackActivity, computeAttackAdvantage } from "./activities/AttackActivity.js";
-import { RollModifierTracker, AdvantageAttributionType, CriticalModifierFlags, computeCriticalModifiers, computeTargetCriticalModifiers, getFlagDisplayName } from "./lib/RollModifierTracker.js";
+import { computeAttackAdvantage, MidiAttackActivity } from "./activities/AttackActivity.js";
+import { RollModifierTracker, CriticalModifierFlags, computeCriticalModifiers, computeTargetCriticalModifiers, getFlagDisplayName } from "./lib/RollModifierTracker.js";
 
 /**
  * Result of resolving a macro specification in callMacro.
@@ -147,26 +161,10 @@ export const shiftOnlyEvent = { shiftKey: true, altKey: false, ctrlKey: false, m
 
 /** Sentinel value for attackTotal before any attack roll has been made. */
 export const minAttackTotal = -100;
-export function noKeySet(event: AugmentedEvent) { return !(event?.shiftKey || event?.ctrlKey || event?.altKey || event?.metaKey) }
 
-/**
- * Attribution type for advantage/disadvantage/critical/fumble sources.
- */
 export type AttributionType = 'ADV' | 'DIS' | 'NOADV' | 'NODIS' | 'CRIT' | 'NOCRIT' | 'FUMBLE' | 'NOFUMBLE';
-
-/**
- * Attribution map: type -> source -> displayName
- * O(1) lookup and natural deduplication via object keys.
- * Stored in ChatMessage flags for persistence.
- */
 export type AttributionMap = Partial<Record<AttributionType, Record<string, string>>>;
-
-/**
- * Structured attribution entry for display purposes.
- * Converted from AttributionMap for iteration/rendering.
- */
 export interface AttributionEntry {
-  /** The type of attribution (ADV, DIS, CRIT, etc.) */
   type: AttributionType;
   /** Source identifier (e.g., "invisible", "flanking", "magicResistance") */
   source: string;
@@ -174,39 +172,13 @@ export interface AttributionEntry {
   displayName: string;
 }
 
-/**
- * Chat card flag keys for fields that are persisted directly via
- * addUpdatesCacheFlags in their own setters (not through persistFields).
- */
-export enum WorkflowDataFlags {
-  ammunitionOnUseMacros = "ammunitionOnUseMacros",
-  bonusDamageTotal = "bonusDamageTotal",
-  currentAction = "currentAction",
-  damageList = "damageList",
-  inCombat = "inCombat",
-  onUseMacros = "OnUseMacros",
-  otherDamageTotal = "otherDamageTotal",
-  /** Structured save attribution - keyed by target UUID */
-  saveAttribution = "saveAttribution",
-  saveDisplayData = "saveDisplayData",
-  targetDescriptors = "flags.dnd5e.targets",
-  otherActivityConsumed = "use.consumed",
-  otherActivityScaling = "use.otherScaling",
-}
-
 export interface DamageDescriptionObject extends Omit<DamageDescription, 'properties'> {
   properties: string[];
 };
-function damageDetailToObject(damageDetail?: DamageDescription[]): DamageDescriptionObject[] {
+export function damageDetailToObject(damageDetail?: DamageDescription[]): DamageDescriptionObject[] {
   return (damageDetail ?? []).map(d => ({
     ...d,
     properties: Array.from(d.properties ?? [])
-  }));
-}
-function damageDetailsFromObject(damageDetail?: DamageDescriptionObject[]): DamageDescription[] {
-  return (damageDetail ?? []).map(d => ({
-    ...d,
-    properties: new Set(d.properties ?? [])
   }));
 }
 
@@ -217,310 +189,711 @@ type DamageBonusMacroSingleResult = {
 };
 type DamageBonusMacroResult = DamageBonusMacroSingleResult[] | DamageBonusMacroSingleResult;
 
-export type WorkflowState = undefined | ((context: WorkflowContext) => Promise<WorkflowState>);
+export type WorkflowState = undefined | (() => Promise<WorkflowState>);
+/** What a suspended workflow is woken by (Workflow#resume) */
+export type WorkflowEvent = "attackRolled" | "damageRolled" | "noDamage" | "utilityRolled";
+export type WorkflowOutcome = "ok" | "allMissed" | "invalid" | "split" | "manualSaves" | "cancelled" | "aborted";
 
-/** Write-through cache over the chat-card flags; unwritten fields read the flag, then the default. */
-class PersistedFieldStore {
+// The states whose end is a chat card milestone (Workflow#performState). Cleanup's end is the use's completion
+// (postCleanup, which completeActivityUse waits for): callers then read a written card.
+const MILESTONE_STATES = new Set(["WorkflowState_AttackRollComplete", "WorkflowState_WaitForSaves", "WorkflowState_AllRollsComplete", "WorkflowState_Cleanup"]);
+
+const RECORD_VALUES = ["otherDamage", "ammunitionDamage", "preSelected"] as const;
+
+/**
+ * The workflow's stored fields: kept in memory, written to its card (lib/cardState.ts) through the card's update cache.
+ * The card is read only when the workflow is rebuilt from it (load). Writing undefined forgets the value.
+ */
+/** `value` with only what survives JSON (primitives, arrays and plain objects of them); undefined if nothing does */
+function jsonSafe(value: unknown): unknown {
+  if (value === null || ["string", "number", "boolean"].includes(typeof value)) return value;
+  if (Array.isArray(value)) return value.every(v => jsonSafe(v) === v) ? value : undefined;
+  // A plain object only: getType calls any class instance (an Event) "Object"
+  const prototype = typeof value === "object" ? Object.getPrototypeOf(value) : undefined;
+  if (prototype !== Object.prototype && prototype !== null) return undefined;
+  const kept = Object.entries(value as Record<string, unknown>).map(([key, v]) => [key, jsonSafe(v)] as const).filter(([, v]) => v !== undefined);
+  return kept.length ? Object.fromEntries(kept) : undefined;
+}
+
+/** A roll another workflow added to a card (addedBy) */
+function addedByOther(roll: Roll, workflowId: string): boolean {
+  const addedBy = foundry.utils.getProperty(roll, `options.${MODULE_ID}.addedBy`);
+  return !!addedBy && addedBy !== workflowId;
+}
+
+/** Workflow.workflows: a copy, so changing it changes nothing (warned) */
+class WorkflowsCopy extends Map<string, Workflow> {
+  #filled = false;
+  #warn() {
+    if (this.#filled) foundry.utils.logCompatibilityWarning("midi-qol | Workflow.workflows is a copy: changing it changes nothing. Use MidiQOL.Workflow.addWorkflow / removeWorkflow.", { since: "14.6.9", until: "14.8.0", once: true });
+  }
+  filled(): this { this.#filled = true; return this; }
+  override set(key: string, value: Workflow): this { this.#warn(); return super.set(key, value); }
+  override delete(key: string): boolean { this.#warn(); return super.delete(key); }
+  override clear(): void { this.#warn(); super.clear(); }
+}
+
+class CardStateStore {
   #cache = new Map<string, unknown>();
-  #getFlags: () => Record<string, any> | undefined;
-  #persist: (updates: Record<string, unknown>) => void;
-  #forcePersist: (updates: Record<string, unknown>) => void;
+  #write: (updates: Record<string, unknown>) => void;
   #persistRolls: () => void;
 
-  constructor({ getFlags, persist, forcePersist, persistRolls }: {
-    getFlags: () => Record<string, any> | undefined,
-    persist: (updates: Record<string, unknown>) => void,
-    forcePersist: (updates: Record<string, unknown>) => void,
-    persistRolls: () => void
-  }) {
-    this.#getFlags = getFlags;
-    this.#persist = persist;
-    this.#forcePersist = forcePersist;
+  /** `write`: updates by path, queued with the card's next update; `persistRolls`: the card's rolls */
+  constructor(write: (updates: Record<string, unknown>) => void, persistRolls: () => void) {
+    this.#write = write;
     this.#persistRolls = persistRolls;
   }
 
-  scalar<T>(key: string, dflt: T, legacyKey?: string): T {
-    if (this.#cache.has(key)) return this.#cache.get(key) as T;
-    const flags = this.#getFlags();
-    return (flags?.[key] ?? (legacyKey ? flags?.[legacyKey] : undefined) ?? dflt) as T;
+  // The roll counts are the card's own (its buttons show them), not workflow state
+  static #path(key: string) {
+    return ["attackRollCount", "damageRollCount"].includes(key) ? `system.midi.${key}` : `system.midi.state.${key}`;
   }
 
-  setScalar<T>(key: string, value: T): void {
-    if (value === undefined) this.#cache.delete(key);
-    else this.#cache.set(key, value);
-    this.#persist({ [key]: value });
+  /** What the card holds, for a workflow rebuilt from it: its state, its records' token sets and its rolls */
+  /** Only for a card with a workflow recorded (fromChatCardUuid) */
+  load(card: ChatMessage.Implementation): void {
+    const midi = cardMidi(card);
+    const state = midi.state ?? {};
+    this.#cache.set("workflowClass", state.workflowClass);
+    for (const key of STATE_KEYS) {
+      const value = state[key];
+      if (value === undefined || value === null) continue;
+      if (key === "workflowOptions") this.#cache.set(key, decodeWorkflowOptions(foundry.utils.deepClone(value)));
+      else this.#cache.set(key, foundry.utils.deepClone(value));
+    }
+    for (const key of ["attackRollCount", "damageRollCount"] as const) if (midi[key] != null) this.#cache.set(key, midi[key]);
+    // Pre-selected targets are kept in the records, not the stored options
+    this.#cache.set("workflowOptions", { ...((this.#cache.get("workflowOptions") as WorkflowOptions | undefined) ?? {}), preSelectedTargetUuids: cardPreSelected(midi.records) });
+    const records = recordList(midi.records);
+    for (const field of RECORD_VALUES) {
+      const uuids = records.filter(record => record[field]).map(record => record.uuid);
+      if (uuids.length) this.#cache.set(`recordValues.${field}`, new Set(uuids));
+    }
+    // Every member, drawn or not (TokenDocumentSet); a record whose token no longer exists is left alone
+    for (const field of Object.keys(RECORD_SETS) as RecordSet[]) {
+      const tokens = new TokenDocumentSet(records.filter(record => record[field]).map(record => record.uuid));
+      this.#cache.set(field, tokens);
+      this.#cache.set(`written.${field}`, new Set(tokens.uuids));
+    }
+    const hitRows = records.filter(record => typeof record.hitClass === "string").map(record => record.uuid);
+    if (hitRows.length) this.#cache.set("hitRows", new Set(hitRows));
+    const attribution = Object.fromEntries(records.filter(record => record.saveAttribution?.length)
+      .map(record => [record.uuid, attributionMap(record.saveAttribution) as AttributionMap]));
+    if (!foundry.utils.isEmpty(attribution)) this.#cache.set("saveAttribution", attribution);
+    // Rolls by the type midi tags them with
+    const rollKeys: Record<string, string> = { attack: "attackRoll", defaultDamage: "damageRolls", bonusDamage: "bonusDamageRolls", otherDamage: "otherDamageRolls", utility: "utilityRolls" };
+    for (const roll of (card.rolls ?? []) as Roll[]) {
+      // Another workflow's: not this card's own rolls
+      if (foundry.utils.getProperty(roll, `options.${MODULE_ID}.addedBy`)) continue;
+      const key = rollKeys[String(rollTypeOf(roll))];
+      if (!key) continue;
+      if (key === "attackRoll") { if (!this.#cache.has(key)) this.#cache.set(key, roll); }
+      else this.#cache.set(key, [...((this.#cache.get(key) as Roll[] | undefined) ?? []), roll]);
+    }
   }
 
-  // Persisted as uuids (or {uuid, name} pairs). Only an absent flag stays uncached, so a first write is seen.
-  tokenSet(key: string, namePairs = false): Set<Token.Implementation> {
-    if (this.#cache.has(key)) return this.#cache.get(key) as Set<Token.Implementation>;
-    const data = this.#getFlags()?.[key];
-    if (data === undefined) return new Set();
-    const tokens: Set<Token.Implementation> = new Set((data ?? [])
-      .map((entry: any) => (fromUuidSync(namePairs ? entry.uuid : entry) as TokenDocument.Implementation | undefined)?.object)
-      .filter((t: Token.Implementation | undefined): t is Token.Implementation => !!t));
-    this.#cache.set(key, tokens);
+  scalar<T>(key: StateKey | "attackRollCount" | "damageRollCount", dflt: T): T {
+    return (this.#cache.has(key) ? this.#cache.get(key) : dflt) as T;
+  }
+
+  setScalar<T>(key: StateKey | "attackRollCount" | "damageRollCount", value: T, storeAs?: (value: T) => unknown): void {
+    if (value === undefined) {
+      this.#cache.delete(key);
+      const cleared = CardStateStore.#cleared(key);
+      if (cleared !== undefined) this.#write({ [CardStateStore.#path(key)]: cleared });
+      return;
+    }
+    this.#cache.set(key, value);
+    this.#write({ [CardStateStore.#path(key)]: storeAs ? storeAs(value) : value });
+  }
+
+  /** What clears a stored value: false for a BooleanField, null for a nullable field (a non-nullable one drops null) */
+  static #cleared(key: string): false | null | undefined {
+    const path = CardStateStore.#path(key).replace(/^system\./, "");
+    const field = CONFIG.ChatMessage.dataModels?.usage?.schema?.getField(path);
+    if (field instanceof foundry.data.fields.BooleanField) return false;
+    if (field?.nullable) return null;
+    console.warn(`midi-qol | the card's ${path} can't be cleared`);
+    return undefined;
+  }
+
+  /** The workflow's tokens in set `field`: the same TokenDocumentSet each time, so changes made in place are written (syncTokenSets) */
+  tokenSet(field: RecordSet): TokenDocumentSet {
+    let tokens = this.#cache.get(field) as TokenDocumentSet | undefined;
+    if (!tokens) this.#cache.set(field, tokens = new TokenDocumentSet());
     return tokens;
   }
 
-  setTokenSet(key: string, tokens: Set<TokenOrDocument> | undefined, namePairs = false): void {
-    if (tokens === undefined) this.#cache.delete(key);
-    else this.#cache.set(key, new Set(Array.from(tokens).map(t => t instanceof TokenDocument ? t.object : t).filter(t => !!t)));
-    const targetDocuments = Array.from(tokens ?? []).map(t => getTokenDocument(t)).filter((t): t is TokenDocument.Implementation => !!t);
-    this.#persist({ [key]: targetDocuments.map(t => namePairs ? { uuid: t.uuid, name: t.name } : t.uuid) });
+  setTokenSet(field: RecordSet, tokens: Set<TokenOrDocument> | undefined, store = true): void {
+    if (tokens === undefined) this.#cache.delete(field);
+    // syncTokenSets passes the cached set itself: kept, so references to it stay the workflow's; another TokenDocumentSet is
+    // copied with its members not drawn
+    else if (tokens !== this.#cache.get(field)) this.#cache.set(field, new TokenDocumentSet(tokens as Iterable<Token.Implementation | TokenDocument.Implementation>));
+    if (!store) {
+      this.#unstoredSets.add(field);
+      return;
+    }
+    this.#unstoredSets.delete(field);
+    const members = new Set(this.tokenSet(field).documents);
+    // Compared with what was last written, not the cached set: callers change that in place before assigning it
+    const written = `written.${field}`;
+    const before = (this.#cache.get(written) as Set<string> | undefined) ?? new Set<string>();
+    const leaves: Record<string, unknown> = {};
+    const mark = (document: TokenDocument.Implementation, value: boolean) => {
+      const at = recordPath(document);
+      if (!at) return;
+      // A record is created whole, so it always gets its uuid
+      Object.assign(leaves, { [`${at}.uuid`]: document.uuid, [`${at}.${field}`]: value });
+    };
+    for (const document of members) mark(document, true);
+    for (const uuid of before) {
+      const document = fromUuidSync(uuid);
+      if (document instanceof TokenDocument && !members.has(document)) mark(document, false);
+    }
+    // As syncTokenSets compares (the set's uuids): midi's stand-in for an actor with no token has none and no record
+    this.#cache.set(written, new Set(this.tokenSet(field).uuids));
+    this.#write(leaves);
   }
 
-  // Roll.fromData redirects to the subclass named in data.class; unregistered classes fall back to raw data.
-  #rollFromData(data: any): Roll {
-    if (data instanceof Roll) return data;
-    try {
-      return Roll.fromData(data) as Roll;
-    } catch (err) {
-      TroubleShooter.recordError(err, `PersistedFieldStore | could not rehydrate roll ${data?.class}`);
-      return data as Roll; // deliberate: hand back the raw data rather than losing the field
+  // Sets last assigned as not stored (failed saves of a use with no save)
+  #unstoredSets = new Set<RecordSet>();
+
+  /**
+   * The sets as they are now, written where they differ from what was last written: macros change them in place
+   * (`workflow.saves.add(token)`), which no setter sees. Before each card write (Workflow#flushCardWrites).
+   */
+  syncTokenSets(): void {
+    for (const field of Object.keys(RECORD_SETS) as RecordSet[]) {
+      if (this.#unstoredSets.has(field)) continue;
+      const current = this.#cache.get(field) as TokenDocumentSet | undefined;
+      const now = new Set(current?.uuids ?? []);
+      const written = (this.#cache.get(`written.${field}`) as Set<string> | undefined) ?? new Set<string>();
+      if (now.size !== written.size || [...now].some(uuid => !written.has(uuid))) this.setTokenSet(field, current);
     }
   }
 
+  setClass(name: string): void {
+    if (this.#cache.get("workflowClass") === name) return;
+    this.#cache.set("workflowClass", name);
+    this.#write({ "system.midi.state.workflowClass": name });
+  }
+
+  /** The records' save attribution, keyed by token uuid as the workflow uses it */
+  saveAttribution(): Record<string, AttributionMap> {
+    return (this.#cache.get("saveAttribution") as Record<string, AttributionMap> | undefined) ?? {};
+  }
+
+  setSaveAttribution(attribution: Record<string, AttributionMap>): void {
+    this.#cache.set("saveAttribution", attribution);
+    for (const [uuid, map] of Object.entries(attribution)) {
+      const document = fromUuidSync(uuid);
+      if (document instanceof TokenDocument) this.setRecordFacts(document, { saveAttribution: attributionTriples(map) });
+    }
+  }
+
+  /** The hits rows: each token's row facts; a token whose row went (a re-rolled attack) has its row cleared */
+  setHitRows(rows: [TokenDocument.Implementation, RecordFacts][]): void {
+    const shown = new Set(rows.map(([document]) => document.uuid));
+    const before = (this.#cache.get("hitRows") as Set<string> | undefined) ?? new Set();
+    for (const uuid of before) {
+      const document = fromUuidSync(uuid);
+      if (!shown.has(uuid) && document instanceof TokenDocument) this.setRecordFacts(document, { hitClass: null });
+    }
+    // A null clears a value a previous row had; a new row needs none
+    for (const [document, facts] of rows)
+      this.setRecordFacts(document, before.has(document.uuid) ? facts : Object.fromEntries(Object.entries(facts).filter(([, v]) => v !== null)));
+    this.#cache.set("hitRows", shown);
+  }
+
+  /** A per-token value on the records for the tokens given, cleared from tokens that had one */
+  setRecordValues(field: typeof RECORD_VALUES[number], values: Map<TokenDocument.Implementation, true | number>): void {
+    const key = `recordValues.${field}`;
+    const before = (this.#cache.get(key) as Set<string> | undefined) ?? new Set();
+    const now = new Set<string>();
+    for (const [document, value] of values) {
+      now.add(document.uuid);
+      this.setRecordFacts(document, { [field]: value });
+    }
+    for (const uuid of before) {
+      const document = fromUuidSync(uuid);
+      if (!now.has(uuid) && document instanceof TokenDocument) this.setRecordFacts(document, { [field]: field === "preSelected" ? null : false });
+    }
+    this.#cache.set(key, now);
+  }
+
+  /** The damage tray's matches: the matched tokens flagged in the records, and the state marked as worked out */
+  setDamageMatches(kind: "otherDamage" | "ammunitionDamage", matches: TokenDocumentSet | undefined): void {
+    this.#write({ [`system.midi.state.${kind}Matched`]: !!matches });
+    const documents = matches?.documents ?? [];
+    this.setRecordValues(kind, new Map(documents.map(document => [document, true as const])));
+  }
+
+  /** The workflow's options, stored as `stored` gives them; the pre-selected targets go in the records */
+  setWorkflowOptions(options: WorkflowOptions, stored: (options: WorkflowOptions) => WorkflowOptions): void {
+    const { preSelectedTargetUuids, ...rest } = stored(options) as WorkflowOptions & { preSelectedTargetUuids?: string[] };
+    // What survives JSON: the use's event as the keys it held; documents and Sets are per-use state
+    const event = rest.event instanceof Event ? eventModifiers(rest.event) : rest.event;
+    this.setScalar("workflowOptions", options, () => jsonSafe({ ...rest, event }) ?? {});
+    const documents = (preSelectedTargetUuids ?? []).map(uuid => fromUuidSync(uuid)).filter((d): d is TokenDocument.Implementation => d instanceof TokenDocument);
+    this.setRecordValues("preSelected", new Map(documents.map((document, index) => [document, index + 1])));
+  }
+
+  /** A token's facts on the card besides its sets: its save row (UsageCardMessage), the damage tray's detail */
+  setRecordFacts(document: TokenDocument.Implementation, facts: RecordFacts): void {
+    if (!document.id) return;
+    if ("saveAttribution" in facts) {
+      const attribution = { ...this.saveAttribution() };
+      if (facts.saveAttribution?.length) attribution[document.uuid] = attributionMap(facts.saveAttribution) as AttributionMap;
+      else delete attribution[document.uuid];
+      this.#cache.set("saveAttribution", attribution);
+    }
+    const at = recordPath(document);
+    if (!at) return;
+    const leaves: Record<string, unknown> = { [`${at}.uuid`]: document.uuid };
+    for (const [key, value] of Object.entries(facts)) if (value !== undefined) leaves[`${at}.${key}`] = value;
+    this.#write(leaves);
+  }
+
+  /** Rolls are written as the card's `message.rolls` */
   roll(key: string): Roll | undefined {
-    if (this.#cache.has(key)) return this.#cache.get(key) as Roll;
-    const data = this.#getFlags()?.[key];
-    if (data) {
-      const roll = this.#rollFromData(data);
-      this.#cache.set(key, roll);
-      return roll;
-    }
-    return undefined;
+    return this.#cache.get(key) as Roll | undefined;
   }
 
-  /** `derived` rolls skip the flags - they are in message.rolls and prepareDerivedData rebuilds the flag. */
-  setRoll(key: string, roll: Roll | undefined, derived = false): void {
+  setRoll(key: string, roll: Roll | undefined): void {
     if (roll === undefined) this.#cache.delete(key);
     else this.#cache.set(key, roll);
-    if (derived) this.#persistRolls();
-    else this.#forcePersist({ [key]: roll?.toJSON() ?? null });
+    this.#persistRolls();
   }
 
   rolls(key: string): Roll[] | undefined {
-    if (this.#cache.has(key)) return this.#cache.get(key) as Roll[];
-    const data = this.#getFlags()?.[key];
-    if (data?.length) {
-      const rolls = data.map((r: any) => this.#rollFromData(r));
-      this.#cache.set(key, rolls);
-      return rolls;
-    }
-    return undefined;
+    return this.#cache.get(key) as Roll[] | undefined;
   }
 
-  setRolls(key: string, rolls: Roll[] | undefined, derived = false): void {
+  setRolls(key: string, rolls: Roll[] | undefined): void {
     if (rolls === undefined) this.#cache.delete(key);
     else this.#cache.set(key, rolls);
-    if (derived) this.#persistRolls();
-    else this.#forcePersist({ [key]: rolls?.map(r => r.toJSON()) ?? [] });
-  }
-
-  damageDetail(key: string): DamageDescription[] {
-    if (this.#cache.has(key)) return this.#cache.get(key) as DamageDescription[];
-    const data = this.#getFlags()?.[key];
-    if (data?.length) {
-      const detail = damageDetailsFromObject(data as unknown as DamageDescriptionObject[]);
-      this.#cache.set(key, detail);
-      return detail;
-    }
-    return [];
-  }
-
-  setDamageDetail(key: string, detail: DamageDescription[]): void {
-    if (detail === undefined) this.#cache.delete(key);
-    else this.#cache.set(key, detail);
-    this.#persist({ [key]: damageDetailToObject(detail) });
+    this.#persistRolls();
   }
 }
 
+/** A reason shown on the attack roll: a bonus part (value) or the source of advantage. */
+export interface AttackModifier { kind: "flanking" | "flanked" | "granted", label: string, value?: string, advantage?: boolean }
+
 export class Workflow {
-  public static WorkflowDataFlags = WorkflowDataFlags;
 
   static get forceCreate(): boolean { return true };
 
+  // Finished workflows (and all of them with Use Weak References) are filed as WeakRefs
   static #workflows: Map<string, WeakRef<Workflow> | Workflow> = new Map();
-  static get workflows() {
-    return Workflow.#workflows
+
+  /** The workflows in memory, by id: a new Map on each read (one that has been collected is rebuilt by getWorkflow) */
+  static get workflows(): Map<string, Workflow> {
+    const live = new WorkflowsCopy();
+    for (const [id, entry] of Workflow.#workflows) {
+      const workflow = entry instanceof WeakRef ? entry.deref() : entry;
+      if (workflow) live.set(id, workflow);
+    }
+    return live.filled();
   }
-  static set workflows(workflows: Map<string, WeakRef<Workflow> | Workflow>) {
-    Workflow.#workflows = workflows;
+
+  /** Whether a workflow is filed weakly (finished, or Use Weak References), for tests */
+  static heldWeakly(id: string): boolean {
+    return Workflow.#workflows.get(id) instanceof WeakRef;
   }
 
   static clearWorkflows() {
-    Workflow.workflows = new Map();
+    Workflow.#workflows = new Map();
   }
-  static addWorkflow(workflow: Workflow) {
-    if (Workflow.workflows.has(workflow.id)) console.warn("midi-qol | addWorkflow | Workflow already exists", workflow.id);
-    if (Workflow.workflows.has(workflow.id)) Workflow.removeWorkflow(workflow.id);
-    if (useWeakReferences) Workflow.workflows.set(workflow.id, new WeakRef(workflow));
-    else Workflow.workflows.set(workflow.id, workflow);
-  }
-  static getWorkflow(id?: string): Workflow | undefined {
-    if (debugEnabled > 0) warn("Get workflow ", id, Workflow.workflows, Workflow.workflows.get(id ?? ""))
-    if (debugEnabled > 1) debug("Get workflow ", id, Workflow.workflows, Workflow.workflows.get(id ?? ""))
-    if (!id) return;
-    let workflow = Workflow.workflows.get(id);
-    if (workflow instanceof WeakRef) {
-      if (!workflow?.deref()) {
-        console.warn("Weak Reference to workflow is not dereferenced", id);
-        const _workflow = Workflow.fromChatCardUuid(id);
-        if (_workflow) {
-          workflow = new WeakRef(_workflow);
-          Workflow.workflows.set(id, workflow);
-        }
-        return _workflow;
-      }
-      return workflow.deref();
-    } else if (workflow) return workflow;
-    const chatCard = fromUuidSync(id);
-    if (chatCard instanceof ChatMessage && saveToChatCard) {
-      workflow = Workflow.fromChatCardUuid(id);
-      if (workflow) Workflow.workflows.set(id, workflow);
-      return workflow;
-    }
-    // TODO see if the ChatMessage exists and reconstruct the workflow from that.
-    // try fetching via ActivityUuid
-    return this.getWorkflowByActivityUuid(id);
+  // Workflows ended this session (removeWorkflow): never rebuilt from their cards
+  static #ended = new Set<string>();
+
+  /**
+   * File a finished workflow weakly: an unfinished one is held, so what macros keep on it between passes survives; a
+   * finished one is rarely looked up again and is rebuilt from its card if it has been collected (getWorkflow).
+   */
+  static #fileFinished(workflow: Workflow) {
+    const id = workflow.id;
+    if (id && Workflow.#workflows.get(id) === workflow) Workflow.#workflows.set(id, new WeakRef(workflow));
   }
 
-  static getWorkflowByActivityUuid(activityUuid?: string): Workflow | undefined {
-    if (!activityUuid) return;
-    // Direct map lookup — the workflow is keyed by activity.uuid until the chat card is
-    // created, at which point the activity.uuid entry is deleted and replaced by the
-    // chatMessage.uuid entry. A direct get() avoids finding stale re-keyed workflows.
-    // Use workflows.get() directly (not getWorkflow()) to avoid infinite recursion,
-    // since getWorkflow() falls back to getWorkflowByActivityUuid().
-    const entry = Workflow.workflows.get(activityUuid);
-    let returnValue: Workflow | undefined;
-    if (entry instanceof WeakRef) {
-      returnValue = entry.deref();
-    } else {
-      returnValue = entry;
+  /** A finished workflow running again (a re-roll): held until it finishes, unless every workflow is held weakly */
+  static #holdRunning(workflow: Workflow) {
+    const id = workflow.id;
+    if (!useWeakReferences && id && Workflow.#workflows.get(id) instanceof WeakRef) Workflow.#workflows.set(id, workflow);
+  }
+
+  static addWorkflow(workflow: Workflow) {
+    if (!workflow.id) return;
+    // A collected entry is just replaced; another live workflow under the id is removed first
+    const entry = Workflow.#workflows.get(workflow.id);
+    const existing = entry instanceof WeakRef ? entry.deref() : entry;
+    if (existing && existing !== workflow) {
+      console.warn("midi-qol | addWorkflow | Workflow already exists", workflow.id);
+      Workflow.removeWorkflow(workflow.id);
     }
-    if (debugEnabled > 0) warn(`Fetching workflow by activity uuid ${activityUuid} workflowId: ${returnValue?.id}`);
-    return returnValue;
+    // After the removal, which ends the id
+    Workflow.#ended.delete(workflow.id);
+    if (useWeakReferences) Workflow.#workflows.set(workflow.id, new WeakRef(workflow));
+    else Workflow.#workflows.set(workflow.id, workflow);
+  }
+  // Each use's workflow by its activity: the copy midi's use() makes and dnd5e's scaled copy, both for that use alone
+  static #uses = new WeakMap<object, Workflow>();
+  static setUse(activity: Activity, workflow: Workflow) { Workflow.#uses.set(activity, workflow); }
+  /**
+   * The workflow of the use `activity` belongs to: the activity a use's hooks and macros are given (midi's or dnd5e's
+   * copy for that use). For a use before its card exists, on the client running it; after that, getWorkflow(cardUuid).
+   */
+  static workflowFor(activity: Activity | undefined | null): Workflow | undefined { return activity ? Workflow.#uses.get(activity) : undefined; }
+  /** The use a template of `activity` is placed for: its workflow's id (its card's uuid) and card */
+  static templateWorkflowFlags(activity: Activity): { workflowId?: string, itemCardUuid?: string } {
+    const workflow = Workflow.workflowFor(activity);
+    return { workflowId: workflow?.itemCardUuid ? workflow.id : undefined, itemCardUuid: workflow?.itemCardUuid };
+  }
+
+  /** The item's workflow that is executing now (a macro inside its use), the most recently filed if several */
+  static runningFor(item: Item.Implementation): Workflow | undefined {
+    let found: Workflow | undefined;
+    for (const entry of Workflow.#workflows.values()) {
+      const workflow = entry instanceof WeakRef ? entry.deref() : entry;
+      if (workflow?.executingStates && workflow.item?.uuid === item.uuid) found = workflow;
+    }
+    return found;
+  }
+
+  /**
+   * The usage card of the actor's workflow that is executing now, if any: an item use started from inside it (a macro
+   * spending a resource item, a triggered activity) belongs to that card. The most recently added one wins.
+   */
+  static executingCardFor(actor: Actor.Implementation): ChatMessage.Implementation | undefined {
+    let parent: Workflow | undefined;
+    for (const entry of Workflow.#workflows.values()) {
+      const workflow = entry instanceof WeakRef ? entry.deref() : entry;
+      if (!workflow?.executingStates || workflow.suspended || !workflow.itemCardUuid) continue;
+      if (workflow.actor?.uuid === actor.uuid) parent = workflow;
+    }
+    return parent ? fromUuidSync(parent.itemCardUuid!) as ChatMessage.Implementation | undefined : undefined;
+  }
+
+  /**
+   * Delete an aborted workflow's card. Usage cards of other workflows linked to it (a nested use that is the real
+   * result, e.g. CPR's grapple handing off to CAT) are moved to the card's own origin first, so they survive the
+   * linked-card cascade.
+   */
+  static async deleteAbortedCard(card: ChatMessage.Implementation | undefined): Promise<void> {
+    if (!card) return;
+    const origin = (card._source.system as { origin?: string | null } | undefined)?.origin ?? null;
+    const nested = messagesFrom(card.id!, USAGE_MESSAGE_TYPE).filter(m => m.id !== card.id && m.canUserModify(game.user!, "update"));
+    const path: string = "system.origin";
+    if (nested.length) await ChatMessage.updateDocuments(nested.map(m => ({ _id: m.id, [path]: origin })));
+    await deleteCardAfterWrites(card.uuid, () => card.delete());
+  }
+
+  /** Count the workflow as executing while `fn` runs: a roll from a card button happens outside performState. */
+  async whileExecuting<T>(fn: () => Promise<T>): Promise<T> {
+    this.executingStates += 1;
+    try {
+      return await fn();
+    } finally {
+      this.executingStates -= 1;
+    }
+  }
+
+  // Read-only copies of other users' workflows (getWorkflow), dropped when their card changes
+  static #readOnlyCopies = new Map<string, WeakRef<Workflow>>();
+  static dropReadOnlyCopy(id: string) {
+    Workflow.#readOnlyCopies.delete(id);
+  }
+
+  /**
+   * The workflow of a card: the one in memory, for any user. Otherwise for the card's author the live workflow rebuilt
+   * from the card; for another user a read-only copy rebuilt from the card: it does not run or write, and is never
+   * updated: when the card changes it is discarded, and the next call builds a new one. With `readOnly` false another
+   * user gets a live rebuild, which runs and writes the card alongside the author's (warned). A use before its card
+   * exists: Workflow.workflowFor(activity).
+   */
+  static getWorkflow(id?: string, readOnly = true): Workflow | undefined {
+    const workflow = Workflow.findWorkflow(id);
+    if (workflow || !id) return workflow;
+    if (/\.Activity\.[^.]+$/.test(id)) {
+      foundry.utils.logCompatibilityWarning("midi-qol | Workflow.getWorkflow is given a card's uuid; an activity's finds nothing: use MidiQOL.Workflow.workflowFor(activity) during a use, MidiQOL.Workflow.getWorkflow(cardUuid) once its card exists.", { since: "14.6.9", until: "14.8.0", once: true });
+      return undefined;
+    }
+    const card = fromUuidSync(id);
+    if (!(card instanceof ChatMessage) || card.author === game.user) return undefined;
+    if (!readOnly) {
+      const live = Workflow.#rebuild(id, { anyAuthor: true });
+      if (live) console.warn(`midi-qol | getWorkflow | ${live.workflowName}: a live copy of ${card.author?.name ?? "another user"}'s workflow. It runs and writes the card as the author's does; if theirs is running too, both apply their changes, rolls, damage and effects. Use getWorkflow(uuid) for a read-only copy.`);
+      return live;
+    }
+    return Workflow.cardView(id);
+  }
+
+  /** A card's workflow to read: the one in memory, else a read-only copy (whoever the author, ended or not) */
+  static cardView(id: string): Workflow | undefined {
+    const entry = Workflow.#workflows.get(id);
+    const live = entry instanceof WeakRef ? entry.deref() : entry;
+    if (live) return live;
+    const held = Workflow.#readOnlyCopies.get(id)?.deref();
+    if (held) return held;
+    const copy = Workflow.fromChatCardUuid(id, { readOnly: true });
+    if (copy) Workflow.#readOnlyCopies.set(id, new WeakRef(copy));
+    return copy;
+  }
+
+  /**
+   * The workflow a card's damage button rolls for: the one in memory, else for a completed use a read-only copy (its
+   * re-roll reads it). False while that workflow is running, after saying so.
+   */
+  static forDamageButton(message: ChatMessage.Implementation | undefined): Workflow | undefined | false {
+    if (!message) return undefined;
+    const workflow = Workflow.findWorkflow(message.uuid)
+      ?? (Workflow.cardResumePoint(message) === "WorkflowState_Completed" ? Workflow.cardView(message.uuid) : undefined);
+    if (workflow && !workflow.readOnly && !workflow.suspended) {
+      ui.notifications?.warn(i18nFormat("midi-qol.WorkflowRunning", { name: workflow.item?.name ?? "" }));
+      return false;
+    }
+    return workflow;
+  }
+
+  /**
+   * Damage rolled again for a completed use, as dnd5e rolls another damage message: a damage-only workflow on its own
+   * card, with the use's targets, hits and saves, and its own undo; the use and its card are left as they are.
+   */
+  static async rerollDamage(first: Workflow, activity: Activity, config: Record<string, any>, dialog: Record<string, any>, message: Record<string, any>) {
+    const source = first.chatCard?.toObject() as Record<string, any> | undefined;
+    if (!source) return;
+    // The card as the use made it (its buttons, sources and other modules' flags), without the use's results; the roller's
+    const { _id, timestamp, _stats, author, ...data } = source;
+    data.rolls = [];
+    const midi = data.system?.midi ?? {};
+    for (const key of ["state", "records", "sections", "progress", "attackRollCount", "damageRollCount", "followUps"]) delete midi[key];
+    // The use's consumption and concentration stay the use's: the re-roll's Refund would refund them again
+    if (data.system) for (const key of ["deltas", "concentration"]) delete data.system[key];
+    const workflow = new Workflow(first.actor, activity, first.speaker, new TokenDocumentSet(first.targets),
+      { workflowOptions: { ...first.workflowOptions }, event: config.event, storeWorkflow: false });
+    const card = await CONFIG.ChatMessage.documentClass.create(data as ChatMessage.CreateData);
+    if (!card) return;
+    workflow.id = card.uuid;
+    workflow.itemCardUuid = card.uuid;
+    workflow.damageOnly = true;
+    workflow.hitTargets = new TokenDocumentSet(first.hitTargets);
+    workflow.hitTargetsEC = new TokenDocumentSet(first.hitTargetsEC);
+    workflow.saves = new TokenDocumentSet(first.saves);
+    workflow.failedSaves = new TokenDocumentSet(first.failedSaves);
+    workflow.superSavers = new TokenDocumentSet(first.superSavers);
+    workflow.semiSuperSavers = new TokenDocumentSet(first.semiSuperSavers);
+    workflow.criticalSaves = new TokenDocumentSet(first.criticalSaves);
+    workflow.fumbleSaves = new TokenDocumentSet(first.fumbleSaves);
+    workflow.isCritical = first.isCritical;
+    Workflow.addWorkflow(workflow);
+    if (configSettings.undoWorkflow) await saveUndoData(workflow);
+    workflow.currentAction = workflow.WorkflowState_WaitForDamageRoll;
+    workflow.suspended = true;
+    return activity.rollDamage({ ...config, workflow }, dialog, message);
+  }
+
+  /** midi's own lookup: the workflow in memory, or rebuilt from its card for the card's author; never a read-only copy */
+  static findWorkflow(id?: string): Workflow | undefined {
+    if (debugEnabled > 0) warn("Get workflow ", id, Workflow.#workflows.get(id ?? ""))
+    if (debugEnabled > 1) debug("Get workflow ", id, Workflow.#workflows.get(id ?? ""))
+    if (!id) return;
+    const entry = Workflow.#workflows.get(id);
+    const live = entry instanceof WeakRef ? entry.deref() : entry;
+    if (live) return live;
+    // Rebuilt from its card once, also after its weak entry was collected: filed under the card, so later calls find it
+    if (fromUuidSync(id) instanceof ChatMessage) return Workflow.#rebuild(id);
+    return undefined;
+  }
+
+  static #rebuild(id: string, options: { anyAuthor?: boolean } = {}): Workflow | undefined {
+    const rebuilt = Workflow.fromChatCardUuid(id, options);
+    if (!rebuilt) return undefined;
+    Workflow.addWorkflow(rebuilt);
+    if (rebuilt.currentAction === rebuilt.WorkflowState_Completed) Workflow.#fileFinished(rebuilt);
+    return rebuilt;
+  }
+
+  /** @deprecated workflows are not found by activity uuid: Workflow.workflowFor(activity) during a use, getWorkflow(cardUuid) after */
+  static getWorkflowByActivityUuid(_activityUuid?: string): Workflow | undefined {
+    foundry.utils.logCompatibilityWarning("midi-qol | Workflow.getWorkflowByActivityUuid is deprecated and finds nothing: use MidiQOL.Workflow.workflowFor(activity) during a use, MidiQOL.Workflow.getWorkflow(cardUuid) once its card exists.", { since: "14.6.9", until: "14.8.0", once: true });
+    return undefined;
   }
   static deleteWorkflow(id: string) {
-    Workflow.workflows.delete(id);
-  }
-
-  static fromChatCardUuid(chatCardUuid: string): Workflow | undefined {
-    return new Workflow(null, null, null, null, { chatCardUuid });
-  }
-
-  async performThrottledUpdate(chatCard: ChatMessage.Implementation, updates: ChatMessage.UpdateData, immediate = false) {
-    return await throttledUpdate(chatCard, updates, this.throttleChatMessageUpdates, immediate);
-  }
-
-  itemCardUuid: string | undefined;
-
-  /**
-   * Direct access to chat card's midi-qol flags (no intermediate store).
-   * Returns undefined when there is no chat card.
-   */
-  private get midiFlags(): Record<string, any> | undefined {
-    return this.chatCard?.flags?.[MODULE_ID];
+    Workflow.#workflows.delete(id);
   }
 
   /**
-   * Persist field updates to the chat card flag cache.
+   * The workflow of a card, rebuilt from it after a reload. Only for the card's author, whose client ran the workflow
+   * (elsewhere it would be a second copy of one still running), unless `readOnly` (a copy that does not run or write) or
+   * `anyAuthor` (a live second copy: getWorkflow warns). Never one removed this session. Only workflow classes built like
+   * Workflow itself.
    */
-  private persistFields(updates: Record<string, unknown>): void {
-    if (this.itemCardUuid && saveToChatCard) {
-      addUpdatesCacheFlags(this.id, updates, "midi-qol");
+  static fromChatCardUuid(chatCardUuid: string, options: { readOnly?: boolean, anyAuthor?: boolean } = {}): Workflow | undefined {
+    const card = fromUuidSync(chatCardUuid);
+    const author = card instanceof ChatMessage && (card.author === game.user || options.readOnly || options.anyAuthor);
+    if (!author || (!options.readOnly && Workflow.#ended.has(chatCardUuid))) return undefined;
+    const className: string | undefined = cardMidi(card).state?.workflowClass;
+    const WorkflowClass = className ? RESTORABLE_WORKFLOWS[className] : undefined;
+    if (!WorkflowClass) return undefined;
+    // A card that failed is retried only once it has changed
+    const modified = card._stats.modifiedTime ?? 0;
+    if (Workflow.#unrestorable.get(chatCardUuid) === modified) return undefined;
+    try {
+      const workflow = new WorkflowClass(null, null, null, null, { chatCardUuid, readOnly: options.readOnly });
+      // For what isn't item or activity data (the card keeps those): a module's own state, from its own flags
+      Hooks.callAll("midi-qol.workflowRebuilt", workflow, card, { readOnly: !!options.readOnly });
+      return workflow;
+    } catch (err) {
+      Workflow.#unrestorable.set(chatCardUuid, modified);
+      TroubleShooter.recordError(err, `fromChatCardUuid | could not restore the workflow of ${chatCardUuid}`);
+      return undefined;
     }
   }
+  static #unrestorable = new Map<string, number>();
 
-  /**
-   * Persist roll data to the chat card flags unconditionally (regardless of saveToChatCard).
-   * ChatMessageMidi.prepareDerivedData() deserializes these flags into Roll instances.
-   */
-  private forcePersistFields(updates: Record<string, unknown>): void {
-    if (this.itemCardUuid) {
-      addUpdatesCacheFlags(this.id, updates, "midi-qol");
+  // While a state runs its card changes are queued and written at milestones (MILESTONE_STATES, a reaction prompt, a
+  // wait) or, with Chat card updates "At every step", after each step that changed the card. `workflow.chatCard`
+  // includes queued changes.
+  #queueingWrites = 0;
+  #displayQueued = false;
+
+  async performThrottledUpdate(chatCard: ChatMessage.Implementation, updates: ChatMessage.UpdateData) {
+    if (this.readOnly) return;
+    if (this.#queueingWrites && chatCard?.uuid === this.itemCardUuid) {
+      this.#displayQueued = true;
+      return queueUpdate(chatCard, updates);
     }
+    return await throttledUpdate(chatCard, updates);
+  }
+
+  /** Write the card's queued changes: `displayOnly` when a state ends (only if it changed what the card shows) */
+  /** What the use changed in its item and activity (a macro's modified copy), on the card for a rebuilt workflow */
+  #syncUseChanges() {
+    const card = this.#ownCard();
+    if (!card || !this.#item || !this.#activity) return;
+    const json = useChangesJson(card, this.#item, this.#activity);
+    if (json !== this.#persisted.scalar<string | undefined>("useChanges", undefined)) this.#persisted.setScalar("useChanges", json);
+  }
+
+  async flushCardWrites(displayOnly = false): Promise<void> {
+    if (this.readOnly) return;
+    if (displayOnly && !this.#displayQueued) return;
+    this.#displayQueued = false;
+    this.#syncWorkflowOptions();
+    this.#persisted.syncTokenSets();
+    this.#syncUseChanges();
+    const card = this.itemCardUuid ? fromUuidSync(this.itemCardUuid) as ChatMessage.Implementation | null : null;
+    if (card && !foundry.utils.isEmpty(getUpdatesCache(card.uuid))) await throttledUpdate(card, {});
+  }
+
+
+  /** Write one section of the card (system.midi.sections), with the workflow's rolls */
+  async setCardSection(
+    name: SectionName,
+    section: MidiCardSection,
+    extraUpdates: Record<string, unknown> = {}
+  ): Promise<void> {
+    const chatCard = this.chatCard;
+    if (!chatCard) return;
+    this.#persistRolls();
+    await this.performThrottledUpdate(chatCard, this.#sectionsUpdate({ [name]: section }, extraUpdates));
+  }
+
+  #itemCardUuid: string | undefined;
+  get itemCardUuid(): string | undefined { return this.#itemCardUuid; }
+  set itemCardUuid(uuid: string | undefined) {
+    this.#itemCardUuid = uuid;
+    this.#storeUnstored();
+  }
+
+  /** A copy of another user's workflow (getWorkflow): it does not run or write the card */
+  readOnly = false;
+
+  /** A workflow keeps its state on its own card, the one it is registered under; never on another workflow's card */
+  get ownsCard(): boolean {
+    return !!this.itemCardUuid && this.itemCardUuid === this.id;
+  }
+
+  // Written before the workflow has its card; stored when it gets it
+  #unstored: Record<string, unknown> = {};
+
+  /** By path; queued in the card's update cache: written with its next (throttled) update, never on its own */
+  #persistFields(updates: Record<string, unknown>): void {
+    if (this.ownsCard) this.#cacheCardUpdates(updates);
+    else Object.assign(this.#unstored, updates);
+  }
+
+  #storeUnstored() {
+    if (!this.ownsCard || foundry.utils.isEmpty(this.#unstored)) return;
+    this.#cacheCardUpdates(this.#unstored);
+    this.#unstored = {};
+  }
+
+  /** The workflow's own card with its queued changes: what a rebuilt workflow reads its state from */
+  #ownCard(): ChatMessage.Implementation | undefined {
+    return this.ownsCard ? getCachedDocument(this.itemCardUuid) : undefined;
   }
 
   /**
-   * Rolls persist to `message.rolls`, never to the flags — ChatMessageMidi.prepareDerivedData puts
-   * them back on the flags when the message is prepared. Written unconditionally, like the flags
-   * they replace, so `workflow.attackRoll` survives a reload with saveToChatCard off.
+   * The card's `rolls`: every roll the workflow holds (chatRolls), the only writer of them. Called by the store when a roll
+   * is set and by each display, which also covers rolls changed in place (attribution) and save rolls.
    */
-  private persistRolls(): void {
-    if (this.itemCardUuid) addUpdatesCache(this.id, { rolls: this.chatRolls });
+  #persistRolls(): void {
+    if (!this.ownsCard) return;
+    // Rolls another workflow added (a damage-only workflow's) stay theirs
+    const added = ((getCachedDocument(this.itemCardUuid)?.rolls ?? []) as Roll[]).filter(roll => addedByOther(roll, this.id ?? ""));
+    this.#cacheCardUpdates({ rolls: [...this.chatRolls, ...added] });
   }
 
-  #persisted = new PersistedFieldStore({
-    getFlags: () => this.midiFlags,
-    persist: updates => this.persistFields(updates),
-    forcePersist: updates => this.forcePersistFields(updates),
-    persistRolls: () => this.persistRolls()
-  });
+  /** Queued for the card's next write; a read-only copy queues nothing (the queue is the card's, not the workflow's) */
+  #cacheCardUpdates(updates: Record<string, unknown>) {
+    if (!this.readOnly) addUpdatesCache(this.id, updates);
+  }
+
+  #persisted = new CardStateStore(updates => this.#persistFields(updates), () => this.#persistRolls());
 
   get useActiveDefence() { return false; }
   get actor(): Actor.Implementation {
     return this.activity?.actor!;
   }
 
-  get abort() { return this.#persisted.scalar("abort", false, "aborted"); }
-  set abort(abort: boolean | undefined) { this.#persisted.setScalar("abort", !!abort); }
+  abort: boolean | undefined = false;
 
-  get itemUseComplete() { return this.#persisted.scalar("itemUseComplete", false); }
-  set itemUseComplete(itemUseComplete: boolean | undefined) { this.#persisted.setScalar("itemUseComplete", !!itemUseComplete); }
+  itemUseComplete: boolean | undefined = false;
 
-  #token: Token.Implementation | undefined;
-  get token(): Token.Implementation | undefined {
-    if (this.#token) return this.#token;
-    const uuid = this.midiFlags?.attackingTokenUuid;
-    if (uuid) {
-      this.#token = getToken(uuid);
-    }
-    return this.#token;
-  }
-  set token(token: Token.Implementation | undefined) {
-    this.#token = token;
-    this.persistFields({ attackingTokenUuid: token?.document?.uuid ?? "" });
-  }
+  // Not stored: a rebuilt workflow takes its card's speaker's token (#restoreFromCard)
+  token: Token.Implementation | undefined;
 
   get workflowOptions(): WorkflowOptions {
     return this.#persisted.scalar<WorkflowOptions>("workflowOptions", {});
   }
+  // Stored as #mergeWorkflowOptions stores them: the caller's options, with what this assignment changes from the merged ones
   set workflowOptions(workflowOptions: WorkflowOptions) {
-    this.#persisted.setScalar("workflowOptions", workflowOptions);
+    this.#callerOptions = { ...this.#callerOptions, ...foundry.utils.diffObject(this.#mergedOptions, workflowOptions) };
+    this.#mergedOptions = foundry.utils.deepClone(workflowOptions);
+    const callerOptions = this.#callerOptions;
+    this.#persisted.setWorkflowOptions(workflowOptions, () => encodeWorkflowOptions(callerOptions));
   }
+  #callerOptions: WorkflowOptions = {};
+  /**
+   * Changes made in place (midi's ignoreUserTargets, macros) added to what the card stores. Only values that survive JSON:
+   * the rest (CAT's activity, the use's event, Sets) is per-use state, never stored.
+   */
+  #syncWorkflowOptions() {
+    const changed = jsonSafe(foundry.utils.diffObject(this.#mergedOptions, this.workflowOptions)) as WorkflowOptions | undefined;
+    this.#mergedOptions = foundry.utils.deepClone(this.workflowOptions);
+    if (!changed || foundry.utils.isEmpty(changed)) return;
+    this.#callerOptions = foundry.utils.mergeObject(foundry.utils.deepClone(this.#callerOptions), changed) as WorkflowOptions;
+    const callerOptions = this.#callerOptions;
+    this.#persisted.setWorkflowOptions(this.workflowOptions, () => encodeWorkflowOptions(callerOptions));
+  }
+  // As last merged or assigned: a change made in place since is found by comparing with it
+  #mergedOptions: WorkflowOptions = {};
 
   get needItemCard(): boolean { return !!this.itemCardUuid };
 
   #activity: Activity | undefined;
   get activity(): Activity {
-    if (this.#activity) return this.#activity;
-
-    // Use dnd5e's chat card methods — handles both regular and synthetic items
-    if (this.chatCard) {
-      // @ts-expect-error no dnd5e-types
-      this.#activity = this.chatCard.getAssociatedActivity() as Activity;
-      // Apply scaling (stored on message, not on item) — same as dnd5e's _fetchActivity()
-      if (this.#activity) {
-        const scaling = this.chatCard.getFlag("dnd5e", "scaling");
-        if (scaling) {
-          const item = this.#activity.item.clone({ flags: { dnd5e: { scaling } } }, { keepId: true });
-          // @ts-expect-error no dnd5e-types
-          this.#activity = item.system.activities.get(this.#activity.id);
-        }
-      }
-    }
-
-    // Fallback: UUID from store (for workflows without a chat card)
-    if (!this.#activity) {
-      const activityUuid = this.midiFlags?.activityUuid;
-      if (activityUuid) {
-        this.#activity = fromUuidSync(activityUuid) as Activity;
-      }
-    }
-
     if (!this.#activity) {
       const message = `midi-qol | get activity() | Could not find activity for workflow ${this.id}`;
       TroubleShooter.recordError(new Error(message));
@@ -530,46 +903,38 @@ export class Workflow {
   }
   set activity(activity: Activity) {
     this.#activity = activity;
-    this.persistFields({ activityUuid: activity?.uuid ?? "" });
   }
 
+  /**
+   * The activity a card button runs for this use. A button runs the activity dnd5e finds from the card, the original:
+   * when it is the workflow's own activity (same uuid), the workflow's copy is kept and run (a macro's modified copy
+   * stays the use's); another activity becomes the workflow's.
+   */
+  activityFor<T extends Activity>(activity: T): T {
+    if (this.#activity && this.#activity.uuid === activity.uuid) return this.#activity as T;
+    this.activity = activity;
+    return activity;
+  }
+
+  // Undefined only while a card's workflow is rebuilt without its item (reported in #restoreFromCard)
   #item: Item.Implementation | undefined;
   get item(): Item.Implementation {
-    if (this.#item) return this.#item;
-    if (this.itemCardUuid && saveToChatCard) {
-      const itemUuid = this.chatCard?.getFlag("dnd5e", "item")?.uuid;
-      this.#item = fromUuidSync(itemUuid) as Item.Implementation;
-      if (!this.#item) {
-        // foundry.utils.getProperty(this.chatCard, "flags." + chatCardFlags.item)?.itemData - can use this get the item back?
-        const message = `get item() | Could not find item for workflow ${this.id} with itemUuid ${itemUuid}`;
-        TroubleShooter.recordError(new Error(message));
-        error(message);
-      }
-    }
     return this.#item!;
   }
   set item(item: Item.Implementation) {
     this.#item = item;
-    if (this.itemCardUuid && saveToChatCard) {
-      addUpdatesCacheFlags(this.id, { ["dnd5e.item.uuid"]: item?.uuid });
-    }
   }
 
-  // This value is not stored in flags
+
+  // A rebuilt workflow's is its card's
   #speaker: ChatMessage.SpeakerData | undefined = undefined;
   get speaker(): ChatMessage.SpeakerData {
-    if (this.#speaker) return this.#speaker;
-    if (this.itemCardUuid && saveToChatCard) {
-      this.#speaker = this.chatCard.speaker;
-    }
     return this.#speaker!;
   }
   set speaker(speaker: ChatMessage.SpeakerData) {
     // TODO do an equals check on the stored and passed speaker
     this.#speaker = speaker;
-    if (this.itemCardUuid && saveToChatCard) {
-      addUpdatesCache(this.id, { speaker });
-    }
+    if (this.ownsCard) this.#cacheCardUpdates({ speaker });
   }
 
   get attackingToken() {
@@ -578,42 +943,44 @@ export class Workflow {
   get tokenUuid() {
     return this.token?.document.uuid;
   }
+  /** The using token's TokenDocument: what the workflow's token sets hold (workflow.token stays the placeable) */
+  get tokenDocument(): TokenDocument.Implementation | undefined {
+    return this.token?.document ?? undefined;
+  }
 
-  get targets(): Set<Token.Implementation> { return this.#persisted.tokenSet("targets", true); }
-  set targets(targets: Set<TokenOrDocument>) { this.#persisted.setTokenSet("targets", targets ?? new Set(), true); }
+  get targets(): TokenDocumentSet { return this.#persisted.tokenSet("targets"); }
+  set targets(targets: Set<TokenOrDocument>) { this.#persisted.setTokenSet("targets", targets ?? new Set()); }
 
-  get targetsCanSee(): Set<Token.Implementation> { return this.#persisted.tokenSet("targetsCanSeeUuids"); }
-  set targetsCanSee(targetsCanSee: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("targetsCanSeeUuids", targetsCanSee); }
-  get targetsCanSense(): Set<Token.Implementation> { return this.#persisted.tokenSet("targetsCanSenseUuids"); }
-  set targetsCanSense(targetsCanSense: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("targetsCanSenseUuids", targetsCanSense); }
+  // Worked out again when the workflow is rebuilt (setupCanSeeSense)
+  targetsCanSee: Set<Token.Implementation> = new Set();
+  targetsCanSense: Set<Token.Implementation> = new Set();
+  tokenCanSee: Set<Token.Implementation> = new Set();
+  tokenCanSense: Set<Token.Implementation> = new Set();
 
-  get tokenCanSee(): Set<Token.Implementation> { return this.#persisted.tokenSet("tokenCanSeeUuids"); }
-  set tokenCanSee(tokenCanSee: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("tokenCanSeeUuids", tokenCanSee); }
-
-  get tokenCanSense(): Set<Token.Implementation> { return this.#persisted.tokenSet("tokenCanSenseUuids"); }
-  set tokenCanSense(tokenCanSense: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("tokenCanSenseUuids", tokenCanSense); }
-
-  templateUuids: string[] = [];
+  /** The use's templates (regions): replace the array to change it, a change in place isn't stored */
+  get templateUuids(): string[] { return this.#persisted.scalar<string[]>("templateUuids", []); }
+  set templateUuids(templateUuids: string[]) { this.#persisted.setScalar("templateUuids", [...templateUuids]); }
   expectedTemplateCount: number = 0;
   placedTemplateCount: number = 0;
 
   // Backward compat: templateUuid returns the first template UUID
   get templateUuid(): string {
     if (this.templateUuids.length > 0) return this.templateUuids[0];
-    return this.midiFlags?.templateUuid ?? "";
+    return "";
   }
   set templateUuid(templateUuid: string) {
-    // Backward compat: push to array if not already present
-    if (templateUuid && !this.templateUuids.includes(templateUuid)) {
-      this.templateUuids.push(templateUuid);
-    }
-    this.persistFields({ templateUuid, templateUuids: this.templateUuids });
+    if (templateUuid && !this.templateUuids.includes(templateUuid)) this.templateUuids = [...this.templateUuids, templateUuid];
   }
 
-  get template(): MeasuredTemplateDocument.Implementation | undefined {
-    return this.templateUuid ? fromUuidSync(this.templateUuid) as MeasuredTemplateDocument.Implementation : undefined;
+  // v14: templates are backed by Regions — this may return either a MeasuredTemplateDocument or RegionDocument
+  get template(): MeasuredTemplateDocument.Implementation | RegionDocument.Implementation | undefined {
+    if (!this.templateUuid) return undefined;
+    const doc = fromUuidSync(this.templateUuid);
+    if (doc instanceof MeasuredTemplateDocument) return doc;
+    if (doc instanceof RegionDocument) return doc;
+    return undefined;
   }
-  set template(template: MeasuredTemplateDocument.Implementation | undefined) {
+  set template(template: MeasuredTemplateDocument.Implementation | RegionDocument.Implementation | undefined) {
     if (template?.uuid) this.templateUuid = template.uuid;
   }
 
@@ -622,35 +989,25 @@ export class Workflow {
     return this.templateUuid.split(".").at(-1);
   }
 
-  get inCombat() {
-    return this.actor.inCombat
-  }
-  isTurn: boolean | undefined; // Is it the item wielder's turn.
-  get AoO() { return this.#persisted.scalar("AoO", false); }
-  set AoO(AoO: boolean) { this.#persisted.setScalar("AoO", AoO); }
+  /** When the use started, the actor was a combatant (of any combat) */
+  get inCombat(): boolean { return this.#persisted.scalar("inCombat", false); }
+  set inCombat(inCombat: boolean) { this.#persisted.setScalar("inCombat", inCombat); }
+  /** When the use started, it was the actor's turn in a started combat */
+  get isTurn(): boolean { return this.#persisted.scalar("isTurn", false); }
+  set isTurn(isTurn: boolean) { this.#persisted.setScalar("isTurn", isTurn); }
+  AoO: boolean = false;
 
-  #damageList: DamageListEntry[] | undefined;
-  get damageList() {
-    if (this.#damageList) return this.#damageList;
-    // See below
-    // if (this.itemCardUuid && SaveToChatCard) {
-    //   this.#damageList = this.chatCard?.getFlag(MODULE_ID, WorkflowDataFlags.damageList);
-    // }
-    return this.#damageList ?? [];
-  }
-  set damageList(damageList: DamageListEntry[]) {
-    this.#damageList = damageList;
-    // This is just too big to store in the chat message - see if there can be a cut down version stored
-    // if (this.itemCardUuid && SaveToChatCard) {
-    //   addUpdatesCacheFlags(this.id, { [chatCardFlags.damageList]: damageList }, "midi-qol");
-    // }
-  }
+  damageList: DamageListEntry[] = [];
 
   saveDisplayFlavor: string | undefined;
 
-  #id: string = "";
-  get id() { return this.#id }
-  set id(id: string) { this.#id = id }
+  /** Its card's uuid, which it is filed under: undefined for a use until its card exists (a workflow with no card of its own has a generated id) */
+  #id: string | undefined;
+  get id(): string | undefined { return this.#id }
+  set id(id: string | undefined) {
+    this.#id = id;
+    this.#storeUnstored();
+  }
 
   get uuid() {
     if (debugEnabled > 0) warn(`workflow.uuid is deprecated. Use workflow.id to reference the workflow and workflow.itemUuid to reference the item instead.
@@ -658,85 +1015,73 @@ export class Workflow {
     return this.activity.uuid;
   }
 
-  get suspended() { return this.#persisted.scalar("suspended", false); }
-  set suspended(suspended: boolean) { this.#persisted.setScalar("suspended", suspended); }
+  // Not stored: a workflow rebuilt from its card is suspended
+  suspended: boolean = false;
 
   #currentAction: WorkflowState;
   get currentAction() {
-    if (this.#currentAction) return this.#currentAction;
-    if (this.itemCardUuid && saveToChatCard) {
-
-      const [className, currentActionName] = this.chatCard?.getFlag(MODULE_ID, WorkflowDataFlags.currentAction) ?? ["none", "none"];
-      if (className !== "none") {
-        const actionClass = WorkflowRegistry[className];
-        if (actionClass && (actionClass === Workflow || actionClass.prototype instanceof Workflow)) {
-          const action = actionClass?.prototype[currentActionName];
-          if (action) {
-            this.#currentAction = action;
-          } else {
-            error(`get currentAction() | Could not find action ${currentActionName} in class ${className}`);
-          }
-        } else error(`get currentAction() | Class ${className} is not a subclass of Workflow`);
-      }
-    }
     return this.#currentAction;
   }
   set currentAction(currentAction: WorkflowState) {
     this.#currentAction = currentAction;
-    if (this.itemCardUuid && saveToChatCard) {
-      addUpdatesCacheFlags(this.id, { [WorkflowDataFlags.currentAction]: [this.constructor.name, currentAction?.name] }, "midi-qol");
-    }
+    // The state is not stored: a rebuilt workflow works out where it waits from its card (cardResumePoint)
+    this.#persisted.setClass(this.constructor.name);
   }
 
-  #isCriticalRestored: boolean = false;
   /**
-   * Get computed critical state from the tracker.
-   * On first access, restores from store (loaded from chat card flags) if available.
+   * The state a workflow rebuilt from `card` waits in, worked out from the card: what has been placed, rolled and
+   * confirmed. Undefined for a card with no workflow.
    */
+  static cardResumePoint(card: ChatMessage.Implementation | undefined): string | undefined {
+    const midi = cardMidi(card);
+    if (!card || !midi.state?.workflowClass) return undefined;
+    const progress = midi.progress ?? {};
+    if (progress.finished || progress.attacksSplit) return "WorkflowState_Completed";
+    const activity = (card as Dnd5eChatMessage).getAssociatedActivity?.() as Activity | undefined;
+    const rolled = new Set(card.rolls.map(roll => rollTypeOf(roll)));
+    const templates = expectedTemplateCount(activity);
+    if ((midi.state.templateUuids?.length ?? 0) < templates) return "WorkflowState_AwaitTemplate";
+    if (activity?.roll?.formula && !rolled.has("utility")) return "WorkflowState_WaitForUtilityRoll";
+    if (activity?.attack && !rolled.has("attack")) return "WorkflowState_WaitForAttackRoll";
+    const other = activity?.otherActivity;
+    const damages = activity?.hasDamage || other?.hasDamage || activity?.hasHealing || other?.hasHealing;
+    if (damages && !MQDamageRollTypes.some(type => rolled.has(type))) return "WorkflowState_WaitForDamageRoll";
+    if (midi.confirmAttackDamage && !progress.confirmed) return "WorkflowState_ConfirmRoll";
+    return "WorkflowState_Completed";
+  }
+
+  // The tracker decides; a rebuilt workflow gets the stored decision back as an override (#restoreFromCard)
   get isCritical(): boolean {
-    // Restore from store on first access
-    if (!this.#isCriticalRestored && this.itemCardUuid && saveToChatCard) {
-      if (this.midiFlags?.isCritical) {
-        this.attackRollModifierTracker.critical.setOverride(true, "restored", "Restored from chat card");
-      }
-      this.#isCriticalRestored = true;
-    }
     return this.attackRollModifierTracker.isCritical;
   }
-  /**
-   * Set critical state via override. Used for persistence and external assignment.
-   * Prefer using tracker methods directly for attribution.
-   */
   set isCritical(isCritical: boolean) {
     this.attackRollModifierTracker.critical.setOverride(isCritical, "direct", "Direct assignment");
-    this.#isCriticalRestored = true;
-    this.persistFields({ isCritical });
+    this.#persistAttackTracker();
   }
 
-  #isFumbleRestored: boolean = false;
-  /**
-   * Get computed fumble state from the tracker.
-   * On first access, restores from store (loaded from chat card flags) if available.
-   */
   get isFumble(): boolean {
-    // Restore from store on first access
-    if (!this.#isFumbleRestored && this.itemCardUuid && saveToChatCard) {
-      if (this.midiFlags?.isFumble) {
-        this.attackRollModifierTracker.fumble.setOverride(true, "restored", "Restored from chat card");
-      }
-      this.#isFumbleRestored = true;
-    }
     return this.attackRollModifierTracker.isFumble;
   }
-  /**
-   * Set fumble state via override. Used for persistence and external assignment.
-   * Prefer using tracker methods directly for attribution.
-   */
   set isFumble(isFumble: boolean) {
     this.attackRollModifierTracker.fumble.setOverride(isFumble, "direct", "Direct assignment");
-    this.#isFumbleRestored = true;
-    this.persistFields({ isFumble });
+    this.#persistAttackTracker();
   }
+
+  /** Whether the attack hit: a target hit, or with hits not checked the attack roll's own result */
+  get isHit(): boolean {
+    return configSettings.autoCheckHit === "none" ? !!(this.attackRoll as { isSuccess?: boolean } | undefined)?.isSuccess : this.hitTargets.count > 0;
+  }
+  /** Whether the attack was a glancing blow on a target (Challenge Mode Armor: at least its EC, not above its AC) */
+  get isHitEC(): boolean {
+    return this.hitTargetsEC.count > 0;
+  }
+
+  /** A damage-only workflow's damage is its other damage (shown and stored as other damage), not its main damage */
+  useOther = false;
+
+  /** A damage roll on its own (rerollDamage, DamageOnlyWorkflow): targets, hits and saves given; no effects or use-level passes */
+  get damageOnly(): boolean { return this.#persisted.scalar("damageOnly", false); }
+  set damageOnly(damageOnly: boolean) { this.#persisted.setScalar("damageOnly", damageOnly); }
 
   /**
    * @deprecated Use workflow.attackRollModifierTracker.critical.isForced instead
@@ -760,73 +1105,92 @@ export class Workflow {
     return this.attackRollModifierTracker.critical.isSuppressed;
   }
 
-  get d20AttackRoll() { return this.#persisted.scalar("d20AttackRoll", -1); }
-  set d20AttackRoll(d20AttackRoll: number) { this.#persisted.setScalar("d20AttackRoll", d20AttackRoll); }
+  // These from the attack roll, worked out again when the workflow is rebuilt (#restoreFromCard)
+  d20AttackRoll: number = -1;
 
-  get hitTargets(): Set<Token.Implementation> { return this.#persisted.tokenSet("hitTargetUuids"); }
-  set hitTargets(hitTargets: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("hitTargetUuids", hitTargets); }
+  get hitTargets(): TokenDocumentSet { return this.#persisted.tokenSet("hit"); }
+  set hitTargets(hitTargets: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("hit", hitTargets); }
 
-  get hitTargetsEC(): Set<Token.Implementation> { return this.#persisted.tokenSet("hitECTargetUuids"); }
-  set hitTargetsEC(hitTargetsEC: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("hitECTargetUuids", hitTargetsEC); }
+  get hitTargetsEC(): TokenDocumentSet { return this.#persisted.tokenSet("hitEC"); }
+  set hitTargetsEC(hitTargetsEC: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("hitEC", hitTargetsEC); }
 
-  #otherDamageMatches: Set<Token.Implementation> | undefined;
-  get otherDamageMatches(): Set<Token.Implementation> | undefined {
-    if (this.#otherDamageMatches !== undefined) return this.#otherDamageMatches;
-    const uuids = this.midiFlags?.otherDamageMatchUuids;
-    if (uuids) {
-      this.#otherDamageMatches = new Set(
-        uuids.map((uuid: string) => (fromUuidSync(uuid) as TokenDocument | undefined)?.object).filter((t: Token.Implementation | undefined): t is Token.Implementation => !!t)
-      );
-      return this.#otherDamageMatches;
-    }
-    return undefined;
+  #otherDamageMatches: TokenDocumentSet | undefined;
+  // Written for the damage tray; the workflow works them out before it uses them (buildOtherDamageMatches)
+  get otherDamageMatches(): TokenDocumentSet | undefined {
+    return this.#otherDamageMatches;
   }
-  set otherDamageMatches(matches: Set<Token.Implementation> | undefined) {
-    this.#otherDamageMatches = matches;
-    const uuids = matches ? Array.from(matches).map(t => getTokenDocument(t)?.uuid).filter((u): u is string => !!u) : [];
-    this.persistFields({ otherDamageMatchUuids: uuids });
+  set otherDamageMatches(matches: Set<TokenOrDocument> | undefined) {
+    this.#otherDamageMatches = matches && new TokenDocumentSet(matches);
+    // For the damage tray, which has other damage only from the other activity
+    if (this.otherActivity) this.#persisted.setDamageMatches("otherDamage", this.#otherDamageMatches);
+  }
+
+  /** The targets the ammunition's damage applies to: hit targets passing its own use condition. */
+  #ammunitionDamageMatches: TokenDocumentSet | undefined;
+  get ammunitionDamageMatches(): TokenDocumentSet | undefined {
+    return this.#ammunitionDamageMatches;
+  }
+  set ammunitionDamageMatches(matches: Set<TokenOrDocument> | undefined) {
+    this.#ammunitionDamageMatches = matches && new TokenDocumentSet(matches);
+    // The damage tray reads it
+    this.#persisted.setDamageMatches("ammunitionDamage", this.#ammunitionDamageMatches);
+  }
+
+  /**
+   * What a successful save does to each kind of damage, before Super Saver (applySaves adds that per damage entry).
+   * One save is rolled per use: the other activity's and the ammunition's damage follow it only when it is their
+   * own, else take it in full; with neither having it, other damage follows the activity's save as before.
+   */
+  damageSaveMultipliers(): { defaultDamage: number, bonusDamage: number, otherDamage: number, ammunition: number } {
+    const activityMultiplier = getSaveMultiplierForActivity(this.activity);
+    const saveSource = this.otherSaveActivity;
+    const sourceMultiplier = (source: Activity | undefined | null) => saveSource
+      ? (saveSource === source ? getSaveMultiplierForActivity(saveSource) : 1)
+      : activityMultiplier;
+    return {
+      defaultDamage: activityMultiplier,
+      bonusDamage: activityMultiplier,
+      otherDamage: sourceMultiplier(this.otherActivity),
+      ammunition: sourceMultiplier(this.ammunitionActivity)
+    };
+  }
+
+  /**
+   * A target's other damage: the other activity's where its condition matched the target, the ammunition's where the
+   * ammunition's did, each with its own save multiplier.
+   */
+  otherDamageFor(token: TokenOrDocument): DamageDescription[] {
+    const multipliers = this.damageSaveMultipliers();
+    const otherApplies = this.otherDamageMatches?.has(token) ?? true;
+    const ammunitionApplies = this.ammunitionDamageMatches?.has(token) ?? true;
+    return (this.otherDamageDetail ?? [])
+      .filter(d => d.midiAmmunition ? ammunitionApplies : otherApplies)
+      .map(d => ({ ...d, midiSaveMultiplier: d.midiAmmunition ? multipliers.ammunition : multipliers.otherDamage }));
+  }
+
+  /** Drop the other activity's damage (its use was declined), keeping the ammunition's. */
+  dropOtherActivityDamage() {
+    this.otherDamageMatches = new Set();
+    this.rawOtherDamageDetail = (this.rawOtherDamageDetail ?? []).filter(d => d.midiAmmunition);
+    this.otherDamageDetail = (this.otherDamageDetail ?? []).filter(d => d.midiAmmunition);
   }
 
   get attackRoll(): Roll | undefined { return this.#persisted.roll("attackRoll"); }
   set attackRoll(attackRoll: Roll | undefined) {
     if (attackRoll) attackRoll.data = {};
-    this.#persisted.setRoll("attackRoll", attackRoll, true);
+    this.#persisted.setRoll("attackRoll", attackRoll);
   }
 
-  get diceRoll() { return this.#persisted.scalar("diceRoll", 0); }
-  set diceRoll(diceRoll: number) { this.#persisted.setScalar("diceRoll", diceRoll); }
+  diceRoll: number = 0;
+  attackTotal: number = 0;
 
-  get attackTotal() { return this.#persisted.scalar("attackTotal", 0); }
-  set attackTotal(attackTotal: number) { this.#persisted.setScalar("attackTotal", attackTotal); }
-
-  attackRollHTML: HTMLElement | string | undefined;
 
   get attackRollCount() { return this.#persisted.scalar("attackRollCount", 0); }
-  set attackRollCount(attackRollCount: number) { this.#persisted.setScalar("attackRollCount", attackRollCount); }
+  set attackRollCount(attackRollCount: number) { this.#persisted.setScalar("attackRollCount", attackRollCount, count => count || null); }
 
-  // ─────────────────────────────────────────────────────────────────
-  // Attack Advantage Mode - tracks advantage/disadvantage with counts and suppression
-  // ─────────────────────────────────────────────────────────────────
-
+  // Not stored: a rebuilt workflow keeps only its critical and fumble (isCritical/isFumble)
   #attackRollModifierTracker: RollModifierTracker = new RollModifierTracker();
-  #attackRollModifierTrackerRestored = false;
-
-  /**
-   * Get the RollModifierTracker instance for attack rolls.
-   * Use this for granular control over advantage/disadvantage tracking.
-   * On first access, restores from chat card flags if available.
-   */
   get attackRollModifierTracker(): RollModifierTracker {
-    if (!this.#attackRollModifierTrackerRestored && this.itemCardUuid && saveToChatCard) {
-      const data = this.midiFlags?.attackRollModifierTrackerData;
-      if (data) {
-        this.#attackRollModifierTracker.restore(data);
-        // Full tracker restore supersedes the boolean-only isCritical/isFumble restore
-        this.#isCriticalRestored = true;
-        this.#isFumbleRestored = true;
-      }
-      this.#attackRollModifierTrackerRestored = true;
-    }
     return this.#attackRollModifierTracker;
   }
 
@@ -835,18 +1199,12 @@ export class Workflow {
     return this.attackRollModifierTracker;
   }
 
-  /**
-   * Persist the attack roll modifier tracker state to chat card flags.
-   * Called after processAttackRoll and checkHits when the tracker state is finalized.
-   */
-  private persistAttackTracker(): void {
-    this.persistFields({ attackRollModifierTrackerData: this.#attackRollModifierTracker.toJSON() });
+  /** The tracker's critical/fumble decision, stored on the card: the only writer of both */
+  #persistAttackTracker(): void {
+    this.#persisted.setScalar("isCritical", this.#attackRollModifierTracker.isCritical);
+    this.#persisted.setScalar("isFumble", this.#attackRollModifierTracker.isFumble);
   }
 
-  /**
-   * Backward compatibility getter for advantage.
-   * Returns true if there's effective advantage, false if suppressed, undefined if no sources.
-   */
   get advantage(): boolean | undefined {
     return this.#attackRollModifierTracker.hasAdvantage;
   }
@@ -891,58 +1249,32 @@ export class Workflow {
     }
   }
 
-  /**
-   * Backward compatibility getter for noAdvantage.
-   * Returns true if advantage is suppressed.
-   */
   get noAdvantage(): boolean {
     return this.#attackRollModifierTracker.advantage.isSuppressed;
   }
 
-  /**
-   * Backward compatibility setter for noAdvantage.
-   * - `true`: suppresses all advantage sources
-   * - `false`/`undefined`: does nothing (suppression cannot be undone without reset)
-   */
   set noAdvantage(value: boolean | undefined) {
     if (value === true) {
       this.#attackRollModifierTracker.advantage.suppress();
     }
   }
 
-  /**
-   * Backward compatibility getter for noDisadvantage.
-   * Returns true if disadvantage is suppressed.
-   */
   get noDisadvantage(): boolean {
     return this.#attackRollModifierTracker.disadvantage.isSuppressed;
   }
 
-  /**
-   * Backward compatibility setter for noDisadvantage.
-   * - `true`: suppresses all disadvantage sources
-   * - `false`/`undefined`: does nothing (suppression cannot be undone without reset)
-   */
   set noDisadvantage(value: boolean | undefined) {
     if (value === true) {
       this.#attackRollModifierTracker.disadvantage.suppress();
     }
   }
 
-  get dnd5eFlags(): any | undefined {
-    return foundry.utils.getProperty(this.chatCard, "flags.dnd5e") as AnyObject | undefined;
-  }
-  set dnd5eFlags(dnd5eFlags: any | undefined) {
-    if (this.chatCard)
-      addUpdatesCache(this.id, { "flags.dnd5e": dnd5eFlags });
-  }
-
-  get targetDescriptors(): Array<DND5ETargetDescriptor> | undefined {
-    return foundry.utils.getProperty(this.chatCard, WorkflowDataFlags.targetDescriptors) as Array<DND5ETargetDescriptor>;
+  get targetDescriptors(): Array<CombinedTargetDescriptor> | undefined {
+    // @ts-expect-error no dnd5e-types
+    return this.chatCard?.system.targets;
   }
   set targetDescriptors(targetDescriptors: Array<DND5ETargetDescriptor>) {
-    if (this.chatCard)
-      addUpdatesCache(this.id, { [WorkflowDataFlags.targetDescriptors]: targetDescriptors });
+    if (this.ownsCard) this.#cacheCardUpdates({ "system.targets": targetDescriptors });
   }
   noAutoAttack: boolean | undefined; // override attack roll for standard care
 
@@ -966,18 +1298,16 @@ export class Workflow {
     img: string;
     isHit: boolean;
     targetClass: string;
-    playerName: string;
     showAC: boolean;
-    target: Token.Implementation;
+    target: TokenOrDocument;
     uuid: string;
   }> | undefined;
 
   saveDisplayData: {
     gmName: string;
-    playerName: string;
     img: string;
     targetClass: string;
-    target: Token.Implementation;
+    target: TokenOrDocument;
     saveSymbol: string;
     saveTotalClass: string;
     saveToolTipClass?: string;
@@ -1032,6 +1362,16 @@ export class Workflow {
   }
 
   /**
+   * The other activity if there is one, otherwise the ammunition's. Used where the question is
+   * "does the extra activity have a save/check", which decides how otherEffectTargets is derived —
+   * ammunition effects share that collection, so its save must count when the item has no other
+   * activity of its own.
+   */
+  get otherActivityOrAmmunition() {
+    return this.otherActivity ?? this.ammunitionActivity;
+  }
+
+  /**
    * Check if an activity has a valid save configuration (save with abilities, or check with ability/associated)
    */
   protected hasValidSaveOrCheck(activity: Activity | null | undefined): boolean {
@@ -1052,9 +1392,14 @@ export class Workflow {
   get activityHasSave() {
     return this.hasValidSaveOrCheck(this.saveActivity);
   }
-  get saveActivity() {
+  get saveActivity(): Activity | undefined {
     if (this.hasValidSaveOrCheck(this.activity)) return this.activity;
-    if (this.hasValidSaveOrCheck(this.otherActivity)) return this.otherActivity;
+    return this.otherSaveActivity;
+  }
+  /** The save behind the other damage: the item's own other activity's, else the ammunition's. */
+  get otherSaveActivity(): Activity | undefined {
+    if (this.hasValidSaveOrCheck(this.otherActivity)) return this.otherActivity ?? undefined;
+    if (this.hasValidSaveOrCheck(this.ammunitionActivity)) return this.ammunitionActivity;
     return undefined;
   }
   get saveActivityDetails(): ActivitySave | ActivityCheck | undefined {
@@ -1066,94 +1411,101 @@ export class Workflow {
     return this.saveActivity?.item ?? this.activity.item;
   }
 
-  #rolls: Roll[] | undefined;
+  /** The card's rolls */
   get rolls(): Roll[] {
-    if (this.#rolls) return this.#rolls;
-    if (this.itemCardUuid && saveToChatCard) {
-      this.#rolls = this.chatCard.rolls as Roll[];
-    }
-    return this.#rolls ?? [];
+    return (this.chatCard?.rolls ?? []) as Roll[];
   }
 
   get damageRolls(): Roll[] { return this.#persisted.rolls("damageRolls") ?? []; }
-  set damageRolls(damageRolls: Roll[]) { this.#persisted.setRolls("damageRolls", damageRolls, true); }
+  set damageRolls(damageRolls: Roll[]) { this.#persisted.setRolls("damageRolls", damageRolls); }
 
   get bonusDamageRolls(): Roll[] | undefined { return this.#persisted.rolls("bonusDamageRolls"); }
-  set bonusDamageRolls(bonusDamageRolls: Roll[] | undefined) { this.#persisted.setRolls("bonusDamageRolls", bonusDamageRolls, true); }
+  set bonusDamageRolls(bonusDamageRolls: Roll[] | undefined) { this.#persisted.setRolls("bonusDamageRolls", bonusDamageRolls); }
 
   get otherDamageRolls(): Roll[] | undefined { return this.#persisted.rolls("otherDamageRolls"); }
-  set otherDamageRolls(otherDamageRolls: Roll[] | undefined) { this.#persisted.setRolls("otherDamageRolls", otherDamageRolls, true); }
+  set otherDamageRolls(otherDamageRolls: Roll[] | undefined) { this.#persisted.setRolls("otherDamageRolls", otherDamageRolls); }
 
-  get utilityRolls(): Roll[] | undefined { return this.#persisted.rolls("utilityRolls") ?? []; }
-  // Not derived: chatRolls carries the merged utilityRoll, so individual rolls can't be recovered.
+  // A rebuilt workflow gets the card's merged utility roll back as its one roll
+  get utilityRolls(): Roll[] { return this.#persisted.rolls("utilityRolls") ?? []; }
   set utilityRolls(utilityRolls: Roll[] | undefined) {
     utilityRolls?.forEach(d => d.data = {});
     this.#persisted.setRolls("utilityRolls", utilityRolls);
   }
 
-  get damageTotal() { return this.#persisted.scalar("damageTotal", 0); }
-  set damageTotal(damageTotal: number) { this.#persisted.setScalar("damageTotal", damageTotal); }
+  // These from the damage rolls, worked out again when the workflow is rebuilt (#restoreFromCard)
+  damageTotal: number = 0;
+  rawDamageDetail: DamageDescription[] = [];
+  rawOtherDamageDetail: DamageDescription[] = [];
+  rawBonusDamageDetail: DamageDescription[] = [];
 
-  get rawDamageDetail(): DamageDescription[] { return this.#persisted.damageDetail("rawDamageDetail"); }
-  set rawDamageDetail(rawDamageDetail: DamageDescription[]) { this.#persisted.setDamageDetail("rawDamageDetail", rawDamageDetail); }
+  // The damage detail as applied; a rebuilt workflow works it out from its rolls (#restoreFromCard)
+  damageDetail: DamageDescription[] = [];
+  otherDamageDetail: DamageDescription[] = [];
 
-  get rawOtherDamageDetail(): DamageDescription[] { return this.#persisted.damageDetail("rawOtherDamageDetail"); }
-  set rawOtherDamageDetail(rawOtherDamageDetail: DamageDescription[]) { this.#persisted.setDamageDetail("rawOtherDamageDetail", rawOtherDamageDetail); }
+  bonusDamageDetail: DamageDescription[] = [];
 
-  get rawBonusDamageDetail(): DamageDescription[] { return this.#persisted.damageDetail("rawBonusDamageDetail"); }
-  set rawBonusDamageDetail(rawBonusDamageDetail: DamageDescription[]) { this.#persisted.setDamageDetail("rawBonusDamageDetail", rawBonusDamageDetail); }
-
-  get damageDetail(): DamageDescription[] { return this.#persisted.damageDetail("damageDetail"); }
-  set damageDetail(damageDetail: DamageDescription[]) { this.#persisted.setDamageDetail("damageDetail", damageDetail); }
-  get otherDamageDetail(): DamageDescription[] { return this.#persisted.damageDetail("otherDamageDetail"); }
-  set otherDamageDetail(otherDamageDetail: DamageDescription[]) { this.#persisted.setDamageDetail("otherDamageDetail", otherDamageDetail); }
-
-  get bonusDamageDetail(): DamageDescription[] { return this.#persisted.damageDetail("bonusDamageDetail"); }
-  set bonusDamageDetail(bonusDamageDetail: DamageDescription[]) { this.#persisted.setDamageDetail("bonusDamageDetail", bonusDamageDetail); }
-
-  damageRollHTML: HTMLElement | string | undefined;
 
   get damageRollCount(): number { return this.#persisted.scalar("damageRollCount", 0); }
-  set damageRollCount(damageRollCount: number) { this.#persisted.setScalar("damageRollCount", damageRollCount); }
+  set damageRollCount(damageRollCount: number) { this.#persisted.setScalar("damageRollCount", damageRollCount, count => count || null); }
 
-  get defaultDamageType(): string { return this.#persisted.scalar("defaultDamageType", ""); }
-  set defaultDamageType(defaultDamageType: string) { this.#persisted.setScalar("defaultDamageType", defaultDamageType); }
+  defaultDamageType: string = "";
 
-  get effectsAlreadyExpired(): string[] { return this.#persisted.scalar<string[]>("effectsAlreadyExpired", []); }
-  set effectsAlreadyExpired(effectsAlreadyExpired: string[]) { this.#persisted.setScalar("effectsAlreadyExpired", effectsAlreadyExpired); }
+  // Not stored: once expired an effect is gone, so a rebuilt workflow finds nothing to expire again
+  effectsAlreadyExpired: string[] = [];
 
-  noAutoDamage: boolean | undefined; // override damage roll for damage rolls
+  /** @deprecated since 14.6.9: has no effect (use workflowOptions.autoRollDamage, or return false from preDamageRollConfig) */
+  get noAutoDamage(): undefined {
+    foundry.utils.logCompatibilityWarning("midi-qol | Workflow#noAutoDamage is deprecated and has no effect: set workflowOptions.autoRollDamage to \"none\", or return false from a preDamageRollConfig macro.", { since: "14.6.9", until: "14.8.0", once: true });
+    return undefined;
+  }
+  set noAutoDamage(_value: boolean | undefined) {
+    foundry.utils.logCompatibilityWarning("midi-qol | Workflow#noAutoDamage is deprecated and has no effect: set workflowOptions.autoRollDamage to \"none\", or return false from a preDamageRollConfig macro.", { since: "14.6.9", until: "14.8.0", once: true });
+  }
 
-  get saves(): Set<Token.Implementation> { return this.#persisted.tokenSet("saveUuids"); }
-  set saves(saves: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("saveUuids", saves); }
+  #consumptionRefunded = false;
 
-  get superSavers(): Set<Token.Implementation> { return this.#persisted.tokenSet("superSaverUuids"); }
-  set superSavers(superSavers: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("superSaverUuids", superSavers); }
-  get semiSuperSavers(): Set<Token.Implementation> { return this.#persisted.tokenSet("semiSuperSaverUuids"); }
-  set semiSuperSavers(semiSuperSavers: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("semiSuperSaverUuids", semiSuperSavers); }
+  /**
+   * Set when MidiActivityMixin suppressed dnd5e's concentration so it can be started after the
+   * workflow's checks pass. Carries what Activity#use would have used. Cleared once begun.
+   */
+  get deferredConcentration(): { scaling?: number, end?: string } | undefined {
+    return this.#persisted.scalar<{ scaling?: number, end?: string } | null>("deferredConcentration", null) ?? undefined;
+  }
+  set deferredConcentration(deferred: { scaling?: number, end?: string } | undefined) {
+    this.#persisted.setScalar("deferredConcentration", deferred ?? null);
+  }
 
-  get failedSaves(): Set<Token.Implementation> { return this.#persisted.tokenSet("failedSaveUuids"); }
-  set failedSaves(failedSaves: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("failedSaveUuids", failedSaves); }
+  get saves(): TokenDocumentSet { return this.#persisted.tokenSet("saved"); }
+  set saves(saves: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("saved", saves); }
 
-  get fumbleSaves(): Set<Token.Implementation> { return this.#persisted.tokenSet("fumbleSaveUuids"); }
-  set fumbleSaves(fumbleSaves: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("fumbleSaveUuids", fumbleSaves); }
-  get criticalSaves(): Set<Token.Implementation> { return this.#persisted.tokenSet("criticalSaveUuids"); }
-  set criticalSaves(criticalSaves: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("criticalSaveUuids", criticalSaves); }
-  get advantageSaves(): Set<Token.Implementation> { return this.#persisted.tokenSet("advantageSaveUuids"); }
-  set advantageSaves(advantageSaves: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("advantageSaveUuids", advantageSaves); }
+  get superSavers(): TokenDocumentSet { return this.#persisted.tokenSet("superSaver"); }
+  set superSavers(superSavers: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("superSaver", superSavers); }
+  get semiSuperSavers(): TokenDocumentSet { return this.#persisted.tokenSet("semiSuperSaver"); }
+  set semiSuperSavers(semiSuperSavers: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("semiSuperSaver", semiSuperSavers); }
+
+  get failedSaves(): TokenDocumentSet { return this.#persisted.tokenSet("failedSave"); }
+  // With no save they are the attacked (hit) targets, worked out again when rebuilt (#restoreFromCard): not stored
+  set failedSaves(failedSaves: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("failedSave", failedSaves, this.hasSave); }
+
+  get fumbleSaves(): TokenDocumentSet { return this.#persisted.tokenSet("fumbleSave"); }
+  set fumbleSaves(fumbleSaves: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("fumbleSave", fumbleSaves); }
+  get criticalSaves(): TokenDocumentSet { return this.#persisted.tokenSet("criticalSave"); }
+  set criticalSaves(criticalSaves: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("criticalSave", criticalSaves); }
+  get advantageSaves(): TokenDocumentSet { return this.#persisted.tokenSet("advantageSave"); }
+  set advantageSaves(advantageSaves: Set<TokenOrDocument> | undefined) { this.#persisted.setTokenSet("advantageSave", advantageSaves); }
   saveRequests: Record<string, (value: any) => void>;
+  /** What each chat-card save request asks for, by its key in saveRequests */
+  saveRequestKinds: Record<string, SaveRequestKind>;
   saveTimeouts: Record<string, NodeJS.Timeout>;
   defenceRequests: Record<string, (value: any) => void>;
   defenceTimeouts: Record<string, NodeJS.Timeout>;
-
-  flagTags: AnyMutableObject | undefined;
 
   #onUseMacros: OnUseMacros | undefined;
   get onUseMacros() {
     if (this.#onUseMacros) return this.#onUseMacros;
     if (configSettings.allowUseMacro) {
       this.#onUseMacros = new OnUseMacros();
-      const itemOnUseMacros = this.item.getFlag(MODULE_ID, "onUseMacroParts") ?? new OnUseMacros();
+      const itemOnUseMacros = OnUseMacros.withDefaults(this.item.getFlag(MODULE_ID, "onUseMacroParts"), this.item, this.activity);
       const actorOnUseMacros = this.actor.getFlag(MODULE_ID, "onUseMacroParts") ?? new OnUseMacros();
       if (this.workflowOptions?.onlyOnUseItemMacros) {
         this.#onUseMacros.items = [...itemOnUseMacros.items];
@@ -1173,15 +1525,14 @@ export class Workflow {
   get ammunitionOnUseMacros() {
     if (this.#ammunitionOnUseMacros) return this.#ammunitionOnUseMacros;
     this.#ammunitionOnUseMacros = new OnUseMacros();
-    const ammunitionOnUseMacros = this.ammunition?.getFlag(MODULE_ID, "onUseMacroParts") ?? new OnUseMacros();
+    const ammunitionActivity = this.ammunitionActivity;
+    const ammunitionOnUseMacros = OnUseMacros.withDefaults(this.ammunition?.getFlag(MODULE_ID, "onUseMacroParts"), this.ammunition,
+      ammunitionActivity, ammunitionActivity ? `ActivityMacro.${ammunitionActivity.uuid}` : undefined);
     this.#ammunitionOnUseMacros.items = ammunitionOnUseMacros.items;
     return this.#ammunitionOnUseMacros;
   }
   set ammunitionOnUseMacros(ammunitionOnUseMacros: OnUseMacros | undefined) {
     this.#ammunitionOnUseMacros = ammunitionOnUseMacros;
-    if (this.itemCardUuid && saveToChatCard) {
-      addUpdatesCacheFlags(this.id, { [WorkflowDataFlags.ammunitionOnUseMacros]: ammunitionOnUseMacros }, "midi-qol");
-    }
   }
 
   // Legacy Set - delegates to RollModifierTracker
@@ -1198,40 +1549,20 @@ export class Workflow {
     return this.#attackRollModifierTracker.attribution as AttributionMap;
   }
 
-  // Structured save attribution - keyed by target UUID
-  // Uses AttributionMap per target for O(1) lookups
-  #saveAttribution: Record<string, AttributionMap> | undefined;
+  /** Why each target's save had advantage or disadvantage, by token uuid */
   get saveAttribution(): Record<string, AttributionMap> {
-    if (this.#saveAttribution) return this.#saveAttribution;
-    if (this.itemCardUuid && saveToChatCard) {
-      this.#saveAttribution = this.chatCard?.getFlag(MODULE_ID, WorkflowDataFlags.saveAttribution) as Record<string, AttributionMap> | undefined;
-    }
-    return this.#saveAttribution ?? {};
+    return this.#persisted.saveAttribution();
   }
   set saveAttribution(saveAttribution: Record<string, AttributionMap>) {
-    this.#saveAttribution = saveAttribution;
-    if (this.itemCardUuid && saveToChatCard) {
-      addUpdatesCacheFlags(this.id, { [WorkflowDataFlags.saveAttribution]: saveAttribution }, "midi-qol");
-    }
+    this.#persisted.setSaveAttribution(saveAttribution);
   }
 
-  /**
-   * Add a structured attribution for a target's saving throw.
-   * O(1) operation - uses object property assignment for deduplication.
-   * @param targetUuid - The UUID of the target
-   * @param type - Attribution type (ADV, DIS, etc.)
-   * @param source - Source identifier
-   * @param displayName - Human-readable display name
-   */
   addSaveAttribution(targetUuid: string, type: AttributionType, source: string, displayName: string): void {
-    const current = this.#saveAttribution ?? {};
-    current[targetUuid] ??= {};
-    current[targetUuid][type] ??= {};
-    current[targetUuid][type]![source] = displayName;
+    const current = foundry.utils.deepClone(this.saveAttribution);
+    ((current[targetUuid] ??= {})[type] ??= {})[source] = displayName;
     this.saveAttribution = current;
   }
 
-  // Legacy Set for adv-reminder module - delegates to RollModifierTracker
   get advReminderAttackAdvAttribution(): Set<string> {
     return this.#attackRollModifierTracker.advReminderAttribution;
   }
@@ -1239,8 +1570,14 @@ export class Workflow {
     this.#attackRollModifierTracker.reset();
   }
 
-  get noOptionalRules() { return this.#persisted.scalar("noOptionalRules", false); }
-  set noOptionalRules(noOptionalRules: boolean) { this.#persisted.setScalar("noOptionalRules", noOptionalRules); }
+  /** @deprecated since 14.6.9: has no effect (optional rules follow the Optional rules setting) */
+  get noOptionalRules(): boolean {
+    foundry.utils.logCompatibilityWarning("midi-qol | Workflow#noOptionalRules is deprecated and has no effect: optional rules follow the Optional rules setting.", { since: "14.6.9", until: "14.8.0", once: true });
+    return !configSettings.optionalRulesEnabled;
+  }
+  set noOptionalRules(_value: boolean) {
+    foundry.utils.logCompatibilityWarning("midi-qol | Workflow#noOptionalRules is deprecated and has no effect: optional rules follow the Optional rules setting.", { since: "14.6.9", until: "14.8.0", once: true });
+  }
   undoData: UndoData | undefined; // Way too big to store. Undos are blanked on reload
 
   get bonusDamageFlavor() {
@@ -1253,7 +1590,8 @@ export class Workflow {
   }
 
   get itemCardId() {
-    return this.chatCard?.id;
+    // The stored card's id: the card with its queued changes isn't needed for it
+    return this.itemCardUuid ? (fromUuidSync(this.itemCardUuid) as ChatMessage.Implementation | null)?.id ?? undefined : undefined;
   }
 
   get damageFlavor() {
@@ -1272,11 +1610,7 @@ export class Workflow {
   }
 
   get needTemplate(): boolean {
-    return this.expectedTemplateCount > this.placedTemplateShapeCount;
-  }
-
-  get placedTemplateShapeCount(): number {
-    return countTemplateShapes(this.templateUuids.map(uuid => fromUuidSync(uuid)).filter(Boolean));
+    return this.expectedTemplateCount > 0 && this.templateUuids.length < this.expectedTemplateCount;
   }
 
   get itemUuid(): string | undefined {
@@ -1284,7 +1618,7 @@ export class Workflow {
   }
 
   get otherDamageFlavor() {
-    if (this.otherActivity?.type === "heal") return i18n("midi-qol.OtherHealIngFlavor");
+    if (this.otherActivity?.type === "heal") return i18n("midi-qol.OtherHealingFlavor");
     if (this.otherActivity?.midiProperties?.displayActivityName) {
       return i18n(this.otherActivity.name);
     }
@@ -1300,7 +1634,7 @@ export class Workflow {
   }
 
   get hasSave(): boolean {
-    return Boolean(this.activity.save || this.activity.check || this.otherActivity?.save || this.otherActivity?.check);
+    return Boolean(this.activity.save || this.activity.check || this.otherActivity?.save || this.otherActivity?.check || this.otherSaveActivity);
   }
 
   get otherDamageFormula() {
@@ -1322,17 +1656,22 @@ export class Workflow {
     const normalRoll = getAutoRollDamage(this) === "always"
       || !!(getAutoRollDamage(this) === "saveOnly" && this.activity.save && !this.activity.attack)
       || !!(getAutoRollDamage(this) !== "none" && (!this.activity.attack || configSettings.autoCheckHit === "none"))
-      || !!(getAutoRollDamage(this) === "onHit" && (this.hitTargets.size > 0 || this.hitTargetsEC?.size > 0 || this.targets.size === 0))
-      || !!(getAutoRollDamage(this) === "onHit" && (this.hitTargetsEC?.size > 0));
+      || !!(getAutoRollDamage(this) === "onHit" && (this.hitTargets.count > 0 || this.hitTargetsEC?.count > 0 || this.targets.count === 0))
+      || !!(getAutoRollDamage(this) === "onHit" && (this.hitTargetsEC?.count > 0));
     return this.rollOptions?.rollToggle ? !normalRoll : normalRoll;
+  }
+
+  /** The id of the concentration effect this use began, from the usage card. */
+  get concentrationId(): string | undefined {
+    // @ts-expect-error no dnd5e-types
+    return this.chatCard?.system.concentration;
   }
 
   get spellLevel(): number {
     let spellLevel;
     if (this.chatCard) {
-      spellLevel = isDnd5e53
-        ? foundry.utils.getProperty(this.chatCard, "system.spellLevel")
-        : foundry.utils.getProperty(this.chatCard, "flags.dnd5e.use.spellLevel");
+      // @ts-expect-error no dnd5e-types
+      spellLevel = this.chatCard.system.level;
     }
     return spellLevel ?? this.castData?.castLevel ?? 0;
   }
@@ -1340,9 +1679,10 @@ export class Workflow {
   get workflowType() { return "BaseWorkflow" };
 
   setTargets(targets: Set<TokenOrDocument>) {
-    this.targets = new Set(targets);
+    // A token set: a plain copy of one would be its drawn Tokens
+    this.targets = new TokenDocumentSet(targets);
     this.saves = new Set();
-    this.failedSaves = new Set(this.targets)
+    this.failedSaves = new TokenDocumentSet(this.targets)
     this.hitTargets = new Set();
     this.superSavers = new Set();
     this.semiSuperSavers = new Set();
@@ -1353,85 +1693,99 @@ export class Workflow {
   }
 
   get saveRolls() {
-    foundry.utils.logCompatibilityWarning("Workflow.saveRolls is deprecated without replacement. Use workflow.tokenSaves instead", {since: "midi-qol 13.0.42", until: "mid-qol 13.1.0"});
+    foundry.utils.logCompatibilityWarning("Workflow.saveRolls is deprecated without replacement. Use workflow.tokenSaves instead", { since: "midi-qol 13.0.42", until: "mid-qol 13.1.0" });
     if (this.tokenSaves)
       return Object.values(this.tokenSaves);
     return [];
   }
 
   ammunition: Item.Implementation | undefined;
+  /** An activity carried by the loaded ammunition. Independent of otherActivity — both can run. */
+  ammunitionActivity: any | undefined;
   systemCard: boolean | undefined;
   aborted: boolean = false;
   workflowName: string | undefined;
   forceApplyEffects: boolean;
-  onUseCalled: boolean;
-  attackRolled: boolean;
+  /** How the use ended up, for the stages after it: "ok" unless one of the genuine early exits or every target missed */
+  outcome: WorkflowOutcome = "ok";
   longRangeAttack: boolean | undefined;
-  preSelectedTargets: Set<Token.Implementation>;
+  preSelectedTargets: TokenDocumentSet;
   postSummonHookId: number | undefined;
   summonedCreatures: TokenDocument.Implementation[] | undefined;
   transformedActorUuids: string[] | undefined;
+  /** A teleport activity's moves: dnd5e's TeleportMovementResult list (token, plan, moved). */
+  teleportResults: { token: Token.Implementation, plan: unknown, moved: boolean }[] | undefined;
   transformedActors: Actor.Implementation[] | undefined;
-  kickStart: boolean | undefined;
-  disadvantageSaves: Set<Token.Implementation> | undefined;
+  disadvantageSaves: TokenDocumentSet | undefined;
   saveResults: Roll[] | undefined; /* D20Roll */
   stateTransitionCount: number | undefined;
+  /** Running performState calls: above 0 while the workflow executes, 0 when it is paused, finished or failed. */
+  executingStates = 0;
   maxTransitionCount: number = 250;
   selfTargeted: boolean | undefined;
   workflowStartTime: number | undefined;
-  rangeTargeting: boolean | undefined;
-  tempTargetConfirmation: boolean | undefined;
+  /** Targets from an emanation with no template */
+  get rangeTargeting(): boolean {
+    return activityHasEmanationNoTemplate(this.activity);
+  }
+  /** Targets from a template that auto-targets */
+  get tempTargetConfirmation(): boolean {
+    return getActivityAutoTargetAction(this.activity) !== "none" && activityHasAreaTarget(this.activity);
+  }
   whisperAttackCard: boolean | undefined;
-  effectTargets: Set<Token.Implementation> | undefined;
+  effectTargets: TokenDocumentSet | undefined;
   // Deferred other activity damage rolling - stored when consumption needs to be checked first
   otherDamageConfig: RollProcessConfig | undefined;
   otherDamageDialog: RollDialogConfig | undefined;
-  activationMatches: Set<Token.Implementation> | undefined;
-  activationFails: Set<Token.Implementation> | undefined;
-  otherActivationMatches: Set<Token.Implementation> | undefined;
-  otherActivationFails: Set<Token.Implementation> | undefined;
-  otherEffectTargets: Set<Token.Implementation> | undefined;
-  allOtherEffectTargets: Set<Token.Implementation> | undefined;
-  effectTargetsOnSave: Set<Token.Implementation> | undefined;
-  otherEffectTargetsOnSave: Set<Token.Implementation> | undefined;
+  activationMatches: TokenDocumentSet | undefined;
+  activationFails: TokenDocumentSet | undefined;
+  otherActivationMatches: TokenDocumentSet | undefined;
+  otherActivationFails: TokenDocumentSet | undefined;
+  otherEffectTargets: TokenDocumentSet | undefined;
+  effectTargetsOnSave: TokenDocumentSet | undefined;
+  otherEffectTargetsOnSave: TokenDocumentSet | undefined;
   otherDamageTotal: number | undefined;
   bonusDamageTotal: number | undefined;
-  keepActivityCard: boolean | undefined;
   needsHitTargetsDisplayed: boolean = true;
   // TODO: Type this
   conditionData: any | undefined;
   flankingAdvantage: boolean | undefined;
-  bonusDamageHTML: string | undefined;
-  otherDamageList: DamageListEntry[] | undefined;
+  /** A fixed flanking bonus for this single-target melee attack, added to the roll (attackRollParts). */
+  flankingRollBonus: { bonus: number, kind: AttackModifier["kind"], label: string } | undefined;
+  /** The target whose granted attack bonus is already in the attack roll, so checkHits doesn't add it again. */
+  grantedAttackBonusInRollUuid: string | undefined;
+  /** Flanking that gave this attack advantage, shown on the attack roll ("flanking" or "flanked"). */
+  flankingAdvantageKind: AttackModifier["kind"] | undefined;
   macroPass: string | undefined;
   tag: string | undefined;
   activeDefenceDC: number | undefined;
-  utilityRollHTML: string | undefined;
-  useOther: boolean | undefined;
-  otherDamageRollHTML: string | undefined;
-  saveTargetsDisplayed: boolean | undefined;
+  /** What midi's damage calculation actually applied, per target uuid. Set by `processDamageRoll`. */
+  midiTargetDetail: Record<string, Record<string, unknown>> | undefined;
   targetSaveDetails: Record<string, SaveDetails> | undefined;  // Per-target SaveDetails for attribution tracking
 
   /** Get save rolls keyed by target UUID - derived from targetSaveDetails */
+  // A rebuilt workflow's save rolls, from its card (#restoreFromCard), until it processes saves of its own
+  #restoredSaves: Record<string, Roll> | undefined;
   get tokenSaves(): Record<string, Roll> | undefined {
-    if (!this.targetSaveDetails) return undefined;
+    if (!this.targetSaveDetails) return this.#restoredSaves;
     const result: Record<string, Roll> = {};
     for (const [uuid, details] of Object.entries(this.targetSaveDetails)) {
       if (details.saveRoll) result[uuid] = details.saveRoll;
     }
     return Object.keys(result).length > 0 ? result : undefined;
   }
+  /** A target's save roll (a Token, TokenDocument or token uuid); undefined until it has rolled */
+  saveRoll(token: TokenOrDocument | string): Roll | undefined {
+    const uuid = typeof token === "string" ? token : getTokenDocument(token)?.uuid;
+    if (!uuid) return undefined;
+    return this.targetSaveDetails ? this.targetSaveDetails[uuid]?.saveRoll : this.#restoredSaves?.[uuid];
+  }
   saveDC: number | undefined;
   saveDetails: SaveDetails | undefined;
   damageItem: DamageListEntry | undefined;
   challengeModeScale: Record<string, number> | undefined;
   activeDefenceRolls: Record<string, Roll> | undefined;
-  rollResults: Roll[] | undefined;
-  healingAdjustedDamageTotal: number | undefined;
   flavor: string | undefined;
-  healingAdjustedBonusDamageTotal: number | undefined;
-  bonusDamageRollHTML: string | undefined;
-  healingAdjustedOtherDamageTotal: number | undefined;
   attackMode: string | undefined;
   itemUsesReaction: boolean | undefined;
   itemUsesBonusAction: boolean | undefined;
@@ -1446,7 +1800,6 @@ export class Workflow {
   targetACModifiers: Map<string, number> = new Map(); // Map of actor uuid to AC modifier, used for active defences
 
   // Does this do anything?
-  applicationTargets: Set<Token.Implementation> | undefined;
 
   // TODO: these
   rollOptions: WorkflowRollOptions;
@@ -1454,7 +1807,6 @@ export class Workflow {
     castLevel?: number;
   } | undefined;
 
-  throttleChatMessageUpdates: undefined | ((document: foundry.abstract.Document.Any, updates: ChatMessage.UpdateData) => Promise<void>);
   // TODO: type options
   constructor(
     actor: Actor.Implementation | null /* Actor5e*/,
@@ -1464,9 +1816,23 @@ export class Workflow {
     options: WorkflowConstructorOptions = { chatCardUuid: undefined, storeWorkflow: true, item: undefined }
   ) {
     this.workflowStartTime = Date.now();
-    if (options.chatCardUuid && saveToChatCard) {
+    // Rebuilt from its card (fromChatCardUuid): the stored state stays as it is
+    const restoring = !!options.chatCardUuid;
+    this.readOnly = !!options.readOnly;
+    if (restoring) {
       this.itemCardUuid = options.chatCardUuid;
-      this.id = options.chatCardUuid;
+      this.id = options.chatCardUuid!;
+      const card = this.#ownCard();
+      if (card) {
+        this.#persisted.load(card);
+        // The use's item and activity, scaled, with what the use changed in them: the activity's item is the item
+        const use = restoredUse(card);
+        this.#activity = use.activity;
+        this.#item = use.item;
+        this.#speaker = card.speaker;
+      }
+      if (!this.#activity?.item) throw new Error(`the card's activity can't be found (${options.chatCardUuid})`);
+      this.workflowName = `${this.constructor.name} ${this.item?.name ?? "no item"} restored`;
     } else {
       // In this case, `actor`, `activity`, and `speaker` are mandatory
       if (!actor || !activity || !speaker) {
@@ -1480,7 +1846,9 @@ export class Workflow {
       if (!this.token) {
         this.token = getOrCreateTokenForActor(this.actor);
       }
-      if (targets && (targets instanceof Set ? targets.size : targets.length) !== 0) this.targets = new Set(targets ? targets : []);
+      // Kept as a token set: a plain copy would read as the drawn Tokens only
+      const given = targets ? new TokenDocumentSet(targets) : undefined;
+      if (given?.count) this.targets = given;
       if (speaker) this.speaker = speaker;
       this.hitTargets = new Set();
       this.hitTargetsEC = new Set();
@@ -1494,12 +1862,11 @@ export class Workflow {
         this.id = foundry.utils.randomID();
         this.workflowName = `workflow ${this.id}`;
       } else {
-        this.id = this.activity.uuid; // Temporary until the item card is created.
+        // No id until the use's card exists (its uuid): before then it is found by its activity (workflowFor)
         const workflowName = options.workflowOptions?.workflowName ?? this.item.name ?? "no item";
         this.workflowName = `${this.constructor.name} ${workflowName} ${foundry.utils.randomID()}`;
-        if (options.storeWorkflow) Workflow.addWorkflow(this);
       }
-      this.noOptionalRules = options?.noOptionalRules ?? !configSettings.optionalRulesEnabled;
+      if (options?.noOptionalRules !== undefined) this.noOptionalRules = options.noOptionalRules;
       this.attackRollCount = 0;
       this.damageRollCount = 0;
       this.advantage = undefined;
@@ -1511,56 +1878,38 @@ export class Workflow {
       this.rawDamageDetail = [];
       this.rawOtherDamageDetail = [];
       this.effectsAlreadyExpired = [];
-      this.workflowOptions = options?.workflowOptions ?? {};
       if (this.speaker.scene) this.speaker.scene = canvas.scene?.id ?? "";
     }
 
-    // this.spellLevel = item?.level || 0;
-
     this.saveRequests = {};
+    this.saveRequestKinds = {};
     this.defenceRequests = {};
     this.saveTimeouts = {};
     this.defenceTimeouts = {}
     this.forceApplyEffects = false;
-    this.onUseCalled = false;
-    this.attackRolled = false;
-    this.flagTags = undefined;
     if (options.rollOptions) this.rollOptions = options.rollOptions;
     else this.rollOptions = {};
     if (options.event) this.rollOptions.event = options.event;
     else if (options.workflowOptions?.event) this.rollOptions.event = options.workflowOptions.event;
-    this.workflowOptions = foundry.utils.mergeObject(defaultRollOptions, {
-      autoRollAttack: getAutoRollAttack(this),
-      autoRollDamage: getAutoRollDamage(this),
-      fastForwardAttack: isAutoFastForward("attack", { workflow: this }),
-      fastForwardDamage: isAutoFastForward("damage", { workflow: this })
-    }, { inplace: false });
-    if (options.workflowOptions)
-      foundry.utils.mergeObject(this.workflowOptions, options.workflowOptions, { overwrite: true });
-    if (this.activity.midiProperties?.noConcentrationCheck) this.workflowOptions.noConcentrationCheck = true;
-    if (this.workflowOptions.templateUuid) this.templateUuid = this.workflowOptions.templateUuid;
+    this.expectedTemplateCount = expectedTemplateCount(this.activity);
+    if (!restoring) {
+      this.#mergeWorkflowOptions(options.workflowOptions ?? {});
+      if (this.workflowOptions.templateUuid) this.templateUuid = this.workflowOptions.templateUuid;
+      if (this.actor) {
+        this.inCombat = isInCombat(this.actor);
+        this.isTurn = !!game.combats?.some(combat => combat.started && combat.combatant?.actor?.uuid === this.actor.uuid);
+      }
+    }
 
     this.defaultDamageType = getActivityDefaultDamageType(this) ?? MidiQOL.MQdefaultDamageType;
-    MidiQOL.MQdefaultDamageType = this.defaultDamageType; // Set the default damage type for the module.
     if (this.activity.actionType === "heal" && !Object.keys(GameSystemConfig.healingTypes).includes(this.defaultDamageType ?? "")) this.defaultDamageType = "healing";
+    if (restoring) {
+      this.preSelectedTargets = new TokenDocumentSet();
+      this.#restoreFromCard();
+      return;
+    }
 
-    // Record targets selected before cast — prefer UUIDs captured early in use() before template targeting
-    // preSelectedTargets is used by sculpt spells logic
-    if (this.workflowOptions?.preSelectedTargetUuids?.length) {
-      this.preSelectedTargets = new Set(
-        this.workflowOptions.preSelectedTargetUuids
-          .map(uuid => (fromUuidSync(uuid) as TokenDocument | null)?.object)
-          .filter((t): t is Token.Implementation => !!t)
-      );
-    } else {
-      this.preSelectedTargets = canvas?.scene ? new Set(game.user?.targets ?? []) : new Set();
-    }
-    if (activityHasAreaTarget(this.activity) && !activityHasAutoPlaceTemplate(this.activity)) {
-      this.expectedTemplateCount = Number(this.activity?.target?.template?.count) || 1;
-    } else {
-      this.expectedTemplateCount = 0;
-    }
-    this.templateUuids = [];
+    this.preSelectedTargets = this.#preSelectedTargets();
     if (this.activity instanceof MidiSummonActivity && configSettings.autoRemoveSummonedCreature) {
       // Hooks.on + uuid filter rather than Hooks.once: concurrent summon workflows must not consume each other's hook
       this.postSummonHookId = Hooks.on("dnd5e.postSummon", (activity, profile, createdTokens, options) => {
@@ -1569,8 +1918,76 @@ export class Workflow {
       })
     }
     this.itemUseComplete = false;
-    this.kickStart = false;
-    this.throttleChatMessageUpdates = getThrottlingFunction();
+  }
+
+  /**
+   * The use's options: the caller's over midi's defaults and the roller's settings. The card stores only the caller's
+   * and later changes (assigned, or made in place: #syncWorkflowOptions), and a rebuilt workflow merges them again.
+   */
+  #mergeWorkflowOptions(callerOptions: WorkflowOptions): void {
+    const stored = () => encodeWorkflowOptions(callerOptions);
+    // The auto-roll settings give way to the caller's options, read from the workflow
+    this.#persisted.setWorkflowOptions(callerOptions, stored);
+    const merged: WorkflowOptions = foundry.utils.mergeObject(defaultRollOptions, {
+      autoRollAttack: getAutoRollAttack(this),
+      autoRollDamage: getAutoRollDamage(this),
+      fastForwardAttack: isAutoFastForward("attack", { workflow: this }),
+      fastForwardDamage: isAutoFastForward("damage", { workflow: this })
+    }, { inplace: false });
+    foundry.utils.mergeObject(merged, callerOptions, { overwrite: true });
+    if (this.activity.midiProperties?.noConcentrationCheck) merged.noConcentrationCheck = true;
+    this.#callerOptions = { ...callerOptions };
+    this.#mergedOptions = foundry.utils.deepClone(merged);
+    this.#persisted.setWorkflowOptions(merged, stored);
+  }
+
+  /**
+   * Targets selected before the use: UUIDs captured early in use(), before template targeting. Sculpt Spells and
+   * Careful Spells read them at the saves.
+   */
+  #preSelectedTargets(): TokenDocumentSet {
+    // An empty snapshot is a choice of none; only a use with no snapshot (not started by use()) reads the user's targets
+    if (this.workflowOptions?.preSelectedTargetUuids !== undefined) return new TokenDocumentSet(this.workflowOptions.preSelectedTargetUuids);
+    return canvas?.scene ? new TokenDocumentSet(game.user?.targets ?? []) : new TokenDocumentSet();
+  }
+
+  /** A rebuilt workflow's values that are worked out from its card and the canvas, not stored */
+  #restoreFromCard() {
+    this.suspended = true;
+    this.itemUseComplete = true;
+    if (this.#persisted.scalar("isCritical", false)) this.attackRollModifierTracker.critical.setOverride(true, "restored", "Restored from chat card");
+    if (this.#persisted.scalar("isFumble", false)) this.attackRollModifierTracker.fumble.setOverride(true, "restored", "Restored from chat card");
+    // Where it waits, worked out from the card
+    const resumePoint = Workflow.cardResumePoint(this.#ownCard()) ?? "";
+    const action: unknown = Reflect.get(this, resumePoint);
+    const isState = (value: unknown): value is WorkflowState => typeof value === "function";
+    if (isState(action)) this.#currentAction = action;
+    else error(`${this.workflowName} | no state ${resumePoint} to resume in`);
+    if (!this.#item) error(`${this.workflowName} | could not find the item of card ${this.itemCardUuid}`);
+    this.#mergeWorkflowOptions(this.workflowOptions);
+    if (this.workflowOptions.preSelectedTargetUuids?.length) this.preSelectedTargets = this.#preSelectedTargets();
+    if (!this.hasSave) this.failedSaves = this.activity.attack ? this.hitTargets.union(this.hitTargetsEC) : new TokenDocumentSet(this.targets);
+    const speaker = this.chatCard?.speaker;
+    const speakerToken = speaker?.token ? game.scenes?.get(speaker.scene ?? "")?.tokens.get(speaker.token)?.object : undefined;
+    this.token = speakerToken ?? getOrCreateTokenForActor(this.actor) ?? undefined;
+    const attack = this.attackRoll;
+    this.attackTotal = attack?.total ?? minAttackTotal;
+    if (attack) {
+      this.diceRoll = Workflow.diceRollOf(attack);
+      this.d20AttackRoll = Workflow.d20Of(attack) ?? -1;
+    }
+    if (this.damageRolls?.length) this.deriveDamage();
+    if (this.bonusDamageRolls?.length) this.deriveBonusDamage();
+    if (this.otherDamageRolls?.length) this.deriveOtherDamage();
+    this.damageDetail = foundry.utils.deepClone(this.rawDamageDetail);
+    this.bonusDamageDetail = foundry.utils.deepClone(this.rawBonusDamageDetail);
+    this.otherDamageDetail = foundry.utils.deepClone(this.rawOtherDamageDetail);
+    // The other activity's use declined: its damage dropped, the ammunition's kept
+    if (this.otherConsumed === false) this.dropOtherActivityDamage();
+    // A read-only copy is for reading the card: it doesn't recompute sight (asynchronous, so not there to read anyway)
+    if (!this.readOnly) void this.activity?.setupCanSeeSense?.({ workflow: this });
+    const saves = this.targets.documents.map(t => [t.uuid, cardSaveRoll(this.chatCard, t.uuid)] as const).filter(([, roll]) => !!roll);
+    if (saves.length) this.#restoredSaves = Object.fromEntries(saves) as Record<string, Roll>;
   }
 
   public someEventKeySet() {
@@ -1585,73 +2002,29 @@ export class Workflow {
 
   static async removeItemCardConfirmRollButton(itemCardUuid: string) {
     const chatMessage = getCachedDocument(itemCardUuid) as ChatMessage.Implementation;
-    const workflow = Workflow.getWorkflow(itemCardUuid);
-    if (!chatMessage?.content) return;
-    let content = chatMessage.content;
-    const confirmMissRe = /<button class="midi-qol-confirm-damage-roll-complete-miss" data-action="confirmDamageRollCompleteMiss">[^<]*?<\/button>/;
-    content = content?.replace(confirmMissRe, "");
-    const confirmRe = /<button class="midi-qol-confirm-damage-roll-complete" data-action="confirmDamageRollComplete">[^<]*?<\/button>/;
-    content = content?.replace(confirmRe, "");
-    const confirmHitRe = /<button class="midi-qol-confirm-damage-roll-complete-hit" data-action="confirmDamageRollCompleteHit">[^<]*?<\/button>/;
-    content = content?.replace(confirmHitRe, "");
-    const cancelRe = /<button class="midi-qol-confirm-damage-roll-cancel" data-action="confirmDamageRollCancel">[^<]*?<\/button>/;
-    content = content?.replace(cancelRe, "");
-    // TODO come back and make this cached.
-    return await throttledUpdate(chatMessage, { content }, workflow?.throttleChatMessageUpdates, false);
+    const workflow = Workflow.findWorkflow(itemCardUuid);
+    if (!chatMessage) return;
+    const update = { "system.midi.progress": { confirmed: true } } as ChatMessage.UpdateData;
+    return workflow ? await workflow.performThrottledUpdate(chatMessage, update) : await throttledUpdate(chatMessage, update);
   }
 
-  static async removeItemCardButtons(itemCardUuid: string | undefined, { removeAllButtons = false, removeAttackButtons = true, removeDamageButtons = false, removeDnD5eButtons = false, removeConfirmButtons = false, removeAllDnd5eButtons = false, removeDnd5eSaveButtons = false, removeDnd5eTemplateButtons = false } = {}) {
+  static async removeItemCardButtons(itemCardUuid: string | undefined, { removeAllButtons = false, removeConfirmButtons = false, removeAllDnd5eButtons = false, removeDnd5eSaveButtons = false, finished = false } = {}) {
     try {
-      const workflow = Workflow.getWorkflow(itemCardUuid);
+      const workflow = Workflow.findWorkflow(itemCardUuid);
       const chatMessage = workflow?.chatCard;
-      if (!chatMessage?.content) return;
-      let content = chatMessage?.content;
-      let allowRemoveAll = !(workflow && workflow.activity?.target.affects.type === "" && workflow.targets.size === 0)
-      if (removeAllButtons && allowRemoveAll) {
-        const buttonRe = /<button[\s\S]*?<\/button>/gi;
-        content = content.replace(buttonRe, "");
-        return await throttledUpdate(chatMessage, { content }, workflow?.throttleChatMessageUpdates, false);
-      } else {
-        if (removeAttackButtons) {
-          const attackRe = /<div class="midi-qol-attack-buttons[^"]*">[\s\S]*?<\/div>/;
-          content = content?.replace(attackRe, "")
-        }
-        if (removeDamageButtons) {
-          const damageRe = /<div class="midi-qol-damage-buttons[^"]*">[\s\S]*?<\/div>/
-          const otherDamageRe = /<button class="midi-qol-otherDamage-button" data-action="rollDamage">[^<]*<\/button>/
-          const formulaRe = /<button data-action="rollFormula">[^<]*<\/button>/
-          content = content?.replace(damageRe, "")
-          content = content?.replace(otherDamageRe, "")
-          content = content?.replace(formulaRe, "")
-        }
-        if (removeAllDnd5eButtons) { // This is not correct
-          const dnd5eRe = /<div class="midi-dnd5e-buttons">[\s\S]*?<div class="end-midi-dnd5e-buttons">/
-          content = content?.replace(dnd5eRe, "<div class='midi-dnd5e-buttons'><\/div><div class='end-midi-dnd5e-buttons'>")
-        } else {
-          if (removeDnd5eSaveButtons) {
-            const saveRe = /<button[\s\S].*?data-action="rollSave"[\s\S]*?<\/button>/
-            for (let count = 0; count < 100; count++) {
-              if (!content.match(saveRe)) break;
-              content = content?.replace(saveRe, "")
-            }
-          }
-          if (removeDnd5eTemplateButtons) {
-            const templateRe = /<button[\s\S].*?data-action="placeTemplate"[\s\S]*?<\/button>/
-            content = content?.replace(templateRe, "")
-          }
-        }
-        if (removeConfirmButtons) {
-          const confirmMissRe = /<button class="midi-qol-confirm-damage-roll-complete-miss" data-action="confirmDamageRollCompleteMiss">[^<]*?<\/button>/;
-          content = content?.replace(confirmMissRe, "");
-          const confirmRe = /<button class="midi-qol-confirm-damage-roll-complete" data-action="confirmDamageRollComplete">[^<]*?<\/button>/;
-          content = content?.replace(confirmRe, "");
-          const confirmHitRe = /<button class="midi-qol-confirm-damage-roll-complete-hit" data-action="confirmDamageRollCompleteHit">[^<]*?<\/button>/;
-          content = content?.replace(confirmHitRe, "");
-          const cancelRe = /<button class="midi-qol-confirm-damage-roll-cancel" data-action="confirmDamageRollCancel">[^<]*?<\/button>/;
-          content = content?.replace(cancelRe, "");
-        }
-        return await throttledUpdate(chatMessage, { content }, workflow?.throttleChatMessageUpdates);
-      }
+      if (!chatMessage) return;
+      let allowRemoveAll = !(workflow && workflow.activity?.target.affects.type === "" && workflow.targets.count === 0)
+
+      // The card is drawn from its data, so the events are recorded and `midiButtonVisibility` decides what each
+      // viewer sees; the removal policies are the viewer's settings, read at render
+        const progress: Record<string, boolean> = {};
+        if (removeAllButtons && allowRemoveAll) progress.allRemoved = true;
+        if (removeConfirmButtons) progress.confirmed = true;
+        if (removeDnd5eSaveButtons || removeAllDnd5eButtons) progress.savesResolved = true;
+        if (finished) progress.finished = true;
+        if (foundry.utils.isEmpty(progress)) return;
+        return await workflow.performThrottledUpdate(chatMessage, { "system.midi.progress": progress } as ChatMessage.UpdateData);
+
     } catch (err) {
       const message = `removeItemCardButtons`;
       TroubleShooter.recordError(err, message);
@@ -1664,22 +2037,32 @@ export class Workflow {
       warn("removeWorkflow | No id");
       return;
     }
-    const workflow = Workflow.getWorkflow(id);
+    // Only one in memory: an ended or forgotten workflow is not rebuilt to be removed
+    Workflow.#ended.add(id);
+    const entry = Workflow.#workflows.get(id);
+    const workflow = entry instanceof WeakRef ? entry.deref() : entry;
     if (!workflow) {
       if (debugEnabled > 0) warn("removeWorkflow | No such workflow ", id);
       return;
     }
     if (workflow.postSummonHookId) Hooks.off("dnd5e.postSummon", workflow.postSummonHookId);
-    if (debugEnabled > 0) warn(`removeWorkflow deleting ${id}`, Workflow.workflows.get(id));
-    Workflow.workflows.delete(id);
-    // Remove buttons
-    if (workflow.itemCardUuid) {
+    if (debugEnabled > 0) warn(`removeWorkflow deleting ${id}`, workflow);
+    // Remove buttons while the workflow is still filed: removeItemCardButtons finds it by id, and an ended id is not rebuilt
+    try {
+      await Workflow.#removeCardButtons(workflow);
+    } finally {
+      Workflow.#workflows.delete(id);
+    }
+  }
+
+  static async #removeCardButtons(workflow: Workflow) {
+    if (workflow.ownsCard) {
       if (workflow.currentAction === workflow.WorkflowState_ConfirmRoll) {
-        const itemCard = workflow.chatCard;
-        if (itemCard) await itemCard.delete();
+        await Workflow.deleteAbortedCard(workflow.chatCard);
         clearUpdatesCache(workflow.itemCardUuid);
       } else {
         await Workflow.removeItemCardButtons(workflow.itemCardUuid, { removeAllButtons: true });
+        await workflow.flushCardWrites();
         setTimeout(() => {
           const chatMessageElt = document?.querySelector(`[data-message-id="${workflow.itemCardId ?? "XXX"}"]`);
           if (chatMessageElt) chatMessageElt.querySelectorAll(".collapsible").forEach(ce => { if (!ce.classList.contains("collapsed")) ce.classList.add("collapsed") });
@@ -1732,7 +2115,7 @@ export class Workflow {
     if (debugEnabled > 1) log(`callOnUseMacrosForAction | ${prePost} ${this.nameForState(action)}`)
     const macroPass = `${prePost}${this.nameForState(action)}`;
 
-    if (this.ammunition) await this.callMacros(this.item, this.ammunitionOnUseMacros?.getMacros(macroPass), "OnUse", macroPass);
+    if (this.ammunition) await this.callMacros(this.ammunition, this.ammunitionOnUseMacros?.getMacros(macroPass), "OnUse", macroPass);
     if (debugEnabled > 1) log(`callOnUseMacrosForAction | ${this.onUseMacros?.getMacros(macroPass)}`)
     return this.callMacros(this.item, this.onUseMacros?.getMacros(macroPass), "OnUse", macroPass);
 
@@ -1747,44 +2130,68 @@ export class Workflow {
     return Workflow.nameForState(state);
   }
 
-  /**
-   *
-   * @param context context to be passed to the state call. Typically the data that caused the an unsuspend to fire, but can be others
-   * Trigger execution of the current state with the context that triggered the unsuspend. e.g. attackRoll or damageRoll
-   */
-  public async unSuspend(context: WorkflowContext = {}) {
-    if (context.itemCardUuid) {
-      this.itemCardUuid = context.itemCardUuid;
+  // A roll that finished while its waiting state was still on its way to suspending (writing the card): taken up then
+  #pendingEvent: { state: WorkflowState, event?: WorkflowEvent } | undefined;
 
-    }
-    if (context.itemUseComplete) this.itemUseComplete = true;
-
-    // Currently this just brings the workflow to life.
-    // next version it will record the contexts in the workflow and bring the workflow to life.
-    if (this.suspended) {
-      this.suspended = false;
-      // Need to record each of the possible things
-      // attackRoll
-      // damageRoll
-      this.performState(this.currentAction, context);
+  /** The state that waits for `event`, if the workflow is in it */
+  #awaits(event: WorkflowEvent | undefined): boolean {
+    const waiting = this.currentAction;
+    switch (event) {
+      case "attackRolled": return waiting === this.WorkflowState_WaitForAttackRoll;
+      case "damageRolled": case "noDamage": return waiting === this.WorkflowState_WaitForDamageRoll;
+      case "utilityRolled": return waiting === this.WorkflowState_WaitForUtilityRoll;
+      default: return false;
     }
   }
 
-  /**
-   * Process templates that have been placed, integrating them with the workflow.
-   * Validates template count, deletes incomplete placements, sets up template tracking,
-   * cleanup, targeting, and advances the workflow if suspended.
-   * @param templates - Array of placed template documents
-   * @param activity - The activity that placed the templates (used to determine expected count)
-   * @returns true if all expected templates were placed and processed, false if incomplete
-   */
+  /** Wake a suspended workflow; without an event it re-runs the state it waits in */
+  public async resume(event?: WorkflowEvent) {
+    if (!this.suspended) {
+      if (this.executingStates > 0 && this.#awaits(event)) this.#pendingEvent = { state: this.currentAction, event };
+      return;
+    }
+    // New damage while saves are awaited is shown, and the saves keep waiting
+    if (event === "damageRolled" && this.currentAction === this.WorkflowState_WaitForSaves) return this.displayDamageRolls();
+    this.suspended = false;
+    Workflow.#holdRunning(this);
+    return this.performState(event ? this.stateAfter(event) : this.currentAction);
+  }
+
+  /** Where a suspended workflow goes when `event` arrives: by the state it waits in, else that state again */
+  stateAfter(event: WorkflowEvent): WorkflowState {
+    const waiting = this.currentAction;
+    switch (event) {
+      case "attackRolled":
+        if (waiting === this.WorkflowState_WaitForAttackRoll) return this.abort ? this.WorkflowState_Abort : this.WorkflowState_AttackRollComplete;
+        // A re-rolled attack
+        if (waiting === this.WorkflowState_WaitForDamageRoll || waiting === this.WorkflowState_ConfirmRoll || waiting === this.WorkflowState_Completed)
+          return this.WorkflowState_AttackRollComplete;
+        break;
+      case "damageRolled":
+        if (waiting === this.WorkflowState_WaitForDamageRoll || waiting === this.WorkflowState_Completed) return this.WorkflowState_ConfirmRoll;
+        break;
+      case "noDamage":
+        if (waiting === this.WorkflowState_WaitForDamageRoll) return this.WorkflowState_WaitForSaves;
+        break;
+      case "utilityRolled":
+        if (waiting === this.WorkflowState_WaitForUtilityRoll || waiting === this.WorkflowState_Completed) return this.WorkflowState_UtilityRollComplete;
+        break;
+    }
+    return waiting;
+  }
+
+  /** @deprecated since 14.6.9: use resume(event) */
+  public async unSuspend(context: WorkflowContext = {}) {
+    foundry.utils.logCompatibilityWarning("Workflow#unSuspend is deprecated: use Workflow#resume(event), event one of attackRolled, damageRolled, noDamage, utilityRolled.", { since: "14.6.9", until: "14.8.0" });
+    const event: WorkflowEvent | undefined = context.attackRoll ? "attackRolled" : context.damageRoll || context.otherDamageRoll ? "damageRolled"
+      : context.noDamage ? "noDamage" : context.utilityRolls ? "utilityRolled" : undefined;
+    return this.resume(event);
+  }
+
   async processPlacedTemplates(templates: MeasuredTemplateDocument[], activity?: Activity): Promise<boolean> {
     if (!templates || templates.length === 0) return false;
-
-    // Validate template count
     const expectedCount = Number(activity?.target?.template?.count) || 1;
-    const placedCount = countTemplateShapes(templates);
-    if (placedCount < expectedCount) {
+    if (templates.length < expectedCount) {
       // Incomplete placement: delete any templates placed so far
       for (const tDoc of templates) {
         try { await tDoc.delete(); } catch (e) { /* template may already be gone */ }
@@ -1793,77 +2200,64 @@ export class Workflow {
     }
 
     // Set midi-qol flags on each template and register cleanup
+    // v14: resolve proxy MeasuredTemplateDocuments to actual RegionDocuments
     for (const tDoc of templates) {
-      this.templateUuid = tDoc.uuid;  // setter pushes to array + persists
-      await this.setupTemplateCleanup(tDoc);
+      const regionDoc = tDoc._id ? canvas.scene?.regions.get(tDoc._id) : undefined;
+      const docToStore = regionDoc ?? tDoc;
+      this.templateUuid = docToStore.uuid;  // setter pushes to array + persists
+      await this.setupTemplateCleanup(docToStore);
     }
-    this.placedTemplateCount = placedCount;
-
-    // Compute targets from ALL templates at once
+    this.placedTemplateCount = templates.length;
+    // Auto-target before attaching region behaviors so attachToken "target" resolution
+    // sees the template targets rather than the stale pre-template selection
     this.selectAllTemplateTargets(activity);
-
-    // Advance the workflow if it was waiting for templates
+    for (const tDoc of templates) {
+      const regionDoc = tDoc._id ? canvas.scene?.regions.get(tDoc._id) : undefined;
+      if (regionDoc && activity) {
+        const overTimeActivity = activity.isOverTimeFlag
+          ? activity
+          // @ts-expect-error no dnd5e types for activities iterable
+          : activity.item?.system?.activities?.find((a: any) => a.isOverTimeFlag);
+        // @ts-expect-error _attachRegionActivityBehavior is defined on MidiActivityMixin
+        await activity._attachRegionActivityBehavior?.(regionDoc, this, overTimeActivity, this.spellLevel);
+      }
+    }
     if (this.suspended && this.currentAction === this.WorkflowState_AwaitTemplate) {
-      this.unSuspend();
+      this.resume();
     }
     return true;
   }
 
-  /**
-   * Compute targets from all placed templates and update targeting state.
-   * Called once after ALL templates are placed, rather than per-template.
-   */
   selectAllTemplateTargets(activity?: Activity): void {
-    if (!activity) activity = this.activity;
-    const selfToken = getToken(activity?.actor);
-    const ignoreSelf = (activity?.target?.affects.special ?? "").split(";").some(spec => ["-self"].includes(spec));
-    const AoETargetType = activity ? getAoETargetType(activity) : "any";
-    const targeting = getActivityAutoTargetAction(activity);
-    if (targeting === "none") return;
-
-    let allTargetTokens = computeTargetsFromTemplates(this.templateUuids, selfToken, ignoreSelf, AoETargetType, targeting);
-
-    // Apply target count limit if configured
-    if (activity?.target?.affects.count) {
-      const maxTargets = Number(activity.target.affects.count) || 0;
-      if (maxTargets > 0 && allTargetTokens.length > maxTargets) {
-        allTargetTokens = allTargetTokens.slice(0, maxTargets);
-      }
-    }
-
-    // Set all targets at once
-    const allIds = allTargetTokens.map(t => t.id).filter(Boolean) as string[];
-    updateUserTargets(allIds);
-    this.setTargets(new Set(game.user?.targets ?? []));
+    const tokens = computeActivityTemplateTargets(activity ?? this.activity, this.templateUuids);
+    if (!tokens) return;
+    updateUserTargets(tokens.map(t => t.id).filter(Boolean) as string[]);
+    // Creatures on other levels reached through an opening aren't drawn, so they join the use's targets, not the user's
+    const offLevel = computeOffLevelTemplateTargets(activity ?? this.activity, this.templateUuids);
+    this.setTargets(new Set<TokenOrDocument>([...(game.user?.targets ?? []), ...offLevel]));
   }
 
-  /**
-   * Sets up the deletion mechanism for a template as early as possible.
-   * For concentration activities, adds template as dependent of concentration effect.
-   * For non-concentration activities with duration, creates a template deletion effect.
-   *
-   * @param templateDocument The template document to set up cleanup for
-   * @returns true if a cleanup mechanism was set up, false otherwise
-   */
-  async setupTemplateCleanup(templateDocument: MeasuredTemplateDocument): Promise<boolean> {
-    // Skip if no template
+  async setupTemplateCleanup(templateDocument: MeasuredTemplateDocument | RegionDocument.Implementation): Promise<boolean> {
     if (!templateDocument) return false;
+    // Both MeasuredTemplateDocument and RegionDocument inherit setFlag/getFlag from Document base
+    const flagDoc = templateDocument as MeasuredTemplateDocument | RegionDocument.Implementation;
 
-    // Skip if template will be auto-removed for instantaneous spells
     if (configSettings.autoRemoveInstantaneousTemplate &&
       this.activity?.duration?.units === "inst") {
       return false;
     }
 
-    // Check for concentration effect first
+    // Concentration deferred: the effect does not exist yet, so neither link to a stale one from
+    // an earlier cast of the same item nor fall through to the non-concentration deletion effect.
+    // beginDeferredConcentration links every template in templateUuids once it has the effect.
+    if (this.deferredConcentration) return true;
+
     const concentrationEffect = getConcentrationEffect(this.actor, this.item);
     if (concentrationEffect) {
-      await templateDocument.setFlag("dnd5e", "dependentOn", concentrationEffect.uuid);
+      await (flagDoc as MeasuredTemplateDocument).setFlag("dnd5e", "dependentOn", concentrationEffect.uuid);
       return true;
     }
 
-    // Non-concentration: create template deletion effect if conditions are met
-    // Requires DAE and autoRemoveTemplate setting
     if (!installedModules.get("dae") || !configSettings.autoRemoveTemplate) {
       return false;
     }
@@ -1875,11 +2269,10 @@ export class Workflow {
     );
 
     if (existingEffect) {
-      await templateDocument.setFlag("dnd5e", "dependentOn", existingEffect.uuid);
+      await (flagDoc as MeasuredTemplateDocument).setFlag("dnd5e", "dependentOn", existingEffect.uuid);
       return true;
     }
 
-    // Create new template deletion effect
     const activityDuration = this.activity.duration;
     if (!activityDuration?.units) return false;
 
@@ -1887,10 +2280,7 @@ export class Workflow {
     const inCombat = (game.combat as Combat)?.turns.some(
       combatant => combatant.tokenId === selfTarget?.id
     );
-
     const converted = convertDuration(activityDuration, inCombat);
-
-    // Don't create effect for permanent/special durations
     if (converted.type === "none") {
       return false;
     }
@@ -1902,43 +2292,39 @@ export class Workflow {
       name: this.item.name + templateString,
       duration: {},
       flags: {
-        dae: { stackable: "noneName" }
+        dae: { stackable: "noneName", expiryMode: "delete" },
+        dnd5e: this.casterEffectSource()
       },
     };
 
-    // Set duration based on converted duration
     if (converted.type === "seconds") {
-      effectData.duration = { startTime: game.time?.worldTime };
       if (converted.seconds !== undefined) {
-        effectData.duration.seconds = converted.seconds;
+        // @ts-expect-error fvtt-types v14 duration
+        effectData.duration = { value: converted.seconds, units: "seconds", expiry: null };
       }
+      // @ts-expect-error fvtt-types v14 duration
+      effectData.start = { time: game.time?.worldTime ?? 0 };
     } else if (converted.type === "turns") {
-      effectData.duration = {
-        startRound: game.combat?.round,
-        startTurn: game.combat?.turn,
-      };
-      if (converted.rounds !== undefined) {
-        effectData.duration.rounds = converted.rounds;
+      if ((converted.rounds ?? 0) > 0) {
+        // @ts-expect-error fvtt-types v14 duration
+        effectData.duration = { value: converted.rounds, units: "rounds", expiry: null };
+      } else if ((converted.turns ?? 0) > 0) {
+        // @ts-expect-error fvtt-types v14 duration
+        effectData.duration = { value: Math.max(converted.turns ?? 1, 1), units: "turns", expiry: null };
       }
-      if (converted.turns !== undefined) {
-        effectData.duration.turns = converted.turns;
-      }
+      // @ts-expect-error fvtt-types v14 duration
+      effectData.start = { round: game.combat?.round ?? 0, turn: game.combat?.turn ?? 0 };
     }
 
     const effects = await this.actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
     if (effects.length > 0) {
-      await templateDocument.setFlag("dnd5e", "dependentOn", effects[0].uuid);
+      await (flagDoc as MeasuredTemplateDocument).setFlag("dnd5e", "dependentOn", effects[0].uuid);
       return true;
     }
 
     return false;
   }
 
-  /**
-   * Render the attribution tooltip HTML for display.
-   * Converts the attackAttribution map to an array and renders the attribution-tooltip template.
-   * @returns The rendered HTML string
-   */
   async renderAttributionTooltip(): Promise<string> {
     // @ts-expect-error CONFIG.Dice.D20Roll not typed
     const ADV_MODE: { DISADVANTAGE: number, NORMAL: number, ADVANTAGE: number } = CONFIG.Dice.D20Roll.ADV_MODE;
@@ -1947,16 +2333,19 @@ export class Workflow {
     return renderAttributionTooltip(this.attackAttribution ?? {}, title);
   }
 
-  /**
-   *
-   * @param newState the state to execute
-   * @param context context to be passed to the state call. Typically the data that caused the an unsuspend to fire, but can be others
-   * Continues to execute states until suspended, aborted or the state transition count is exceeded.
-   */
-
-  public async performState(newState: WorkflowState, context: WorkflowContext = {}) {
+  public async performState(newState: WorkflowState) {
+    // The workflow moved on: a roll it waited on its player for is done
+    if (newState !== this.WorkflowState_Suspend && this.#rollWait) {
+      this.#rollWait.end();
+      this.#rollWait = undefined;
+    }
+    if (this.readOnly) {
+      console.warn(`midi-qol | ${this.workflowName} is a read-only copy of another user's workflow: it does not run`);
+      return;
+    }
     if (this.stateTransitionCount === undefined) this.stateTransitionCount = 0;
     let isAborting = this.aborted;
+    this.executingStates += 1;
 
     try {
       while (this.stateTransitionCount < (this.maxTransitionCount)) {
@@ -1979,6 +2368,7 @@ export class Workflow {
             await this.callOnUseMacrosForAction("post", this.currentAction);
             if (await this.callHooksForAction("post", this.currentAction) === false && !isAborting) {
               console.warn(`${this.workflowName}${this.id} ${currentName} -> ${name} aborted by post ${this.nameForState(this.currentAction)} Hook`)
+              if (!this.aborted) this.outcome = "cancelled";
               newState = this.aborted ? this.WorkflowState_Abort : this.WorkflowState_RollFinished;
             }
             if (debugEnabled > 0) warn(`${this.workflowName} ${this.id} finished ${currentName}`);
@@ -1993,6 +2383,7 @@ export class Workflow {
           await this.callOnUseMacrosForAction("pre", newState);
           if (await this.callHooksForAction("pre", newState) === false && !isAborting) {
             console.warn(`${this.workflowName} ${this.id} ${currentName} -> ${name} aborted by pre ${this.nameForState(newState)} Hook`)
+            if (!this.aborted) this.outcome = "cancelled";
             newState = this.aborted ? this.WorkflowState_Abort : this.WorkflowState_RollFinished;
             continue;
           }
@@ -2003,18 +2394,29 @@ export class Workflow {
           }
           this.currentAction = newState;
         }
-        let nextState = await this.currentAction.bind(this)(context);
+        let nextState: WorkflowState;
+        this.#queueingWrites += 1;
+        try {
+          nextState = await this.currentAction.bind(this)();
+        } finally {
+          this.#queueingWrites -= 1;
+        }
+        if (nextState === this.WorkflowState_Suspend || MILESTONE_STATES.has(this.currentAction?.name ?? "")) await this.flushCardWrites();
+        else if (chatCardUpdates === "everyStep") await this.flushCardWrites(true);
 
         if (nextState === this.WorkflowState_Suspend) {
           this.suspended = true;
-          this.performThrottledUpdate(this.chatCard, {}, false);
-          // this.currentAction = this.WorkflowState_Suspend;
           if (debugEnabled > 0) warn(`${this.workflowName} ${this.nameForState(this.currentAction)} -> suspended Workflow ${this.id}`);
-          // await this.performDebouncedUpdate(this.chatCard, { ["flags.midi-qol." + WorkflowDataFlags.suspended]: true });
+          const pending = this.#pendingEvent;
+          this.#pendingEvent = undefined;
+          if (pending?.state === this.currentAction) {
+            this.suspended = false;
+            newState = this.stateAfter(pending.event!);
+            continue;
+          }
           break;
         }
         newState = nextState;
-        context = {};
       }
 
       if (this.stateTransitionCount >= this.maxTransitionCount) {
@@ -2026,34 +2428,38 @@ export class Workflow {
       const message = `performState | ${this.workflowName} Workflow ${this.id}`;
       error(message, err);
       TroubleShooter.recordError(err, message);
+    } finally {
+      // The run ended (finished, aborted, or an error): nothing stays queued
+      try {
+        if (this.executingStates === 1) await this.flushCardWrites();
+      } finally {
+        this.executingStates -= 1;
+      }
     }
   }
 
-  async WorkflowState_Suspend(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_Suspend(): Promise<WorkflowState> {
     const message = `${this.workflowName} Workflow ${this.id} suspend should never be called`;
     error(message);
     TroubleShooter.recordError(new Error(message), message);
     return undefined;
   }
 
-  async WorkflowState_NoAction(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (debugEnabled > 0) warn("WorkflowState_NoAction", context);
-    if (context.itemUseComplete) return this.WorkflowState_Start;
+  async WorkflowState_NoAction(): Promise<WorkflowState> {
+    if (debugEnabled > 0) warn("WorkflowState_NoAction");
     return this.WorkflowState_Suspend;
   }
 
-  async WorkflowState_Start(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_Start(): Promise<WorkflowState> {
     // Self-target push/clear is handled in MidiActivityMixin.use() before setupTargets()
     if (!this.selfTargeted) {
       clearTargetSave();
     }
-    this.rangeTargeting = activityHasEmanationNoTemplate(this.activity);
     if (this.rangeTargeting) {
       // Targets have already been set in activity.use
       return this.WorkflowState_AoETargetConfirmation;
     }
 
-    this.tempTargetConfirmation = getActivityAutoTargetAction(this.activity) !== "none" && activityHasAreaTarget(this.activity);
     if (debugEnabled > 1) debug("WORKFLOW NONE", getActivityAutoTargetAction(this.activity), activityHasAreaTarget(this.activity));
     if (this.tempTargetConfirmation) {
       return this.WorkflowState_AwaitTemplate;
@@ -2061,7 +2467,8 @@ export class Workflow {
 
     return this.WorkflowState_AoETargetConfirmation;
   }
-  async WorkflowState_AwaitItemCard(context: WorkflowContext = {}): Promise<WorkflowState> {
+
+  async WorkflowState_AwaitItemCard(): Promise<WorkflowState> {
     if (this.needItemCard || !this.itemUseComplete) {
       if (debugEnabled > 0) warn("WorkflowState_AwaitItemCard suspending because needItemCard/itemUseComplete", this.needItemCard, this.itemUseComplete);
       return this.WorkflowState_Suspend;
@@ -2073,72 +2480,67 @@ export class Workflow {
     if (debugEnabled > 0) warn("WorkflowState_AwaitItemCard  -> TemplatePlaced");
     return this.WorkflowState_TemplatePlaced;
   }
-  async WorkflowState_AwaitTemplate(context: WorkflowContext = {}): Promise<WorkflowState> {
+
+  async WorkflowState_AwaitTemplate(): Promise<WorkflowState> {
     if (debugEnabled > 0) warn("WorkflowState_AwaitTemplate started");
-    if (this.placedTemplateShapeCount >= this.expectedTemplateCount) {
+    if (this.templateUuids.length >= this.expectedTemplateCount) {
       if (debugEnabled > 0) warn("WorkflowState_AwaitTemplate context - template placed", "needTemplate", this.needTemplate, "needItemCard", this.needItemCard, "itemUseComplete", this.itemUseComplete);
       return this.WorkflowState_TemplatePlaced;
     }
-    if (context.itemUseComplete || !this.needTemplate) {
-      if (debugEnabled > 0) warn("WorkflowState_AwaitTemplate context itemUseComplete", "needTemplate", this.needTemplate, "needItemCard", this.needItemCard, "itemUseComplete", this.itemUseComplete);
+    if (!this.needTemplate) {
+      if (debugEnabled > 0) warn("WorkflowState_AwaitTemplate no template needed", "needTemplate", this.needTemplate, "needItemCard", this.needItemCard, "itemUseComplete", this.itemUseComplete);
       return this.WorkflowState_AoETargetConfirmation;
     }
     if (debugEnabled > 0) warn("WorkflowState_AwaitTemplate suspending", "needTemplate", this.needTemplate, "needItemCard", this.needItemCard, "itemUseComplete", this.itemUseComplete);
     return this.WorkflowState_Suspend;
   }
-  async WorkflowState_TemplatePlaced(context: WorkflowContext = {}): Promise<WorkflowState> {
+
+  async WorkflowState_TemplatePlaced(): Promise<WorkflowState> {
     if (configSettings.allowUseMacro && this.workflowOptions.noOnUseMacro !== true) {
       await this.callMacros(this.item, this.onUseMacros?.getMacros("templatePlaced"), "OnUse", "templatePlaced");
       if (this.ammunition) await this.callMacros(this.ammunition, this.ammunitionOnUseMacros?.getMacros("templatePlaced"), "OnUse", "templatePlaced");
     }
-
-    // Some modules stop being able to get the item card id.
     if (!this.itemCardUuid) return this.WorkflowState_AoETargetConfirmation;
 
     const chatMessage = this.chatCard;
-    if (!chatMessage?.content) return this.WorkflowState_AoETargetConfirmation;
-    // remove the place template button from the chat card only if all templates have been placed
+    if (!chatMessage) return this.WorkflowState_AoETargetConfirmation;
     this.targets = validTargetTokens(this.targets);
     this.hitTargets = new Set()
     this.hitTargetsEC = new Set();
-    let content = chatMessage.content;
-    if (this.placedTemplateCount >= (Number(this.activity?.target?.template?.count) || 1)) {
-      const buttonRe = /<button.*?data-action="placeTemplate"[^>]*?>[\s\S]*?<\/button>/
-      content = chatMessage.content?.replace(buttonRe, "");
-    }
-    await this.performThrottledUpdate(chatMessage, { content, flags: { "midi-qol": { type: MESSAGE_TYPES.ITEM } }, style: CONST.CHAT_MESSAGE_STYLES.OTHER });
     return this.WorkflowState_AoETargetConfirmation;
   }
-  async WorkflowState_AoETargetConfirmation(context: WorkflowContext = {}): Promise<WorkflowState> {
+
+  async WorkflowState_AoETargetConfirmation(): Promise<WorkflowState> {
     // postTemplateConfirmTargets uses requiresTargetConfirmation to decide whether to show
     // the confirmation dialog — covers AoE templates, scaled counts, activity/global settings,
     // and workflowOptions.targetConfirmation overrides.
     if (!await postTemplateConfirmTargets(this.activity, { workflowOptions: this.workflowOptions }, this)) {
+      await this.refundConsumption();
       return this.WorkflowState_Abort;
     }
-    // Enforce target count after confirmation — for scaled activities this is the first check,
-    // since postChatCardChecks defers count enforcement when the target count depends on scaling.
     const hasScaledTargetCount = activityHasScaledTargetCount(this.activity);
     if (hasScaledTargetCount) {
       const allowedTargets = Number(this.activity.target?.affects?.count);
-      if (allowedTargets && this.targets.size > allowedTargets) {
+      if (allowedTargets && this.targets.count > allowedTargets) {
         ui.notifications?.warn(i18nFormat("midi-qol.wrongNumberTargets", { allowedTargets }));
+        await this.refundConsumption();
         return this.WorkflowState_Abort;
       }
     }
     return this.WorkflowState_ValidateRoll;
   }
-  async WorkflowState_ValidateRoll(context: WorkflowContext = {}): Promise<WorkflowState> {
+
+  async WorkflowState_ValidateRoll(): Promise<WorkflowState> {
     if (configSettings.allowUseMacro && this.workflowOptions.noTargetOnUseMacro !== true) {
       await this.triggerTargetMacros(["isTargeted"]);
       if (this.aborted) return this.WorkflowState_Abort;
     }
 
-    // do pre roll checks
-    if (checkMechanic("checkRange") !== "none" && (!this.AoO && ["rwak", "rsak"].includes(this.activity.actionType ?? "")) && this.tokenUuid) {
-      const { result, attackingToken, range, longRange } = checkActivityRange(this.activity, getToken(this.token) ?? "invalid", this.targets);
+    // Range: melee weapons too (a thrown weapon is mwak; checkActivityRange keeps the long range only for those)
+    if (checkMechanic("checkRange") !== "none" && !this.AoO && isRangeCheckable(this.activity) && this.tokenUuid) {
+      const { result, attackingToken } = checkActivityRange(this.activity, getToken(this.token) ?? "invalid", new Set(this.targets.tokens));
       switch (result) {
-        case "fail": return this.WorkflowState_RollFinished;
+        case "fail": this.outcome = "invalid"; return this.WorkflowState_RollFinished;
         case "dis": this.longRangeAttack = true;
       }
       if (attackingToken && this.token !== attackingToken) {
@@ -2148,11 +2550,12 @@ export class Workflow {
       }
     }
     if (!this.workflowOptions.allowIncapacitated && checkMechanic("incapacitated") !== "nothing" && checkIncapacitated(this.actor, debugEnabled > 0, true)) {
-      if (checkMechanic("incapacitated") === "enforce") return this.WorkflowState_RollFinished;
+      if (checkMechanic("incapacitated") === "enforce") { this.outcome = "invalid"; return this.WorkflowState_RollFinished; }
     }
     return this.WorkflowState_PreambleComplete;
   }
-  async WorkflowState_PreambleComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
+
+  async WorkflowState_PreambleComplete(): Promise<WorkflowState> {
     if (configSettings.undoWorkflow) await saveTargetsUndoData(this);
     this.effectsAlreadyExpired = [];
 
@@ -2160,10 +2563,11 @@ export class Workflow {
       ui.notifications?.warn(`midi-qol | Targeting complete hook cancelled roll`);
       return this.WorkflowState_Abort;
     }
+    await this.beginDeferredConcentration();
     if ((!getAutoRollAttack(this) && this.activity.attack) || this.activity instanceof MidiTransformActivity) {
       // Not auto rolling so display targets
-      const rollMode = safeGetGameSetting("core", "rollMode");
-      this.whisperAttackCard = configSettings.autoCheckHit === "whisper" || rollMode === getRollModes().BLIND || rollMode === getRollModes().PRIVATE;
+      const rollMode = safeGetGameSetting("core", "messageMode") as string;
+      this.whisperAttackCard = configSettings.autoCheckHit === "whisper" || rollMode === "blind" || rollMode === "gm";
       if (this.activity.target?.affects?.type !== "self") {
         await this.displayHitTargets(this.whisperAttackCard);
       }
@@ -2174,17 +2578,69 @@ export class Workflow {
     return this.WorkflowState_WaitForDamageRoll
   }
 
-  async WorkflowState_WaitForAttackRoll(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (context.attackRoll) {
-      if (this.abort) return this.WorkflowState_Abort;
-      return this.WorkflowState_AttackRollComplete;
+  /** A roll this player's workflow waits for them to make, shown to the GM (the player list) to roll for them. */
+  #rollWait: { end: () => void } | undefined;
+
+  /**
+   * The workflow waits for its player to roll (a card button, or the roll dialog auto-roll opened): let the GM roll for
+   * them, with the choices the roll dialog offers. Not for a GM's own use.
+   */
+  waitOnPlayerRoll(kind: "attack" | "damage" | "utility") {
+    this.#rollWait?.end();
+    this.#rollWait = undefined;
+    if (!game.user || game.user.isGM || !this.actor) return;
+    const choice = (mode: string) => ({ label: `midi-qol.PlayerWaits.Choice.${mode}`, value: () => this.rollForPlayer(kind, mode) });
+    const choices = kind === "attack" ? { normal: choice("normal"), advantage: choice("advantage"), disadvantage: choice("disadvantage") }
+      : kind === "damage" ? { normal: choice("normal"), critical: choice("critical") }
+      : { roll: { label: "midi-qol.PlayerWaits.Choice.roll", value: () => this.rollForPlayer(kind, "normal") } };
+    this.#rollWait = beginPlayerWait({
+      kind, userId: game.user.id!, actorUuid: this.actor.uuid, tokenUuid: this.tokenDocument?.uuid, keepDialogs: true,
+      label: i18nFormat(`midi-qol.PlayerWaits.${kind}Label`, { item: this.item?.name ?? "" }),
+      choices
+    });
+  }
+
+  /** Roll for the player as their roll dialog would: press its button when it is open, else roll without it. */
+  async rollForPlayer(kind: "attack" | "damage" | "utility", mode: string) {
+    const dialog = rollDialogsFor(this.actor.uuid)[0];
+    const button = dialog?.element?.querySelector<HTMLButtonElement>(`button[data-action="${mode}"]`)
+      ?? dialog?.element?.querySelector<HTMLButtonElement>(`button[data-action="normal"]`);
+    if (button) return button.click();
+    const midiOptions: Record<string, unknown> = { ...this.rollOptions, workflowOptions: this.workflowOptions };
+    if (kind === "attack") {
+      // As the card's Advantage/Disadvantage buttons: the attack's advantage check reads the workflow's options
+      this.workflowOptions.advantage = mode === "advantage";
+      this.workflowOptions.disadvantage = mode === "disadvantage";
+      Object.assign(midiOptions, { fastForwardAttack: true });
+      await this.activity.rollAttack!({ workflow: this, midiOptions }, { configure: false }, {});
+    } else if (kind === "damage") {
+      Object.assign(midiOptions, { fastForwardDamage: true, isCritical: mode === "critical" || this.isCritical });
+      await this.activity.rollDamage({ workflow: this, midiOptions }, { configure: false }, { create: false });
+    } else {
+      await this.activity.rollFormula!({ workflow: this, midiOptions }, { configure: false }, { create: false });
+    }
+  }
+
+  async WorkflowState_WaitForAttackRoll(): Promise<WorkflowState> {
+    // Attack per target: this use has its targets (template, confirmation) and its cost; each target gets its own use
+    if (MidiAttackActivity && this.activity instanceof MidiAttackActivity && this.activity.attacksEachTarget
+      && this.targets.count > 1 && !this.workflowOptions?.attackSplit) {
+      if (this.chatCard) await this.performThrottledUpdate(this.chatCard, { "system.midi.progress.attacksSplit": true } as ChatMessage.UpdateData);
+      // The targets, filled in with each one's hit or miss as its own use resolves (addSplitAttackResult)
+      const rollMode = safeGetGameSetting("core", "messageMode") as string;
+      this.whisperAttackCard = configSettings.autoCheckHit === "whisper" || rollMode === "blind" || rollMode === "gm";
+      if (configSettings.autoCheckHit !== "none") await this.displayHitTargets(this.whisperAttackCard);
+      this.needsHitTargetsDisplayed = false;
+      await this.activity.attackEachTarget(this);
+      this.outcome = "split";
+      return this.WorkflowState_RollFinished;
     }
     if (!this.activity.attack) {
-      this.hitTargets = new Set(this.targets);
+      this.hitTargets = new TokenDocumentSet(this.targets);
       this.hitTargetsEC = new Set();
       if (this.hasSave) {
         this.needsHitTargetsDisplayed = false;
-      } else if (this.targets.size > 0 && this.activity.target?.affects?.type !== "self") {
+      } else if (this.targets.count > 0 && this.activity.target?.affects?.type !== "self") {
         await this.displayHitTargets(false);
       }
       if (this.activity.roll?.formula) return this.WorkflowState_WaitForUtilityRoll;
@@ -2195,32 +2651,21 @@ export class Workflow {
     this.rollOptions.fastForwardAttack ||= isFastRoll;
     const autoRollAttack = getAutoRollAttack(this);
     if (!autoRollAttack) {
-      // Not auto rolling attack so setup the buttons to display advantage/disadvantage
       const chatMessage = this.chatCard;
-      let content = chatMessage?.content;
-      if (content && !isFastRoll) {
-        // provide a hint as to the type of roll expected.
-        // Match the rollAttack button with span inside: <button ... data-action="rollAttack"><span>Attack</span></button>
-        const searchRe = /(<button[^>]*data-action="rollAttack"[^>]*>)<span>[^<]*<\/span>(<\/button>)/;
-
-        const hasAdvantage = this.advantage && !this.disadvantage;
-        const hasDisadvantage = this.disadvantage && !this.advantage;
-        let attackString = hasAdvantage ? i18n("DND5E.Advantage") : hasDisadvantage ? i18n("DND5E.Disadvantage") : i18n("DND5E.Attack")
-        // `isFastRoll` is guaranteed falsy at this point
-        // if (isFastRoll && configSettings.showFastForward) attackString += ` ${i18n("midi-qol.fastForward")}`;
-
-        // Preserve the button tag, just replace the span content
-        let replaceString = `$1<span>${attackString}</span>$2`;
-        content = content.replace(searchRe, replaceString);
-        await this.performThrottledUpdate(chatMessage, { content });
-      } else if (!chatMessage) {
+      if (!chatMessage) {
         const message = `WaitForAttackRoll | no chat message`;
         error(message);
         TroubleShooter.recordError(new Error(message), message);
+      } else if (!isFastRoll) {
+        const hasAdvantage = this.advantage && !this.disadvantage;
+        const hasDisadvantage = this.disadvantage && !this.advantage;
+        const attackBtnText = i18n(hasAdvantage ? "DND5E.Advantage" : hasDisadvantage ? "DND5E.Disadvantage" : "DND5E.Attack");
+        await this.performThrottledUpdate(chatMessage, { "system.midi.attackBtnText": attackBtnText } as ChatMessage.UpdateData);
       }
     }
 
     if (this.activity.roll?.formula) return this.WorkflowState_WaitForUtilityRoll;
+    if (!autoRollAttack || !isFastRoll) this.waitOnPlayerRoll("attack");
     if (autoRollAttack) {
       this.rollOptions.fastForwardAttack ||= isFastRoll;
       this.activity.rollAttack!({ event: this.rollOptions.event, workflow: this, midiOptions: { ...this.rollOptions, workflowOptions: this.workflowOptions } }, {}, {});
@@ -2228,10 +2673,9 @@ export class Workflow {
     return this.WorkflowState_Suspend;
   }
 
-  async WorkflowState_AttackRollComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_AttackRollComplete(): Promise<WorkflowState> {
     if (configSettings.allowUseMacro && this.workflowOptions.noTargetOnUseMacro !== true) await this.triggerTargetMacros(["isAttacked"]);
     await this.processAttackRoll();
-    // REFACTOR look at splitting this into a couple of states
     await this.callMidiHooks("midi-qol.preCheckHits");
     if (this.aborted) return this.WorkflowState_Abort;
 
@@ -2246,19 +2690,16 @@ export class Workflow {
     if (configSettings.autoCheckHit !== "none") {
       await this.displayAttackRoll({ GMOnlyAttackRoll: true });
       this.recordTargetACModifiers();
-      await this.recordFlankingBonuses();
       await this.checkHits();
       await this.displayAttackRoll();
-      const rollMode = safeGetGameSetting("core", "rollMode");
-      this.whisperAttackCard = configSettings.autoCheckHit === "whisper" || rollMode === getRollModes().BLIND || rollMode === getRollModes().PRIVATE;
+      const rollMode = safeGetGameSetting("core", "messageMode") as string;
+      this.whisperAttackCard = configSettings.autoCheckHit === "whisper" || rollMode === "blind" || rollMode === "gm";
       await this.callMidiHooks("midi-qol.hitsChecked");
       if (this.aborted) return this.WorkflowState_Abort;
       await this.displayHits(this.whisperAttackCard);
     } else {
       await this.displayAttackRoll();
     }
-    if (checkRule("removeHiddenInvis")) await removeHidden.bind(this)();
-    if (checkRule("removeHiddenInvis")) await removeInvisible.bind(this)();
     await this.expireTargetEffects(["isAttacked"]);
 
     await this.callMidiHooks("midi-qol.AttackRollComplete");
@@ -2273,20 +2714,23 @@ export class Workflow {
     if (configSettings.autoCheckHit === "none") {
       this.hitTargets = new Set();
       this.hitTargetsEC = new Set();
-      if (this.targets.size > 0 && this.activity.target?.affects?.type !== "self") {
+      if (this.targets.count > 0 && this.activity.target?.affects?.type !== "self") {
         await this.displayHitTargets(false);
       }
       return this.postAttackRollState;
     }
     if (getAutoRollDamage(this) === "always") return this.postAttackRollState;
-    const noHits = this.hitTargets.size === 0 && this.hitTargetsEC.size === 0;
-    const allMissed = noHits && this.targets.size !== 0;
+    const noHits = this.hitTargets.count === 0 && this.hitTargetsEC.count === 0;
+    const allMissed = noHits && this.targets.count !== 0;
+    if (!allMissed && this.outcome === "allMissed") this.outcome = "ok"; // a re-rolled attack that hits
     if (allMissed) {
+      this.outcome = "allMissed";
       if (configSettings.confirmAttackDamage !== "none" && !this.workflowOptions.forceCompletion)
         return this.WorkflowState_ConfirmRoll;
       if (this.workflowOptions.forceCompletion || configSettings.autoCompleteWorkflow) {
-        expireMyEffects.bind(this)(["1Attack", "1Action", "1Spell"])
-        return this.WorkflowState_RollFinished;
+        expireMyEffects.bind(this)(["1Attack", "1Action", "1Spell", "1Critical", "1Fumble"])
+        // Nothing to roll, but the effects stage still runs: "apply to self always" effects, its macro passes and hooks
+        return this.WorkflowState_ApplyDynamicEffects;
       }
       // if (configSettings.autoRollDamage !== "always") return this.WorkflowState_RollFinished;
       // else return this.WorkflowState_WaitForDamageRoll;
@@ -2296,7 +2740,7 @@ export class Workflow {
 
   _formatAttackTargets() {
     const targets = new Map<string, { name: string; img?: string | null; uuid: string; ac: number | string }>();
-    for (const token of this.targets) {
+    for (const token of this.targets.documents) {
       const { name } = token;
       const { img, system, uuid } = token.actor ?? {};
       // @ts-expect-error no dnd5e-types
@@ -2306,22 +2750,14 @@ export class Workflow {
     return Array.from(targets.values());
   }
 
-  async WorkflowState_WaitForDamageRoll(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (context.damageRoll || context.otherDamageRoll) {
-      // record the data - currently done in item handling
-      return this.WorkflowState_ConfirmRoll;
-    }
-    // Activity itself had no damage and other activity produced no rolls
-    // (e.g. utility activity whose other activity's useCondition filtered out all targets)
-    if (context.noDamage) return this.WorkflowState_WaitForSaves;
+  async WorkflowState_WaitForDamageRoll(): Promise<WorkflowState> {
     const hasDamageRoll = this.activity.hasDamage || this.otherActivity?.hasDamage || this.activity.hasHealing || this.otherActivity?.hasHealing;
     if (!hasDamageRoll) return this.WorkflowState_WaitForSaves;
-    if (context.attackRoll) return this.WorkflowState_AttackRollComplete;
-    if (debugEnabled > 1) debug(`wait for damage roll has damage roll ${hasDamageRoll} isFumble ${this.isFumble} no auto damage ${this.noAutoDamage}`);
+    if (debugEnabled > 1) debug(`wait for damage roll has damage roll ${hasDamageRoll} isFumble ${this.isFumble}`);
 
     if (checkMechanic("actionSpecialDurationImmediate"))
       expireMyEffects.bind(this)(["1Attack", "1Action", "1Spell"]);
-    if (checkMechanic("actionSpecialDurationImmediate") && this.hitTargets.size)
+    if (checkMechanic("actionSpecialDurationImmediate") && this.hitTargets.count)
       expireMyEffects.bind(this)(["1Hit"]);
     if (checkMechanic("actionSpecialDurationImmediate")) {
       expireMyEffects.bind(this)(["1Critical", "1Fumble"])
@@ -2332,73 +2768,55 @@ export class Workflow {
       if (this.ammunition) await this.callMacros(this.ammunition, this.ammunitionOnUseMacros?.getMacros("preDamageRoll"), "OnUse", "preDamageRoll");
     }
 
-    // if (this.noAutoDamage) return; // we are emulating the standard card specially.
-
     if (this.shouldRollDamage) {
       if (debugEnabled > 0) warn("waitForDamageRoll | rolling damage ", this.rollOptions.event, configSettings.autoRollAttack, configSettings.autoFastForward)
-      const storedData = this.chatCard?.getFlag("dnd5e", "item")?.data;
-      if (storedData) { // If magic items is being used it fiddles the roll to include the item data
-        this.item = new CONFIG.Item.documentClass(storedData, { parent: this.actor })
-      }
-
       this.rollOptions.isCritical = this.isCritical;
       this.rollOptions.fastForwardDamage = isAutoFastForward("damage", { workflow: this });
+      if (!this.rollOptions.fastForwardDamage) this.waitOnPlayerRoll("damage");
       this.activity.rollDamage({ workflow: this, midiOptions: { ...this.rollOptions, workflowOptions: this.workflowOptions } }, {}, { create: false });
       return this.WorkflowState_Suspend;
-    } else {
-      const chatMessage = this.chatCard;
-      if (chatMessage?.content) {
-        // provide a hint as to the type of roll expected.
-        // Match rollDamage button with optional span: <button data-action="rollDamage">text</button> or <button data-action="rollDamage"><span>text</span></button>
-        const searchRe = /(<button[^>]*data-action="rollDamage"[^>]*>)(?:<span>)?[^<]*(?:<\/span>)?(<\/button>)/;
-        const damageTypeString = (this.activity.actionType === "heal") ? getHealingLabel() : i18n("DND5E.Damage");
-        let damageString = (this.rollOptions.isCritical || this.isCritical) ? i18n("DND5E.Critical") : damageTypeString;
-        if (this.rollOptions.fastForwardDamage && configSettings.showFastForward) damageString += ` ${i18n("midi-qol.fastForward")}`;
-        // Preserve button tag, replace content with span for consistency
-        let replaceString = `$1<span>${damageString}</span>$2`;
-        let content = chatMessage.content.replace(searchRe, replaceString);
-        await this.performThrottledUpdate(chatMessage, { content });
-      }
+    }
+    this.waitOnPlayerRoll("damage");
+    const chatMessage = this.chatCard;
+    if (chatMessage) {
+      await this.performThrottledUpdate(chatMessage, { "system.midi.dmgBtnText": this.#damageButtonText() } as ChatMessage.UpdateData);
     }
     return this.WorkflowState_Suspend; // wait for a damage roll to advance the state.
   }
-  async WorkflowState_ConfirmRoll(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (context.attackRoll) return this.WorkflowState_AttackRollComplete;
+  async WorkflowState_ConfirmRoll(): Promise<WorkflowState> {
     if (configSettings.confirmAttackDamage !== "none" && (this.activity.attack || this.activity.damage)) {
       await this.displayDamageRolls();
       return this.WorkflowState_Suspend; // wait for the confirm button
     }
     return this.WorkflowState_DamageRollStarted;
   }
-  async WorkflowState_RollConfirmed(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_RollConfirmed(): Promise<WorkflowState> {
     expireMyEffects.bind(this)(["1Attack", "1Action", "1Spell"])
     return this.WorkflowState_DamageRollStarted;
   }
-  async WorkflowState_DamageRollStarted(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (this.itemCardUuid) {
-      await Workflow.removeItemCardButtons(this.itemCardUuid, { removeAllButtons: false, removeAttackButtons: getRemoveAttackButtons(this.activity), removeDamageButtons: getRemoveDamageButtons(this.activity), removeConfirmButtons: true });
+  async WorkflowState_DamageRollStarted(): Promise<WorkflowState> {
+    if (this.ownsCard) {
+      await Workflow.removeItemCardButtons(this.itemCardUuid, { removeConfirmButtons: true });
     }
-    if (getActivityAutoTargetAction(this.activity) === "none" && activityHasAreaTarget(this.activity) && !this.activity.attack) {
-      // we are not auto targeting so for area effect attacks, without hits (e.g. fireball)
-      this.targets = validTargetTokens(new Set(game.user?.targets));
-      this.hitTargets = validTargetTokens(new Set(game.user?.targets));
+    if (!this.damageOnly && getActivityAutoTargetAction(this.activity) === "none" && activityHasAreaTarget(this.activity) && !this.activity.attack) {
+      // The user's targets, keeping the use's that aren't drawn (another level or scene; a macro's): they can't be the user's
+      this.targets = validTargetTokens(userTargetsKeepingUndrawn(this.targets));
+      this.hitTargets = new TokenDocumentSet(this.targets);
       this.hitTargetsEC = new Set();
       if (debugEnabled > 0) warn("damageRollStarted | for non auto target area effects spells", this)
     }
-    const damageBonusMacros = this.getDamageBonusMacros();
-    if (damageBonusMacros) { //  && this.workflowType === "Workflow") { // TODO check this
-      await this.rollBonusDamage(damageBonusMacros);
-    }
+    await this.rollAllBonusDamage();
     return this.WorkflowState_DamageRollComplete;
   }
-  async WorkflowState_DamageRollComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
+
+  async WorkflowState_DamageRollComplete(): Promise<WorkflowState> {
     if (configSettings.allowUseMacro && this.workflowOptions.noOnUseMacro !== true) { //
       await this.callMacros(this.item, this.onUseMacros?.getMacros("postDamageRoll"), "OnUse", "postDamageRoll");
       if (this.ammunition) await this.callMacros(this.ammunition, this.ammunitionOnUseMacros?.getMacros("postDamageRoll"), "OnUse", "postDamageRoll");
     }
     await this.callMidiHooks("midi-qol.DamageRollComplete");
     if (this.aborted) return this.WorkflowState_Abort;
-    if (this.hitTargets?.size || this.hitTargetsEC?.size) expireMyEffects.bind(this)(["1Hit"]);
+    if (this.hitTargets?.count || this.hitTargetsEC?.count) expireMyEffects.bind(this)(["1Hit"]);
     expireMyEffects.bind(this)(["1Action", "1Attack", "1Spell", "1Critical", "1Fumble"]);
     await this.displayDamageRolls();
 
@@ -2408,12 +2826,12 @@ export class Workflow {
       this.hitTargetsEC = new Set();
       return this.WorkflowState_ApplyDynamicEffects;
     }
-    await Workflow.removeItemCardButtons(this.itemCardUuid, { removeAllButtons: false, removeAttackButtons: getRemoveAttackButtons(this.activity), removeDamageButtons: getRemoveDamageButtons(this.activity), removeDnD5eButtons: false, removeDnd5eSaveButtons: false });
     return this.WorkflowState_WaitForSaves;
   }
 
-  async WorkflowState_WaitForUtilityRoll(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (!this.activity.roll?.formula || context.utilityRolls) return this.WorkflowState_UtilityRollComplete;
+  async WorkflowState_WaitForUtilityRoll(): Promise<WorkflowState> {
+    if (!this.activity.roll?.formula) return this.WorkflowState_UtilityRollComplete;
+    this.waitOnPlayerRoll("utility");
     if (getAutoRollDamage(this) !== "none") {
       const rolls = await this.activity.rollFormula!({ event: this.rollOptions.event, workflow: this, midiOptions: { ...this.rollOptions, workflowOptions: this.workflowOptions } }, {}, { create: false });
       if (!rolls || this.abort) {
@@ -2424,32 +2842,32 @@ export class Workflow {
     return this.WorkflowState_Suspend;
   }
 
-  async WorkflowState_UtilityRollComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (this.itemCardUuid && this.utilityRolls) {
+  async WorkflowState_UtilityRollComplete(): Promise<WorkflowState> {
+    if (this.itemCardUuid) {
       this.displayUtilityRolls();
     }
     return this.WorkflowState_WaitForDamageRoll;
   }
-  async WorkflowState_DamageRollCompleteCancelled(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_DamageRollCompleteCancelled(): Promise<WorkflowState> {
     if (configSettings.undoWorkflow) {
 
     }
     return this.WorkflowState_Suspend;
   }
-  async WorkflowState_WaitForSaves(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_WaitForSaves(): Promise<WorkflowState> {
+    if (this.damageOnly) return this.WorkflowState_AllRollsComplete;
     // If the save is from the other activity, check consumption first
     // If consumption fails or is cancelled, skip the save entirely
     if (this.saveActivity === this.otherActivity && this.otherActivity) {
       // For attacks, skip other activity if nothing was hit (don't consume resources for a miss)
-      if (this.activity.attack && this.hitTargets.size === 0 && this.hitTargetsEC.size === 0) {
-        addUpdatesCacheFlags(this.id, { [WorkflowDataFlags.otherActivityConsumed]: false }, "midi-qol"); // Mark as skipped
+      if (this.activity.attack && this.hitTargets.count === 0 && this.hitTargetsEC.count === 0) {
+        this.#setOtherConsumption(false);
         this.rawOtherDamageDetail = [];
         this.initSaveResults();
         return this.WorkflowState_SavesComplete;
       }
       const consumptionSuccess = await this.checkOtherActivityConsumption();
       if (!consumptionSuccess) {
-        // Consumption failed or cancelled - skip the other activity save
         this.initSaveResults();
         return this.WorkflowState_SavesComplete;
       }
@@ -2461,10 +2879,10 @@ export class Workflow {
       if (this.ammunition && this.workflowOptions.noOnUseMacro !== true) await this.callMacros(this.ammunition, this.ammunitionOnUseMacros?.getMacros("preSave"), "OnUse", "preSave");
     }
     if (this.workflowType === "BaseWorkflow" && !this.workflowOptions.ignoreUserTargets && !this.activity.attack && this.activity.target?.affects.type !== "self") { // Allow editing of targets if there is no attack that has already been processed.
-      this.targets = new Set(game.user?.targets);
-      this.hitTargets = new Set(this.targets);
+      this.targets = userTargetsKeepingUndrawn(this.targets);
+      this.hitTargets = new TokenDocumentSet(this.targets);
     }
-    this.failedSaves = new Set(this.hitTargets);
+    this.failedSaves = new TokenDocumentSet(this.hitTargets);
     if (!this.hasSave) {
       this.initSaveResults();  // Ensure saveResults is initialized even without a save
       return this.WorkflowState_SavesComplete;
@@ -2475,13 +2893,12 @@ export class Workflow {
       await this.callMidiHooks("midi-qol.preCheckSaves");
       if (this.aborted) return this.WorkflowState_Abort;
       if (debugEnabled > 1) debug("Check Saves: renderChat message hooks length ", Hooks.events["renderChatMessageHTML"]?.length)
-      // setup to process saving throws as generated
       let hookId = Hooks.on("renderChatMessageHTML", this.processSaveRoll.bind(this));
       let monksId = Hooks.on("updateChatMessage", this.monksSavingCheck.bind(this));
       //@ts-expect-error flash-rolls-5e custom hook
       let flashId = Hooks.on("flash-rolls-5e.rollComplete", this.flashSavingCheck.bind(this));
       try {
-        const saveDisplay = (this.activity.saveDisplay ?? "default") === "default" ? configSettings.autoCheckSaves : this.activity.saveDisplay;
+        const saveDisplay = saveDisplayMode();
         await this.checkSaves(saveDisplay !== "allShow");
       } catch (err) {
         const message = ("midi-qol | checkSaves error")
@@ -2497,16 +2914,17 @@ export class Workflow {
       if (debugEnabled > 1) debug("Check Saves: renderChat message hooks length ", Hooks.events["renderChatMessageHTML"]?.length)
       await this.callMidiHooks("midi-qol.postCheckSaves");
       if (this.aborted) return this.WorkflowState_Abort;
-      const saveDisplay = (this.activity.saveDisplay ?? "default") === "default" ? configSettings.autoCheckSaves : this.activity.saveDisplay;
-      await Workflow.removeItemCardButtons(this.itemCardUuid as string, { removeDnd5eSaveButtons: configSettings.autoCheckSaves !== "none", removeDnd5eTemplateButtons: this.placedTemplateCount >= (Number(this.activity?.target?.template?.count) || 1) });
+      const saveDisplay = saveDisplayMode();
+      if (this.ownsCard) await Workflow.removeItemCardButtons(this.itemCardUuid, { removeDnd5eSaveButtons: configSettings.autoCheckSaves !== "none" });
       await this.displaySaves(saveDisplay === "whisper");
     } else {// has saves but we are not checking so do nothing with the damage
       this.effectTargets = this.failedSaves;
+      this.outcome = "manualSaves";
       return this.WorkflowState_RollFinished;
     }
     return this.WorkflowState_SavesComplete;
   }
-  async WorkflowState_SavesComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_SavesComplete(): Promise<WorkflowState> {
     expireMyEffects.bind(this)(["1Action", "1Spell"]);
     if (configSettings.allowUseMacro && this.workflowOptions.noOnUseMacro !== true) {
       await this.callMacros(this.item, this.onUseMacros?.getMacros("postSave"), "OnUse", "postSave");
@@ -2514,34 +2932,36 @@ export class Workflow {
     }
     if (configSettings.keepRollStats && this.item && this.hasSave) {
       gameStats.addSaveResult(
-        this.saves.size + this.failedSaves.size,
-        this.saves.size,
-        this.failedSaves.size,
+        this.saves.count + this.failedSaves.count,
+        this.saves.count,
+        this.failedSaves.count,
         this.item
       );
     }
     return this.WorkflowState_AllRollsComplete;
   }
-  async WorkflowState_AllRollsComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
-    let items: any[] = [];
+
+  async WorkflowState_AllRollsComplete(): Promise<WorkflowState> {
 
     // Skip other damage processing entirely if consumption was already declined
-    const consumedFlag = this.chatCard?.getFlag(MODULE_ID, "use.consumed");
-    if (consumedFlag === false) {
-      // Consumption was declined - ensure other damage is cleared
-      this.otherDamageMatches = new Set();
-      this.rawOtherDamageDetail = [];
+    if (this.otherConsumed === false) {
+      // Consumption was declined - the other activity's damage is dropped, the ammunition's kept
+      this.dropOtherActivityDamage();
     } else {
-      // Build otherDamageMatches (no-op if rollOtherDamage already built it)
-      await this.buildOtherDamageMatches();
-
       // Process consumption for other activity if it will be applied
-      if (this.otherDamageMatches!.size > 0) {
+      await this.buildOtherDamageMatches();
+      if (this.otherDamageMatches!.count > 0 && !this.damageOnly) {
         await this.checkOtherActivityConsumption();
       }
     }
+    // Build the matches not yet built (no-op if rollOtherDamage already built them)
+    await this.buildOtherDamageMatches();
 
     if (this.rawDamageDetail && (this.rawDamageDetail?.length || this.rawOtherDamageDetail?.length)) await processDamageRoll(this, this.rawDamageDetail[0]?.type ?? this.defaultDamageType)
+    // Now that the damage calculation has run, the card can report what it applied.
+    if (this.ownsCard && this.chatCard && this.midiTargetDetail) {
+      await this.performThrottledUpdate(this.chatCard, this.#targetsUpdate() as ChatMessage.UpdateData);
+    }
     this.recordDamageStats();
     // If a damage card is going to be created don't call the isDamaged macro - wait for the damage card calculations to do a better job
     if (configSettings.allowUseMacro && this.workflowOptions.noTargetOnUseMacro !== true && !configSettings.autoApplyDamage.includes("Card"))
@@ -2550,84 +2970,83 @@ export class Workflow {
     return this.WorkflowState_ApplyDynamicEffects;
   }
 
-  /**
-   * Check and process consumption for the other activity.
-   * This should be called either before the other activity save is rolled,
-   * or before applying other activity damage - but only once.
-   * @returns true if consumption succeeded or was not needed, false if it failed or was cancelled
-   */
+  // Never read by midi or any known module: kept for macros, worked out when asked. Remove in 14.8.0.
+  static #deprecatedField(name: string) {
+    foundry.utils.logCompatibilityWarning(`midi-qol | workflow.${name} is deprecated and will be removed in 14.8.0`, { since: "14.6.9", until: "14.8.0", once: true });
+  }
+  get healingAdjustedDamageTotal() { Workflow.#deprecatedField("healingAdjustedDamageTotal"); return sumRolls(this.damageRolls, "negativeIgnoreTemp"); }
+  get healingAdjustedBonusDamageTotal() { Workflow.#deprecatedField("healingAdjustedBonusDamageTotal"); return sumRolls(this.bonusDamageRolls ?? [], "negativeIgnoreTemp"); }
+  get healingAdjustedOtherDamageTotal() { Workflow.#deprecatedField("healingAdjustedOtherDamageTotal"); return sumRolls(this.otherDamageRolls ?? [], "negativeIgnoreTemp"); }
+  get saveTargetsDisplayed() { Workflow.#deprecatedField("saveTargetsDisplayed"); return !!this.saveDisplayData?.length; }
+  get allOtherEffectTargets() { Workflow.#deprecatedField("allOtherEffectTargets"); return new TokenDocumentSet(this.targets); }
+
+  /** The ammunition as it was when its last piece was spent and deleted (on the card); cards before 14.6.9 kept a flag */
+  get spentAmmunitionData(): Item.CreateData | undefined {
+    return this.#persisted.scalar<Item.CreateData | undefined>("ammunitionData", undefined) ?? storedMidiFlag(this.chatCard, "ammunitionData");
+  }
+
+  set spentAmmunitionData(data: Item.CreateData | undefined) {
+    this.#persisted.setScalar("ammunitionData", data);
+  }
+
+  /** What the other activity's use consumed, false when declined or skipped, undefined until settled (on the card) */
+  get otherConsumed(): object | false | undefined {
+    return cardOtherConsumption(this.chatCard).consumed;
+  }
+
+  #setOtherConsumption(consumed: object | false, scaling?: number | false) {
+    if (consumed === false) return this.#persisted.setScalar("otherDeclined", true);
+    this.#persisted.setScalar("otherConsumed", consumed);
+    if (typeof scaling === "number") this.#persisted.setScalar("otherScaling", scaling);
+  }
+
   async checkOtherActivityConsumption(): Promise<boolean> {
-    // No other activity or no consumption configured - nothing to check
     if (!this.otherActivity || !this.otherActivity.hasConsumption()) {
       return true;
     }
 
-    // Only check consumption once, if it has already been check there is no need to continue
-    const existingFlag = this.chatCard?.getFlag(MODULE_ID, "use.consumed");
-    if (existingFlag !== undefined) {
-      return existingFlag !== false;
-    }
+    const existing = this.otherConsumed;
+    if (existing !== undefined) return existing !== false;
 
-    // Determine if we should auto-consume or show a dialog
     const shouldShowDialog = !this.otherActivity.shouldAutoConsume(this);
-
-    // Prepare the usage config
     let otherUsageConfig: ActivityUseConfiguration = this.otherActivity._prepareUsageConfig({
       consume: { resources: true, spellSlot: false, action: false }
     }) as ActivityUseConfiguration;
 
     if (shouldShowDialog) {
-      // Show the consumption dialog
+      await this.flushCardWrites(); // a person decides next
       try {
         // @ts-expect-error no dnd5e-types
         const DialogClass = this.otherActivity.metadata?.usage?.dialog ?? game.dnd5e.applications.activity.ActivityUsageDialog;
-        // Only show scaling if the other activity supports it
         const canScale = this.otherActivity.canScale ?? this.otherActivity.consumption?.scaling?.allowed ?? false;
         otherUsageConfig = await DialogClass.create(this.otherActivity, otherUsageConfig, {
           display: { consumption: true, scaling: canScale, concentration: false, creation: false }
         });
-        // Dialog confirmed - proceed with consumption
         const messageConfig: any = { data: {} };
         const consumeResult = await this.otherActivity.consume(otherUsageConfig, messageConfig);
         if (consumeResult === false) {
-          // Consumption was cancelled by a hook
-          this.otherDamageMatches = new Set();
-          this.rawOtherDamageDetail = [];
-          addUpdatesCacheFlags(this.id, { [WorkflowDataFlags.otherActivityConsumed]: false }, "midi-qol");
+          this.dropOtherActivityDamage();
+          this.#setOtherConsumption(false);
           return false;
         }
-        // Store consumed delta data on chat card for refund capability
-        // Use empty object if user chose not to consume - this still marks consumption as "checked"
         const consumed = getConsumptionData(messageConfig) ?? {};
-        // Get scaling from the dialog's return value (otherUsageConfig), not messageConfig
-        // consume() handles resources but doesn't set up scaling flags
         const scaling = otherUsageConfig.scaling;
-        if (this.itemCardUuid) {
-          addUpdatesCacheFlags(this.id, {
-            [WorkflowDataFlags.otherActivityConsumed]: consumed,
-            [WorkflowDataFlags.otherActivityScaling]: scaling
-          }, "midi-qol");
-        }
+        this.#setOtherConsumption(consumed, scaling);
       } catch (e) {
-        // Dialog was cancelled - skip other activity
-        this.otherDamageMatches = new Set();
-        this.rawOtherDamageDetail = [];
-        addUpdatesCacheFlags(this.id, { [WorkflowDataFlags.otherActivityConsumed]: false }, "midi-qol");
+        this.dropOtherActivityDamage();
+        this.#setOtherConsumption(false);
         return false;
       }
     } else {
-      // Auto-consume - first check if consumption would succeed
       const consumptionCheck = await this.otherActivity._prepareUsageUpdates(otherUsageConfig, { returnErrors: true });
       if (Array.isArray(consumptionCheck) && consumptionCheck.length > 0) {
-        // Consumption would fail - warn user and skip other activity
         ui.notifications?.warn(i18nFormat("midi-qol.otherActivityConsumptionFailed", {
           actorName: this.actor?.name ?? "Unknown",
           itemName: this.item?.name ?? "Unknown",
           activityName: this.activity?.name ?? "Unknown"
         }));
-        this.otherDamageMatches = new Set();
-        this.rawOtherDamageDetail = [];
-        addUpdatesCacheFlags(this.id, { [WorkflowDataFlags.otherActivityConsumed]: false }, "midi-qol");
+        this.dropOtherActivityDamage();
+        this.#setOtherConsumption(false);
         return false;
       }
 
@@ -2635,58 +3054,38 @@ export class Workflow {
       const consumeResult = await this.otherActivity.consume(otherUsageConfig, messageConfig);
       if (consumeResult === false) {
         // Consumption was cancelled by a hook
-        this.otherDamageMatches = new Set();
-        this.rawOtherDamageDetail = [];
-        addUpdatesCacheFlags(this.id, { [WorkflowDataFlags.otherActivityConsumed]: false }, "midi-qol");
+        this.dropOtherActivityDamage();
+        this.#setOtherConsumption(false);
         return false;
       }
-      // Store consumed delta data on chat card for refund capability
-      // Use empty object if nothing was consumed - this still marks consumption as "checked"
       const consumed = getConsumptionData(messageConfig) ?? {};
-      // For auto-consume, scaling is from otherUsageConfig (default is 0/undefined)
       const scaling = otherUsageConfig.scaling;
-      if (this.itemCardUuid) {
-        addUpdatesCacheFlags(this.id, {
-          [WorkflowDataFlags.otherActivityConsumed]: consumed,
-          [WorkflowDataFlags.otherActivityScaling]: scaling
-        }, "midi-qol");
-      }
+      this.#setOtherConsumption(consumed, scaling);
     }
-
-    // Consumption succeeded - roll the deferred other activity damage if needed
-      await this.rollDeferredOtherDamage();
-
-    // Note: consumed data was already stored above via addUpdatesCacheFlags
+    await this.rollDeferredOtherDamage();
     return true;
   }
 
-  /**
-   * Build otherDamageMatches if not already populated.
-   * Evaluates the otherActivity useCondition per-target exactly once.
-   */
+  /** The targets the other activity's and the ammunition's damage apply to, each by its own use condition. */
   async buildOtherDamageMatches(): Promise<void> {
-    if (this.otherDamageMatches !== undefined) return; // already built (may be empty if condition matched no targets)
-    this.otherDamageMatches = new Set();
-    const otherCondition = this.otherUseCondition;
-    const targetsForOtherDamage = this.activity.attack
-      ? new Set([...this.hitTargets, ...this.hitTargetsEC])
-      : this.targets;
-    for (const token of targetsForOtherDamage) {
-      if (otherCondition) {
-        if (await evalActivationCondition(this, otherCondition, token, { async: true, errorReturn: false }))
-          this.otherDamageMatches.add(token);
-      } else {
-        this.otherDamageMatches.add(token);
+    const targets = this.activity.attack ? this.hitTargets.union(this.hitTargetsEC) : this.targets;
+    // A condition is evaluated against the target's Token; without one every target matches, with a Token or not
+    const matching = async (condition: string | undefined) => {
+      const matches = new TokenDocumentSet();
+      for (const document of targets.documents) {
+        const token = targets.placeableOf(document);
+        if (!condition || (token && await evalActivationCondition(this, condition, token, { async: true, errorReturn: false }))) matches.add(token ?? document);
       }
-    }
+      return matches;
+    };
+    // Already built (may be empty if the condition matched no targets)
+    if (this.otherDamageMatches === undefined) this.otherDamageMatches = await matching(this.otherUseCondition);
+    if (this.ammunitionDamageMatches === undefined && this.ammunitionActivity) this.ammunitionDamageMatches = await matching(this.ammunitionActivity.useCondition);
   }
 
-  /**
-   * Roll the other activity damage that was deferred until after consumption was confirmed.
-   */
   async rollDeferredOtherDamage(): Promise<void> {
     const config = this.otherDamageConfig;
-    if (!config || !this.otherActivity) return;
+    if (!config || !this.otherActivityOrAmmunition) return;
 
     const dialog = this.otherDamageDialog ?? {};
 
@@ -2694,7 +3093,6 @@ export class Workflow {
       const otherResult = await this.activity.rollOtherDamage(config, dialog);
 
       if (otherResult) {
-        // Update the chat card to show the deferred other damage
         await this.displayDamageRolls();
       }
     } catch (err) {
@@ -2702,21 +3100,100 @@ export class Workflow {
       error("rollDeferredOtherDamage error", err);
     }
 
-    // Clear stored config
     this.otherDamageConfig = undefined;
     this.otherDamageDialog = undefined;
   }
 
-  async WorkflowState_ApplyDynamicEffects(context: WorkflowContext = {}): Promise<WorkflowState> {
-    this.activationMatches = new Set();
-    this.otherActivationMatches = new Set();
-    this.activationFails = new Set();
-    this.otherActivationFails = new Set();
-    let targetsToUse = this.targets;
+  /**
+   * The activity and item, as dnd5e's concentration effect records them, for midi's caster-side template, summon and
+   * transform effects (which, like it, keep the item as their origin).
+   */
+  casterEffectSource() {
+    return {
+      activity: { type: this.activity.type, id: String(this.activity.id), uuid: this.activity.uuid },
+      item: { type: this.item.type, id: this.item.id ?? "", uuid: this.item.uuid }
+    };
+  }
+
+  /** A Convenient Effects effect's source, recorded as dnd5e and DAE record an applied effect's. */
+  recordEffectOrigin(effectData: ActiveEffect.CreateData, concentrationUuid: string | undefined) {
+    effectData.origin = concentrationUuid ?? this.activity.uuid;
+    foundry.utils.setProperty(effectData, "system.origin", { activity: this.activity.uuid, effect: concentrationUuid ?? null, message: this.itemCardUuid ?? null });
+  }
+
+  /**
+   * An activity's statuses (midiProperties.statuses) for `token`, applied as the condition itself and tied to
+   * concentration as its effects are: those marked onSave, or the others.
+   */
+  async applyActivityStatuses(activity: Activity | undefined, token: TokenOrDocument, onSave: boolean) {
+    const entries = (activity?.midiProperties?.statuses ?? []).filter(entry => entry.id && !!entry.onSave === onSave);
+    if (!activity || !entries.length || !token.actor) return;
+    const concentrationUuid = this.actor.effects.get(this.concentrationId ?? "")?.uuid;
+    const prepare = (effectData: ActiveEffect.CreateData) => {
+      effectData.origin = concentrationUuid ?? activity.uuid;
+      foundry.utils.setProperty(effectData, "system.origin", { activity: activity.uuid, effect: concentrationUuid ?? null, message: this.itemCardUuid ?? null });
+      if (concentrationUuid) foundry.utils.setProperty(effectData, "flags.dnd5e.dependentOn", concentrationUuid);
+    };
+    for (const entry of entries) await applyStatusCondition(token.actor, entry.id, { specialDuration: entry.specialDuration, prepare });
+  }
+
+  /*
+   * The effects stage, step by step. The state keeps its name, order, hooks, macro passes and exits; each step is
+   * one job of the old single method, moved unchanged, and returns what later steps need.
+   */
+  async WorkflowState_ApplyDynamicEffects(): Promise<WorkflowState> {
+    const ammo = await this.effectsMatchTargets();
+    // once attacked, the attack keys too: an attack without damage never reaches the damage roll states that expire them
+    expireMyEffects.bind(this)(["1Action", "1Spell", ...(this.attackRoll ? ["1Attack", "1Hit", "1Critical", "1Fumble"] : [])]);
+    const ammoTargets = await this.effectsSelectTargets(ammo);
+    // Do special expiries
+    const specialExpiries = [
+      "isDamaged",
+      "isHealed",
+      "isSaveSuccess",
+      "isSaveFailure",
+      "isSave",
+      "isHit"
+    ];
+    await this.expireTargetEffects(specialExpiries);
+    if (this.damageOnly || !await this.effectsMayApply()) return this.WorkflowState_RollFinished;
+    // no item, not auto effects or not module skip
+    if (!this.activity.item) return this.WorkflowState_RollFinished;
+    const fx = await this.effectsResolve(ammo.ammunition, ammoTargets.ammunitionEffectTargets);
+    const data = this.effectsApplicationData();
+    await this.applyTargetEffects(fx, ammo, ammoTargets, data);
+    // Perhaps this should use this.effectTargets
+    if (configSettings.allowUseMacro && this.workflowOptions.noTargetOnUseMacro !== true) await this.triggerTargetMacros(["postTargetEffectApplication"], this.targets);
+    const selfEffects = await this.applySelfEffects(fx, ammo, ammoTargets, data);
+    await this.applyCESelfEffect(fx, data, selfEffects);
+    return this.WorkflowState_RollFinished;
+  }
+
+  /** effectsSelectTargets has run: its target sets are set for the steps after it */
+  effectTargetsSelected(): asserts this is this & { effectTargets: TokenDocumentSet; otherEffectTargets: TokenDocumentSet;
+    effectTargetsOnSave: TokenDocumentSet; otherEffectTargetsOnSave: TokenDocumentSet } {
+    if (!this.effectTargets || !this.otherEffectTargets || !this.effectTargetsOnSave || !this.otherEffectTargetsOnSave)
+      throw new Error("midi-qol | effects stage: targets not selected");
+  }
+
+  /** Activation conditions per target: the activity's, the other activity's and the ammunition's own */
+  async effectsMatchTargets() {
+    this.activationMatches = new TokenDocumentSet();
+    this.otherActivationMatches = new TokenDocumentSet();
+    this.activationFails = new TokenDocumentSet();
+    this.otherActivationFails = new TokenDocumentSet();
+    let targetsToUse = this.targets.documents;
     // Special case for target affects not specified an no targets selected when rolled - assume user has selected new targets so use those
-    if (this.activity.target?.affects?.type === "" && this.targets.size == 0)
-      targetsToUse = new Set(game.user?.targets);
+    if (this.activity.target?.affects?.type === "" && targetsToUse.length == 0)
+      targetsToUse = new TokenDocumentSet(game.user?.targets).documents;
+    // The ammunition's effects apply by its own effect condition and save, not the other activity's.
+    const ammunition = this.ammunitionActivity && this.ammunitionActivity !== this.otherActivity ? this.ammunitionActivity : undefined;
+    const ammunitionEffectCondition: string | undefined = ammunition?.effectCondition;
+    const ammunitionHasSave = !!ammunition && this.otherSaveActivity === ammunition;
+    const ammunitionActivationMatches = new TokenDocumentSet();
     for (let token of targetsToUse) {
+      if (!ammunitionEffectCondition || await evalActivationCondition(this, ammunitionEffectCondition, token, { async: true, errorReturn: true }))
+        ammunitionActivationMatches.add(token);
       const effectCondition = this.effectActivationCondition;
       const otherEffectCondition = this.otherEffectActivationCondition
       if (effectCondition) {
@@ -2733,67 +3210,72 @@ export class Workflow {
           this.otherActivationFails.add(token);
       } else this.otherActivationMatches.add(token)
     }
-    expireMyEffects.bind(this)(["1Action", "1Spell"]);
+    return { ammunition, ammunitionEffectCondition, ammunitionHasSave, ammunitionActivationMatches };
+  }
 
-    this.effectTargets = new Set();
-    this.otherEffectTargets = new Set();
-    this.allOtherEffectTargets = new Set(this.targets);
-    this.effectTargetsOnSave = this.activationMatches;
-    this.otherEffectTargetsOnSave = this.otherActivationMatches;
+  /** Which targets get the activity's, the other activity's and the ammunition's effects (applied and on save) */
+  async effectsSelectTargets(ammo: Awaited<ReturnType<Workflow["effectsMatchTargets"]>>) {
+    const { ammunitionEffectCondition, ammunitionHasSave, ammunitionActivationMatches } = ammo;
+    // By document, so targets not drawn (another scene or level) get their effects too
+    const within = (set: TokenDocumentSet, keep: TokenDocumentSet) => new TokenDocumentSet(set.documents.filter(document => keep.has(document)));
+    const allHits = this.hitTargets.union(this.hitTargetsEC);
+    this.effectTargets = new TokenDocumentSet();
+    this.otherEffectTargets = new TokenDocumentSet();
+    // "On save" means whatever the save, not whatever the attack: an attack's on-save effects and statuses are for the
+    // creatures it hit (all targets for an activity without an attack, or when effects are forced on)
+    const hits = this.activity.attack ? allHits : this.targets;
+    this.effectTargetsOnSave = this.forceApplyEffects ? this.activationMatches! : within(hits, this.activationMatches!);
+    this.otherEffectTargetsOnSave = this.forceApplyEffects ? this.otherActivationMatches! : within(hits, this.otherActivationMatches!);
     if (this.forceApplyEffects) {
-      this.effectTargets = new Set();
+      this.effectTargets = new TokenDocumentSet();
     } else if ((this.saveActivity?.save || this.saveActivity?.check) && this.activity.attack) {
-      this.effectTargets = new Set([...this.hitTargets, ...this.hitTargetsEC]);
-      this.effectTargets = new Set([...this.effectTargets].filter(t => this.failedSaves.has(t)));
+      this.effectTargets = within(allHits, this.failedSaves);
     } else if (this.activity.save || this.activity.check) this.effectTargets = this.failedSaves;
     else if (this.activity.attack) {
-      this.effectTargets = new Set([...this.hitTargets, ...this.hitTargetsEC]);
+      this.effectTargets = allHits;
     } else
       this.effectTargets = this.targets;
-    this.effectTargets = this.effectTargets.filter(t => this.activationMatches!.has(t));
+    this.effectTargets = within(this.effectTargets, this.activationMatches!);
 
     if (this.forceApplyEffects) {
       this.otherEffectTargets = this.targets;
-    } else if ((this.otherActivity?.save || this.otherActivity?.check) && this.activity.attack) {
-      this.otherEffectTargets = new Set([...this.hitTargets, ...this.hitTargetsEC]);
+    } else if ((this.otherActivityOrAmmunition?.save || this.otherActivityOrAmmunition?.check) && this.activity.attack) {
       // check saves when selecting the effects to apply - deal with always apply effects
-      if (!this.otherEffectActivationCondition)
-        this.otherEffectTargets = new Set([...this.otherEffectTargets].filter(t => this.failedSaves.has(t)));
-    } else if (this.otherActivity?.save || this.otherActivity?.check) this.otherEffectTargets = this.failedSaves;
+      this.otherEffectTargets = this.otherEffectActivationCondition ? allHits : within(allHits, this.failedSaves);
+    } else if (this.otherActivityOrAmmunition?.save || this.otherActivityOrAmmunition?.check) this.otherEffectTargets = this.failedSaves;
     else if (this.activity.attack) {
-      this.otherEffectTargets = new Set([...this.hitTargets, ...this.hitTargetsEC]);
+      this.otherEffectTargets = allHits;
     } else
       this.otherEffectTargets = this.targets;
-    this.otherEffectTargets = this.otherEffectTargets.filter(t => this.otherActivationMatches!.has(t));
+    this.otherEffectTargets = within(this.otherEffectTargets, this.otherActivationMatches!);
+
+    let ammunitionEffectTargets = this.forceApplyEffects ? this.targets : hits;
+    if (!this.forceApplyEffects && ammunitionHasSave && !ammunitionEffectCondition)
+      ammunitionEffectTargets = within(ammunitionEffectTargets, this.failedSaves);
+    ammunitionEffectTargets = within(ammunitionEffectTargets, ammunitionActivationMatches);
+    const ammunitionEffectTargetsOnSave = within(hits, ammunitionActivationMatches);
 
     // Check consumption for other activity effects if not already checked
     // This handles the case where other activity has effects but no save and no damage
-    if (this.otherActivity && this.otherEffectTargets.size > 0) {
-      const otherConsumedFlag = this.chatCard?.getFlag(MODULE_ID, "use.consumed");
+    if (this.otherActivity && this.otherEffectTargets.documents.length > 0) {
+      const otherConsumedFlag = this.otherConsumed;
       if (otherConsumedFlag === false) {
         // Consumption was already declined - skip other effects
-        this.otherEffectTargets = new Set();
+        this.otherEffectTargets = new TokenDocumentSet();
       } else if (otherConsumedFlag === undefined && this.otherActivity.hasConsumption()) {
         // Consumption not yet checked and other activity has consumption - check now
         const consumptionSuccess = await this.checkOtherActivityConsumption();
         if (!consumptionSuccess) {
-          this.otherEffectTargets = new Set();
+          this.otherEffectTargets = new TokenDocumentSet();
         }
       }
     }
+    return { ammunitionEffectTargets, ammunitionEffectTargetsOnSave };
+  }
 
-    // Do special expiries
-    const specialExpiries = [
-      "isDamaged",
-      "isHealed",
-      "isSaveSuccess",
-      "isSaveFailure",
-      "isSave",
-      "isHit"
-    ];
-    await this.expireTargetEffects(specialExpiries);
-
-    if (configSettings.autoItemEffects === "off" && !this.forceApplyEffects) return this.WorkflowState_RollFinished; // TODO see if there is a better way to do this.
+  /** False when effects are not applied: item effects off, or a preActiveEffects macro halted them */
+  async effectsMayApply(): Promise<boolean> {
+    if (configSettings.autoItemEffects === "off" && !this.forceApplyEffects) return false; // TODO see if there is a better way to do this.
 
     // TODO look at macros being per activity rather than per item
     if (this.activity.item) {
@@ -2801,48 +3283,76 @@ export class Workflow {
         let results: any[] = await this.callMacros(this.activity.item, this.onUseMacros?.getMacros("preActiveEffects"), "OnUse", "preActiveEffects");
         // Special check for return of {haltEffectsApplication: true} from item macro
         if (results.some(r => r?.haltEffectsApplication))
-          return this.WorkflowState_RollFinished;
+          return false;
         results = await this.callMacros(this.ammunition, this.ammunitionOnUseMacros?.getMacros("preActiveEffects"), "OnUse", "preActiveEffects");
         if (results.some(r => r?.haltEffectsApplication))
-          return this.WorkflowState_RollFinished;
+          return false;
       }
     }
+    return true;
+  }
 
+  /** The effects to apply: resolved from the activities' profiles, chosen, split between self and targets */
+  async effectsResolve(ammunition: Awaited<ReturnType<Workflow["effectsMatchTargets"]>>["ammunition"], ammunitionEffectTargets: TokenDocumentSet) {
+    this.effectTargetsSelected();
     // no item, not auto effects or not module skip
     let useCE: string = configSettings.autoCEEffects;
-    if (!this.activity.item) return this.WorkflowState_RollFinished;
     if (this.activity.midiProperties?.autoCEEffects && this.activity.midiProperties.autoCEEffects !== "default") {
       useCE = this.activity.midiProperties.autoCEEffects;
     }
     let ceEffect = getCEEffectByName(this.activity.name);
     if (!ceEffect) ceEffect = getCEEffectByName(this.activity.item.name);
-    const isApplicableEffect = (activity: Activity | undefined | null, efData: any): boolean => {
-      if (!efData || !activity) return false;
+    /*
+     * An activity's effects, resolved from their dnd5e 6 profiles and split by onSave. Not
+     * applicableEffects: that drops onSave. A profile names a local effect or, by uuid, a standalone
+     * one such as a compendium effect, which only resolves asynchronously.
+     */
+    const resolveEffects = async (activity: Activity | undefined | null) => {
+      const resolved = { applied: [] as ActiveEffect.Implementation[], onSave: [] as ActiveEffect.Implementation[] };
+      if (!activity) return resolved;
+      // A Select Form transform's effects are its forms; dnd5e applies the chosen one.
+      // @ts-expect-error no dnd5e-types
+      if (activity.type === "transform" && activity.transform?.mode === "form") return resolved;
       const level = activity.relevantLevel;
-      //@ts-expect-error no dnd5e-types
-      if (((efData.level?.min ?? -Infinity) > level) || (level > (efData.level?.max ?? Infinity)))
-        return false;
-      return !!efData.effect && efData.effect?.transfer !== true && efData.effect?.type !== "enchantment";
-    }
-    // can't use this.activity.applicableEffects since we need to know about onSave or not
-    const resolveProfiles = (activity: Activity | null | undefined) => Promise.all((activity?.effects ?? []).map(async profile => ({
-      ...profile, effect: await resolveActivityEffect(profile)
-    })));
-    const [profiles, otherProfiles] = await Promise.all([resolveProfiles(this.activity), resolveProfiles(this.otherActivity)]);
-    let activityEffects = profiles.filter(profile => isApplicableEffect(this.activity, profile) && profile.onSave !== true).map(profile => profile.effect);
-    let onSaveActivityEffects = profiles.filter(profile => isApplicableEffect(this.activity, profile) && profile.onSave === true).map(profile => profile.effect);
-    let otherActivityEffects = otherProfiles.filter(profile => isApplicableEffect(this.otherActivity, profile) && profile.onSave !== true).map(profile => profile.effect);
-    let onSaveOtherActivityEffects = otherProfiles.filter(profile => isApplicableEffect(this.otherActivity, profile) && profile.onSave === true).map(profile => profile.effect);
-    if (activityEffects.length > 0 && this.effectTargets.size > 0 && this.activity.midiProperties?.chooseEffects) { // WIP
+      for (const profile of (activity.effects ?? []) as ActivityEffectData[]) {
+        if (((profile.level?.min ?? -Infinity) > level) || (level > (profile.level?.max ?? Infinity))) continue;
+        const effect = await profile.getEffect();
+        // @ts-expect-error no dnd5e-types
+        if (!effect || effect.transfer || effect.type === "enchantment") continue;
+        (profile.onSave === true ? resolved.onSave : resolved.applied).push(effect);
+      }
+      return resolved;
+    };
+    const activityResolved = await resolveEffects(this.activity);
+    let activityEffects = activityResolved.applied;
+    let onSaveActivityEffects = activityResolved.onSave;
+    const otherResolved = await resolveEffects(this.otherActivity);
+    let otherActivityEffects = otherResolved.applied;
+    let onSaveOtherActivityEffects = otherResolved.onSave;
+    // The ammunition's effects, applied with the other activity's (an item's other activity and its ammunition both can)
+    const ammunitionResolved = await resolveEffects(ammunition);
+    let ammunitionEffects = ammunitionResolved.applied;
+    let onSaveAmmunitionEffects = ammunitionResolved.onSave;
+    if (activityEffects.length > 0 && this.effectTargets.count > 0 && this.activity.midiProperties?.chooseEffects) { // WIP
       activityEffects = await this.chooseEffects(activityEffects, { activity: this.activity, activityUuid: this.activity.uuid, isOtherActivity: false });
     }
-    if (otherActivityEffects.length > 0 && this.otherEffectTargets.size > 0 && this.otherActivity?.midiProperties?.chooseEffects) { // WIP
+    if (otherActivityEffects.length > 0 && this.otherEffectTargets.count > 0 && this.otherActivity?.midiProperties?.chooseEffects) { // WIP
       otherActivityEffects = await this.chooseEffects(otherActivityEffects, { activity: this.otherActivity, activityUuid: this.otherActivity.uuid, isOtherActivity: true });
+    }
+    if (ammunitionEffects.length > 0 && ammunitionEffectTargets.count > 0 && ammunition?.midiProperties?.chooseEffects) {
+      ammunitionEffects = await this.chooseEffects(ammunitionEffects, { activity: ammunition, activityUuid: ammunition.uuid, isOtherActivity: true });
     }
     const ceTargetEffect = ceEffect && !(ceEffect?.flags?.dae?.selfTarget || ceEffect?.flags?.dae?.selfTargetAlways);
     const ceSelfEffect = ceEffect && (ceEffect?.flags?.dae?.selfTarget || ceEffect?.flags?.dae?.selfTargetAlways);
-    const hasActivityEffects = hasDAE(this) && activityEffects.length > 0;
-    const hasOtherActivityEffects = hasDAE(this) && otherActivityEffects.length > 0;
+    // The resolved effects, not the item's: a profile can name an effect that is not on the item.
+    const daeInstalled = !!installedModules.get("dae");
+    const hasActivityEffects = daeInstalled && activityEffects.length > 0;
+    const hasOtherActivityEffects = daeInstalled && otherActivityEffects.length > 0;
+    const isSelfEffect = (ef: ActiveEffect.Implementation) => !!(ef.flags?.dae?.selfTarget || ef.flags?.dae?.selfTargetAlways);
+    const ammunitionSelfEffects = [...ammunitionEffects, ...onSaveAmmunitionEffects].filter(isSelfEffect);
+    const ammunitionSelfAllEffects = ammunitionSelfEffects.filter(ef => ef.flags?.dae?.selfTargetAlways);
+    ammunitionEffects = ammunitionEffects.filter(ef => !isSelfEffect(ef));
+    onSaveAmmunitionEffects = onSaveAmmunitionEffects.filter(ef => !isSelfEffect(ef));
 
     const activitySelfEffects = [...activityEffects, ...onSaveActivityEffects].filter(ef => ef.flags?.dae?.selfTarget || ef.flags?.dae?.selfTargetAlways) ?? [];
     const activitySelfAllEffect = [...activityEffects, ...onSaveActivityEffects].filter(ef => ef.flags?.dae?.selfTargetAlways) ?? [];
@@ -2853,9 +3363,15 @@ export class Workflow {
     otherActivityEffects = otherActivityEffects.filter(ef => !ef.flags?.dae?.selfTarget && !ef.flags?.dae?.selfTargetAlways);
     onSaveActivityEffects = onSaveActivityEffects.filter(ef => !ef.flags?.dae?.selfTarget && !ef.flags?.dae?.selfTargetAlways);
     onSaveOtherActivityEffects = onSaveOtherActivityEffects.filter(ef => !ef.flags?.dae?.selfTarget && !ef.flags?.dae?.selfTargetAlways);
-    // let anyApplication = this.effectTargets.size > 0 || this.otherEffectTargets.size > 0;
+    return {
+      useCE, ceEffect, ceTargetEffect, ceSelfEffect, daeInstalled, hasActivityEffects, hasOtherActivityEffects,
+      activityEffects, onSaveActivityEffects, otherActivityEffects, onSaveOtherActivityEffects, ammunitionEffects, onSaveAmmunitionEffects,
+      activitySelfEffects, activitySelfAllEffect, otherActivitySelfEffects, otherActivitySelfAllEffects, ammunitionSelfEffects, ammunitionSelfAllEffects
+    };
+  }
 
-    let selfEffectsToApply = "none";
+  /** What DAE is given with each application: metadata, the concentration origin and the roll context */
+  effectsApplicationData() {
     const metaData = {
       "flags": {
         "dae": { transfer: false },
@@ -2864,12 +3380,9 @@ export class Workflow {
         }
       }
     };
-    let origin = this.actor.effects.get(this.chatCard?.getFlag("dnd5e", "use.concentrationId") ?? "")?.uuid
+    let origin = this.actor.effects.get(this.concentrationId ?? "")?.uuid
       ?? getConcentrationEffect(this.actor, this.item)?.uuid;
-    let damageComponents = {};
-    let damageListItem;
-    let hpDamage;
-    let totalDamage: number | undefined;
+    // DAE records the source in system.origin as dnd5e does: the activity, this concentration and the card.
     const doEffectsData = {
       damageTotal: 0,
       damage: 0,
@@ -2879,7 +3392,7 @@ export class Workflow {
       metaData,
       selfEffects: "none",
       spellLevel: this.spellLevel,
-      origin: "",
+      concentrationUuid: origin,
       toggleEffect: this.activity.midiProperties?.toggleEffect,
       // Is this used?
       tokenUuid: this.tokenUuid,
@@ -2898,15 +3411,28 @@ export class Workflow {
         activity: this.activity?.getRollData?.()?.activity,
         flags: {
           dnd5e: {
-            scaling: this.chatCard?.getFlag("dnd5e", "scaling"),
-            spellLevel: this.chatCard?.getFlag("dnd5e", "use.spellLevel")
+            // @ts-expect-error no dnd5e-types
+            scaling: this.chatCard?.system.scaling,
+            // @ts-expect-error no dnd5e-types
+            spellLevel: this.chatCard?.system.level
           }
         },
         utilityRollTotal: this.utilityRoll?.total,
       }
     }
-    for (let token of this.targets) {
-      const tokenDamages = this.damageList?.find(di => di.targetUuid === getTokenDocument(token)?.uuid);
+    return { metaData, origin, doEffectsData };
+  }
+
+  /** Each target's effects and statuses: the activity's, the other activity's, the ammunition's, and CE */
+  async applyTargetEffects(fx: Awaited<ReturnType<Workflow["effectsResolve"]>>, ammo: Awaited<ReturnType<Workflow["effectsMatchTargets"]>>, ammoTargets: Awaited<ReturnType<Workflow["effectsSelectTargets"]>>, data: ReturnType<Workflow["effectsApplicationData"]>) {
+    this.effectTargetsSelected();
+    const { useCE, ceEffect, ceTargetEffect, daeInstalled, hasActivityEffects, hasOtherActivityEffects, activityEffects, onSaveActivityEffects,
+      otherActivityEffects, onSaveOtherActivityEffects, ammunitionEffects, onSaveAmmunitionEffects } = fx;
+    const { ammunition, ammunitionHasSave } = ammo;
+    const { ammunitionEffectTargets, ammunitionEffectTargetsOnSave } = ammoTargets;
+    const { metaData, origin, doEffectsData } = data;
+    for (const token of this.targets.documents) {
+      const tokenDamages = this.damageList?.find(di => di.targetUuid === token.uuid);
       if (tokenDamages) {
         doEffectsData.damageTotal = tokenDamages.totalDamage;
         doEffectsData.context.damageTotal = tokenDamages.totalDamage;
@@ -2934,13 +3460,11 @@ export class Workflow {
               this.effectTargets?.has(token) && (
                 !(this.activity.save || this.activity.check)
                 || this.failedSaves.has(token)
-                || this.activity.effects.some(effectDetail => effectDetail.onSave == true && effectDetail._id === ef.id)
               )
             );
           }
           const effectsToApplyUuids = selectedEffects.map(ef => ef.uuid);
           if (effectsToApplyUuids?.length > 0) {
-            doEffectsData.origin = origin ?? effectsToApplyUuids[0];
             await globalThis.DAE.doActivityEffects(this.activity, true, [token], effectsToApplyUuids, doEffectsData);
           }
         }
@@ -2957,30 +3481,30 @@ export class Workflow {
                 await CERemoveEffect({ effectName: ceEffect.name, uuid: token.actor.uuid, origin });
               }
               const effectData = foundry.utils.mergeObject(ceEffect.toObject(), metaData);
-              if (isInCombat(token.actor) && (effectData.duration?.seconds ?? 0) <= 60) {
-                effectData.duration.rounds = effectData.duration.rounds ?? Math.ceil((effectData.duration?.seconds ?? 0) / CONFIG.time.roundTime);
-                delete effectData.duration.seconds;
+              // @ts-expect-error fvtt-types v14 duration
+              if (isInCombat(token.actor) && effectData.duration?.units === "seconds" && (effectData.duration?.value ?? 0) <= 60) {
+                // @ts-expect-error fvtt-types v14 duration
+                effectData.duration = { value: Math.ceil((effectData.duration.value ?? 0) / CONFIG.time.roundTime), units: "rounds" };
               }
-              effectData.origin = origin ?? this.activity.uuid ?? this.activity.item.uuid;
-              const concentrationUuid = this.actor.effects.get(this.chatCard?.getFlag("dnd5e", "use.concentrationId")??"")?.uuid;
+              const concentrationUuid = this.actor.effects.get(this.concentrationId ?? "")?.uuid;
+              this.recordEffectOrigin(effectData, concentrationUuid);
               if (concentrationUuid) {
                 foundry.utils.setProperty(effectData, "flags.dnd5e.dependentOn", concentrationUuid);
               }
-              const effects = await CEAddEffectWith({ effectData, effectName: ceEffect.name, uuid: token.actor.uuid, origin, overlay: false });
+              await CEAddEffectWith({ effectData, effectName: ceEffect.name, uuid: token.actor.uuid, origin, overlay: false });
             }
           }
         }
       }
 
-      if (this.effectTargetsOnSave.size > 0 && onSaveActivityEffects.length > 0) {
-        let selectedEffects = onSaveActivityEffects;
+      if (this.effectTargetsOnSave.has(token) && onSaveActivityEffects.length > 0) {
         const effectsToApplyUuids = onSaveActivityEffects.map(ef => ef.uuid);
         if (effectsToApplyUuids?.length > 0) {
-          // TODO: Is this right?
-          doEffectsData.origin = effectsToApplyUuids[0];
           await globalThis.DAE.doActivityEffects(this.activity, true, [token], effectsToApplyUuids, doEffectsData)
         }
       }
+      if (this.forceApplyEffects || this.effectTargets.has(token)) await this.applyActivityStatuses(this.activity, token, false);
+      if (this.effectTargetsOnSave.has(token)) await this.applyActivityStatuses(this.activity, token, true);
       if (this.forceApplyEffects || this.otherEffectTargets.has(token)) {
         if (hasOtherActivityEffects) {
           let selectedEffects = otherActivityEffects;
@@ -2989,48 +3513,73 @@ export class Workflow {
               this.otherActivationMatches?.has(token) && this.otherEffectTargets?.has(token) && (
                 !(this.otherActivity?.save || this.otherActivity?.check)
                 || this.failedSaves.has(token)
-                || this.otherActivity?.effects.some(effectDetail => effectDetail.onSave == true && effectDetail._id === ef.id)
               )
             );
           }
           const effectsToApplyUuids = selectedEffects.map(ef => ef.uuid);
           if (effectsToApplyUuids?.length > 0) {
-            doEffectsData.origin = effectsToApplyUuids[0];
             await globalThis.DAE.doActivityEffects(this.otherActivity, true, [token], effectsToApplyUuids, doEffectsData)
           }
         }
       }
-      if (this.otherEffectTargetsOnSave.size > 0 && onSaveOtherActivityEffects.length > 0) {
-        let selectedEffects = onSaveOtherActivityEffects;
+      if (this.otherEffectTargetsOnSave.has(token) && onSaveOtherActivityEffects.length > 0) {
         const effectsToApplyUuids = onSaveOtherActivityEffects.map(ef => ef.uuid);
         if (effectsToApplyUuids?.length > 0) {
-          doEffectsData.origin = effectsToApplyUuids[0];
           await globalThis.DAE.doActivityEffects(this.otherActivity, true, [token], effectsToApplyUuids, doEffectsData)
         }
       }
+      if (this.otherActivity) {
+        const otherApplies = this.forceApplyEffects || (this.otherActivationMatches?.has(token) && this.otherEffectTargets.has(token)
+          && (!(this.otherActivity.save || this.otherActivity.check) || this.failedSaves.has(token)));
+        if (otherApplies) await this.applyActivityStatuses(this.otherActivity, token, false);
+        if (this.otherEffectTargetsOnSave.has(token)) await this.applyActivityStatuses(this.otherActivity, token, true);
+      }
+      if (ammunition) {
+        const applies = this.forceApplyEffects
+          || (ammunitionEffectTargets.has(token) && (!ammunitionHasSave || this.failedSaves.has(token)));
+        const uuids = [...(applies ? ammunitionEffects : []), ...(ammunitionEffectTargetsOnSave.has(token) ? onSaveAmmunitionEffects : [])].map(ef => ef.uuid);
+        if (daeInstalled && uuids.length) await globalThis.DAE.doActivityEffects(ammunition, true, [token], uuids, doEffectsData);
+        if (applies) await this.applyActivityStatuses(ammunition, token, false);
+        if (ammunitionEffectTargetsOnSave.has(token)) await this.applyActivityStatuses(ammunition, token, true);
+      }
     }
-    // Perhaps this should use this.effectTargets
-    if (configSettings.allowUseMacro && this.workflowOptions.noTargetOnUseMacro !== true) await this.triggerTargetMacros(["postTargetEffectApplication"], this.targets);
+  }
 
+  /** Self effects: all of them when targets were affected, only "apply to self always" ones when not */
+  async applySelfEffects(fx: Awaited<ReturnType<Workflow["effectsResolve"]>>, ammo: Awaited<ReturnType<Workflow["effectsMatchTargets"]>>, ammoTargets: Awaited<ReturnType<Workflow["effectsSelectTargets"]>>, data: ReturnType<Workflow["effectsApplicationData"]>): Promise<ActiveEffect.Implementation[]> {
+    this.effectTargetsSelected();
+    const { daeInstalled, activitySelfEffects, activitySelfAllEffect, otherActivitySelfEffects, otherActivitySelfAllEffects, ammunitionSelfEffects, ammunitionSelfAllEffects } = fx;
+    const { ammunition } = ammo;
+    const { ammunitionEffectTargets } = ammoTargets;
+    const { doEffectsData } = data;
     //Now do self effects
     let selfEffects: ActiveEffect.Implementation[] = [];
-    if (this.effectTargets?.size > 0) selfEffects = activitySelfEffects;
+    if (this.effectTargets.documents.length > 0) selfEffects = activitySelfEffects;
     else selfEffects = activitySelfAllEffect;
     const selfToken = getOrCreateTokenForActor(this.actor);
     if (selfEffects.length > 0 && selfToken) {
-      doEffectsData.origin = origin ?? this.activity.uuid ?? this.item.uuid;
       await globalThis.DAE.doActivityEffects(this.activity, true, [selfToken], selfEffects.map(ef => ef.uuid), doEffectsData)
     }
 
     let otherSelfEffects: ActiveEffect.Implementation[] = [];
-    if (this.otherEffectTargets.size > 0) otherSelfEffects = otherActivitySelfAllEffects;
-    else otherSelfEffects = otherActivitySelfEffects;
+    if (this.otherEffectTargets.documents.length > 0) otherSelfEffects = otherActivitySelfEffects;
+    else otherSelfEffects = otherActivitySelfAllEffects;
     if (otherSelfEffects.length > 0 && selfToken) {
-      doEffectsData.origin = this.otherActivity!.item.uuid;
       await globalThis.DAE.doActivityEffects(this.otherActivity, true, [selfToken], otherSelfEffects.map(ef => ef.uuid), doEffectsData)
     }
+    const ammunitionSelf = ammunitionEffectTargets.documents.length > 0 ? ammunitionSelfEffects : ammunitionSelfAllEffects;
+    if (daeInstalled && ammunition && ammunitionSelf.length > 0 && selfToken) {
+      await globalThis.DAE.doActivityEffects(ammunition, true, [selfToken], ammunitionSelf.map(ef => ef.uuid), doEffectsData);
+    }
+    return selfEffects;
+  }
 
-    if (this.actor && ceSelfEffect && (this.effectTargets?.size > 0 || ceEffect!.flags?.dae?.selfTargetAlways)) {
+  /** The Convenient Effects self effect */
+  async applyCESelfEffect(fx: Awaited<ReturnType<Workflow["effectsResolve"]>>, data: ReturnType<Workflow["effectsApplicationData"]>, selfEffects: ActiveEffect.Implementation[]) {
+    this.effectTargetsSelected();
+    const { useCE, ceEffect, ceSelfEffect } = fx;
+    const { metaData, origin } = data;
+    if (this.actor && ceSelfEffect && (this.effectTargets.documents.length > 0 || ceEffect!.flags?.dae?.selfTargetAlways)) {
       if (["both", "cepri"].includes(useCE) || (useCE === "itempri" && !selfEffects.length)) {
         const actorHasEffect = this.actor.effects.find(ef => ef.name === this.activity.name);
         if (this.activity.midiProperties?.toggleEffect && actorHasEffect) {
@@ -3041,18 +3590,17 @@ export class Workflow {
             await CERemoveEffect({ effectName: this.activity.name, uuid: this.actor.uuid, origin });
           }
           const effectData: ActiveEffect.CreateData = foundry.utils.mergeObject(ceEffect!.toObject(), metaData);
-          effectData.origin = origin;
-          const concentrationUuid = this.actor.effects.get(this.chatCard?.getFlag("dnd5e", "use.concentrationId")??"")?.uuid;
+          const concentrationUuid = this.actor.effects.get(this.concentrationId ?? "")?.uuid;
+          this.recordEffectOrigin(effectData, concentrationUuid);
           if (concentrationUuid) {
             foundry.utils.setProperty(effectData, "flags.dnd5e.dependentOn", concentrationUuid);
           }
-          const effects = await CEAddEffectWith({ effectData, effectName: this.activity.name, uuid: this.actor.uuid, origin, overlay: false });
+          await CEAddEffectWith({ effectData, effectName: this.activity.name, uuid: this.actor.uuid, origin, overlay: false });
         }
       }
     }
-    return this.WorkflowState_RollFinished;
   }
-  async WorkflowState_Cleanup(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_Cleanup(): Promise<WorkflowState> {
     const blfxActive = game.modules.get("boss-loot-assets-premium")?.active ||
       game.modules.get("boss-loot-assets-free")?.active;
     const AAActive = game.modules.get("autoanimations")?.active;
@@ -3065,20 +3613,18 @@ export class Workflow {
           let timeout = AAActive ? Math.max(elapsedTimeRequired - elapsed, 1) : 1;
           timeout = Math.max(elapsedTimeRequired, timeout);
           setTimeout(() => {
-            const templateToDelete = fromUuidSync(tUuid) as MeasuredTemplateDocument || null;
-            templateToDelete?.delete()
+            (fromUuidSync(tUuid) as MeasuredTemplateDocument | null)?.delete()
           }, timeout);
         } else {
           setTimeout(() => {
-            const templateToDelete = fromUuidSync(tUuid) as MeasuredTemplateDocument || null;
-            templateToDelete?.delete()
+            (fromUuidSync(tUuid) as MeasuredTemplateDocument | null)?.delete()
           }, elapsedTimeRequired);
           log("Not auto removing instantaneous template because boss loot assets active")
         }
       }
     }
     if (this.postSummonHookId) Hooks.off("dnd5e.postSummon", this.postSummonHookId);
-    if (this.activity.target?.affects.type !== "" || this.targets.size !== 0) {
+    if (this.activity.target?.affects.type !== "" || this.targets.count !== 0) {
       // moved inside RollFinished if (configSettings.autoItemEffects === "applyRemove") await this.removeEffectsButton();
     }
 
@@ -3088,21 +3634,28 @@ export class Workflow {
     return this.WorkflowState_Completed;
   }
 
-  async WorkflowState_Completed(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (this.itemCardUuid && this.chatCard) {
-      if (this.damageList && saveToChatCard && this.itemCardUuid) {
-        const damageListData = prepareDamageListToJSON(this.damageList);
-        // @ts-expect-error deleting something that is "required" in other contexts
-        damageListData.forEach((di => delete di.damageDetails))
-        addUpdatesCacheFlags(this.id, { [WorkflowDataFlags.damageList]: damageListData }, "midi-qol");
-      }
-      await Workflow.removeItemCardButtons(this.itemCardUuid, { removeAllButtons: getRemoveAllButtons(this.activity), removeAttackButtons: getRemoveAttackButtons(this.activity), removeDamageButtons: getRemoveDamageButtons(this.activity), removeDnD5eButtons: getRemoveAllButtons(this.activity) && configSettings.autoCheckSaves !== "none", removeDnd5eSaveButtons: configSettings.autoCheckSaves !== "none" });
-    }
-    if (context.attackRoll) return this.WorkflowState_AttackRollComplete;
-    if (context.damageRoll) return this.WorkflowState_ConfirmRoll;
+  async WorkflowState_Completed(): Promise<WorkflowState> {
+    await this.completeCard();
     if (debugEnabled > 0) warn("Workflow complete ", this.id, "elapsed time", Date.now() - (this.workflowStartTime ?? 0));
-    warn("Workflow complete ", this.id, "elapsed time", Date.now() - (this.workflowStartTime ?? 0));
 
+    if (!this.damageOnly) {
+      await offerFollowUps(this);
+      await this.runTriggeredActivity();
+    }
+    Workflow.#fileFinished(this);
+    return this.WorkflowState_Suspend;
+  }
+
+  /** The card's buttons removed as the workflow is finished */
+  /** Only the card's own workflow finishes it: a damage-only workflow adding to another use's card leaves that card alone */
+  async completeCard() {
+    if (this.ownsCard && this.chatCard) {
+      await Workflow.removeItemCardButtons(this.itemCardUuid, { removeAllButtons: getRemoveAllButtons(this.activity), removeDnd5eSaveButtons: configSettings.autoCheckSaves !== "none", finished: true });
+    }
+  }
+
+  /** The activity's triggered activity, unless it loops, its targets are missing or its condition fails */
+  async runTriggeredActivity() {
     let shouldTrigger = false;
     if (this.activity.midiProperties?.triggeredActivityId && !this.aborted) {
       let activity = this.activity
@@ -3116,7 +3669,7 @@ export class Workflow {
           break;
         }
         visitedActivities.add(possibleTriggerActivity.uuid);
-        possibleTriggerActivity = await possibleTriggerActivity.getTriggeredActivity();
+        possibleTriggerActivity = await possibleTriggerActivity.getTriggeredActivity?.();
       }
 
       let triggeredActivity = await this.activity.getTriggeredActivity();
@@ -3124,33 +3677,35 @@ export class Workflow {
         if (shouldTrigger) {
           let usage: { midiOptions: MidiOptions } = { midiOptions: {} };
           usage.midiOptions.event = this.rollOptions.event;
-          usage.midiOptions.workflowOptions = this.workflowOptions;
+          // The triggering workflow's options, but not how that one invocation was made (the attack-per-target loop's
+          // targetConfirmation "never" and rollAttackPerTarget): the triggered activity keeps its own confirmation
+          const {
+            targetConfirmation: _triggeringTargetConfirmation,
+            rollAttackPerTarget: _triggeringRollAttackPerTarget,
+            attackSplit: _triggeringAttackSplit,
+            ...inheritedWorkflowOptions
+          } = this.workflowOptions ?? {};
+          // Only what transmission would carry: other modules' per-use state stays with this workflow.
+          usage.midiOptions.workflowOptions = inheritableWorkflowOptions(inheritedWorkflowOptions);
           usage.midiOptions.rollOptions = this.rollOptions;
           usage.midiOptions.isTriggered = true;
           let targetUuids: string[] = [];
-          const toUuids = (targets: Set<TokenOrDocument>): string[] => {
-            return Array.from(targets ?? new Set()).map(t => (t instanceof TokenDocument ? t : t.document).uuid)
-          }
-          const getTriggerPassTargets = (): Set<TokenOrDocument> => {
-            if ((this.saveActivity?.save || this.saveActivity?.check) && this.activity.attack) {
-              return new Set([...this.hitTargets, ...this.hitTargetsEC].filter(t => this.failedSaves.has(t)));
-            }
-            if (this.activity.save || this.activity.check) return new Set(this.failedSaves);
-            if (this.activity.attack) return new Set([...this.hitTargets, ...this.hitTargetsEC]);
-            return new Set(this.targets);
-          }
-          const sourceHasSaveOrHit = !!(((this.saveActivity?.save || this.saveActivity?.check) && this.activity.attack)
-            || this.activity.save || this.activity.check || this.activity.attack);
+          const toUuids = (targets: TokenDocumentSet): string[] => targets.uuids;
+          const hasSave = !!(this.saveActivity?.save || this.saveActivity?.check);
           const enforceTriggerSaveHit = triggeredActivity.isOverTimeFlag && !triggeredActivity.overTimeProperties?.ignoreTriggeringActivitySaveHit;
-          const triggerPassTargetUuids = enforceTriggerSaveHit && sourceHasSaveOrHit ? new Set(toUuids(getTriggerPassTargets())) : undefined;
+          const passedTargets = this.activity.attack
+            ? (hasSave ? this.hitTargets.union(this.hitTargetsEC).intersection(this.failedSaves) : this.hitTargets.union(this.hitTargetsEC))
+            : (hasSave ? this.failedSaves : this.targets);
+          const allowedTargetUuids = new Set(passedTargets.uuids);
+
 
           if (this.activity.midiProperties?.triggeredActivityRollAs) {
             switch (this.activity.midiProperties.triggeredActivityRollAs) {
-              case "firstTarget": usage.midiOptions.rollAs = getActor(this.targets.first()); break;
-              case "firstHitTarget": usage.midiOptions.rollAs = getActor(this.hitTargets.first()); break;
-              case "firstMissedTarget": usage.midiOptions.rollAs = getActor(this.targets.difference(this.hitTargets).first()); break;
-              case "firstSaveTarget": usage.midiOptions.rollAs = getActor(this.saves.first()); break;
-              case "firstFailedSaveTarget": usage.midiOptions.rollAs = getActor(this.failedSaves.first()); break;
+              case "firstTarget": usage.midiOptions.rollAs = getActor(this.targets.documents[0]); break;
+              case "firstHitTarget": usage.midiOptions.rollAs = getActor(this.hitTargets.documents[0]); break;
+              case "firstMissedTarget": usage.midiOptions.rollAs = getActor(this.targets.difference(this.hitTargets).documents[0]); break;
+              case "firstSaveTarget": usage.midiOptions.rollAs = getActor(this.saves.documents[0]); break;
+              case "firstFailedSaveTarget": usage.midiOptions.rollAs = getActor(this.failedSaves.documents[0]); break;
               case "self":
               default:
                 usage.midiOptions.rollAs = this.actor;
@@ -3171,17 +3726,11 @@ export class Workflow {
                 // targetUuids = [];
                 break;
             }
+          if (enforceTriggerSaveHit && (hasSave || this.activity.attack)) targetUuids = targetUuids.filter(uuid => allowedTargetUuids.has(uuid));
+          if (triggeredActivity.isOverTimeFlag && !targetUuids.length) shouldTrigger = false;
           usage.midiOptions.targetUuids = targetUuids;
           usage.midiOptions.triggeredActivity = true;
-          if (triggerPassTargetUuids) {
-            targetUuids = targetUuids.filter(uuid => triggerPassTargetUuids.has(uuid));
-            usage.midiOptions.targetUuids = targetUuids;
-          }
           if (this.activity.midiProperties.triggeredActivityTargets !== "retarget" && targetUuids?.length === 0)
-            shouldTrigger = false;
-          if (enforceTriggerSaveHit && sourceHasSaveOrHit && targetUuids?.length === 0)
-            shouldTrigger = false;
-          if (triggeredActivity.isOverTimeFlag && targetUuids?.length === 0)
             shouldTrigger = false;
           if (this.activity.midiProperties?.triggeredActivityConditionText && shouldTrigger) {
             const target = await fromUuid(targetUuids[0]) as TokenDocument.Implementation | undefined;;
@@ -3205,15 +3754,71 @@ export class Workflow {
         }
       }
     }
-    return this.WorkflowState_Suspend;
-
   }
 
-  async WorkflowState_Abort(context: WorkflowContext = {}): Promise<WorkflowState> {
+  /**
+   * Hand back what dnd5e consumed for this use: an abort deletes the card, where dnd5e keeps the consumption and its
+   * Refund button. Idempotent: a workflow can reach more than one abort path.
+   */
+  async refundConsumption(): Promise<void> {
+    if (this.#consumptionRefunded) return;
+    const consumed = getConsumptionData(this.chatCard);
+    if (!consumed || foundry.utils.isEmpty(consumed)) return;
+    this.#consumptionRefunded = true;
+    try {
+      await this.activity?.refund(consumed);
+    } catch (err) {
+      const message = `${this.workflowName} could not refund consumption`;
+      error(message, err);
+      TroubleShooter.recordError(err, message);
+    }
+  }
+
+  /**
+   * Begin the concentration MidiActivityMixin deferred, once the use can no longer be cancelled.
+   * Same order as Activity#use: begin, record it on the card, then end the one it replaces.
+   */
+  async beginDeferredConcentration(): Promise<void> {
+    const deferred = this.deferredConcentration;
+    if (!deferred) return;
+    this.deferredConcentration = undefined;
+    let effect: ActiveEffect.Implementation | undefined;
+    try {
+      // @ts-expect-error no dnd5e-types
+      effect = await this.actor.beginConcentrating(this.activity, { "flags.dnd5e.scaling": deferred.scaling });
+      if (!effect) return;
+      // @ts-expect-error no dnd5e-types
+      if (this.chatCard) await this.chatCard.update({ "system.concentration": effect.id });
+      // Templates placed by this use could not be linked while the effect did not exist yet.
+      for (const templateUuid of this.templateUuids) {
+        const templateDocument = await fromUuid(templateUuid) as MeasuredTemplateDocument | undefined;
+        if (templateDocument) await templateDocument.setFlag("dnd5e", "dependentOn", effect.uuid);
+      }
+      if (deferred.end) {
+        // @ts-expect-error no dnd5e-types
+        await this.actor.endConcentration(deferred.end);
+      }
+    } catch (err) {
+      const message = `${this.workflowName} could not begin deferred concentration`;
+      error(message, err);
+      TroubleShooter.recordError(err, message);
+    } finally {
+      // Templates held back for the concentration link get the non-concentration cleanup instead.
+      if (!effect) {
+        for (const templateUuid of this.templateUuids) {
+          const templateDocument = await fromUuid(templateUuid) as MeasuredTemplateDocument | undefined;
+          if (templateDocument) await this.setupTemplateCleanup(templateDocument);
+        }
+      }
+    }
+  }
+
+  async WorkflowState_Abort(): Promise<WorkflowState> {
     this.aborted = true;
+    this.outcome = "aborted";
     if (this.postSummonHookId) Hooks.off("dnd5e.postSummon", this.postSummonHookId);
-    if (!this.keepActivityCard && this.itemCardUuid && fromUuidSync(this.itemCardUuid)) {
-      await this.chatCard.delete();
+    if (this.itemCardUuid && fromUuidSync(this.itemCardUuid)) {
+      await Workflow.deleteAbortedCard(this.chatCard);
       clearUpdatesCache(this.itemCardUuid);
     }
 
@@ -3224,51 +3829,71 @@ export class Workflow {
     return this.WorkflowState_Cleanup;
   }
 
-  async WorkflowState_Cancel(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_Cancel(): Promise<WorkflowState> {
     // cancel will undo the workflow if it exists
     if (configSettings.undoWorkflow) await unTimedExecuteAsGM("undoTillWorkflow", this.uuid, true, true);
     return this.WorkflowState_Abort
   }
 
-  async WorkflowState_RollFinished(context: WorkflowContext = {}): Promise<WorkflowState> {
+  /*
+   * The end of the roll, step by step. The state keeps its name, order, hooks, macro passes and exits; each step is
+   * one job of the old single method, moved unchanged.
+   */
+  async WorkflowState_RollFinished(): Promise<WorkflowState> {
     if (this.aborted) {
       const message = `${this.workflowName} Workflow ${this.id} RollFinished called when aborted`;
       error(message);
       TroubleShooter.recordError(new Error(message), message);
     }
+    // A teleport planned with the workflow: after its effects and damage, before RollComplete
+    if (!this.aborted && !this.damageOnly && MidiTeleportActivity && this.activity instanceof MidiTeleportActivity) await this.activity.autoTeleport(this);
     const specialExpiries = [
       "isDamaged",
       "isHealed",
       "1Reaction",
     ];
     await this.expireTargetEffects(specialExpiries)
-    let chatMessage = this.chatCard;
     let selfTarget = this.token ?? getOrCreateTokenForActor(this.actor);
-    if (this.needsHitTargetsDisplayed && this.targets?.size > 0 && chatMessage && (this.activity.effects?.length || this.otherActivity?.effects?.length)) {
+    await this.finishHitDisplay();
+    await this.finishCardProgress();
+    await this.finishSummonedCreatures(selfTarget);
+    await this.finishTransformations(selfTarget);
+    if (!this.damageOnly) {
+      await this.callMidiHooks("midi-qol.postActiveEffects");
+      // Call onUseMacro if not already called
+      if (configSettings.allowUseMacro && this.workflowOptions.noOnUseMacro !== true) {
+        await this.callMacros(this.item, this.onUseMacros?.getMacros("postActiveEffects"), "OnUse", "postActiveEffects");
+        if (this.ammunition) await this.callMacros(this.ammunition, this.ammunitionOnUseMacros?.getMacros("postActiveEffects"), "OnUse", "postActiveEffects");
+      }
+      if (this.aborted) return this.WorkflowState_Abort;  // TODO This is wrong
+    }
+
+    await this.callMidiHooks("midi-qol.RollComplete");
+    if (this.aborted) return this.WorkflowState_Abort;  // TODO This is wrong
+    if (!this.damageOnly) await this.finishTurnBookkeeping();
+    return this.WorkflowState_Cleanup;
+  }
+
+  /** For an activity with effects, every target shown as affected on the card */
+  async finishHitDisplay() {
+    let chatMessage = this.chatCard;
+    if (this.needsHitTargetsDisplayed && this.targets.documents.length > 0 && chatMessage && (this.activity.effects?.length || this.otherActivity?.effects?.length)) {
       this.hitDisplayData = {};
       // Always show all targets in the display, not just effectTargets (failed saves)
-      const theTargets = this.targets;
-      for (let targetToken of theTargets) {
+      for (const targetDocument of this.targets.documents) {
+        const targetToken: TokenOrDocument = this.targets.placeableOf(targetDocument) ?? targetDocument;
         if (!targetToken.actor) continue;
         const targetTokenUuid = targetToken.actor?.uuid;
         if (!targetTokenUuid) continue;
-        let img: string | null | undefined = targetToken.document?.texture.src ?? targetToken.actor.img;
-        // @ts-expect-error no dnd5e-types
-        if (configSettings.usePlayerPortrait && targetToken.actor.type === "character") {
-          img = targetToken.actor.img ?? targetToken.document?.texture.src;
-        }
-        if (foundry.helpers.media.VideoHelper.hasVideoExtension(img ?? "")) {
-          img = await game.video?.createThumbnail(img ?? "", { width: 100, height: 100 });
-        }
+        const img = await tokenPortrait(targetDocument);
         this.hitDisplayData[targetTokenUuid] = {
           targetClass: targetToken.actor.hasPlayerOwner ? "midi-qol-player-target" : "midi-qol-nonplayer-target",
-          target: targetToken,
+          target: hookTarget(targetToken),
           hitClass: "success",
           acClass: "",
           img: img ?? "",
           gmName: getTokenName(targetToken),
-          playerName: getTokenPlayerName(targetToken) ?? "",
-          uuid: targetToken.document.uuid,
+          uuid: targetDocument.uuid,
           showAC: false,
           isHit: true
         };
@@ -3276,41 +3901,25 @@ export class Workflow {
       await this.displayHits(chatMessage.whisper.length > 0, true);
       chatMessage = this.chatCard
     }
-    let content = chatMessage?.content;
-    let contentChanged = false;
-    // TODO move this to call the omnibus remove buttons function
-    if (content && getRemoveAttackButtons(this.activity) && chatMessage && configSettings.confirmAttackDamage === "none") {
-      // Match rollAttack button from activity-card.hbs
-      let searchRe = /<button[^>]*?data-action="rollAttack"[\s\S]*?<\/button>/;
-      content = content.replace(searchRe, "");
-      contentChanged = true;
-    }
-    // Once the roll is finished and all templates placed, remove the template button
-    if (content) {
-      let isEmanationTargeting = activityHasAutoPlaceTemplate(this.activity) || activityHasEmanationNoTemplate(this.activity);
-      let isAoETargeting = !isEmanationTargeting && activityHasAreaTarget(this.activity);
-      if (isAoETargeting && !isEmanationTargeting && this.placedTemplateCount >= (Number(this.activity?.target?.template?.count) || 1)) {
-        const searchRe = /<button[^>]*?data-action="placeTemplate"[\s\S]*?<\/button>/;
-        content = content.replace(searchRe, "");
-        contentChanged = true;
-      }
-    }
-    if (this.activity.target?.affects.type !== "" || this.targets.size !== 0) {
-      if (configSettings.autoItemEffects === "applyRemove" && content) {
-        const buttonRe = /<button[^>]*?data-action="midiApplyEffects"[\s\S]*?<\/button>/;
-        content = content?.replace(buttonRe, "");
-        contentChanged = true;
-      }
-    }
-    if (contentChanged) {
-      const update: ChatMessage.UpdateData = {
-        "content": content,
-        flags: { "midi-qol": { type: MESSAGE_TYPES.ITEM } },
-      };
-      await this.performThrottledUpdate(chatMessage, update);
-    }
-    // Template cleanup is now handled by setupTemplateCleanup in unSuspend
+  }
 
+  /** Card progress: effects applied (Apply and Remove), all of the activity's templates placed */
+  async finishCardProgress() {
+    {
+      // The attack-button strip that used to live here is now `midiButtonVisibility`, which reaches
+      // the same answer from `message.rolls` and re-reads the policy per viewer.
+      const progress: Record<string, boolean> = {};
+      if (configSettings.autoItemEffects === "applyRemove"
+        && (this.activity.target?.affects.type !== "" || this.targets.count !== 0)) progress.effectsApplied = true;
+      if (!foundry.utils.isEmpty(progress)) {
+        await this.performThrottledUpdate(this.chatCard!,
+          { "system.midi.progress": progress } as ChatMessage.UpdateData);
+      }
+    }
+  }
+
+  /** Summoned creatures depend on the concentration, or on an effect lasting the activity's duration */
+  async finishSummonedCreatures(selfTarget: ReturnType<typeof getOrCreateTokenForActor> | Token.Implementation | undefined) {
     if (configSettings.autoRemoveSummonedCreature && this.summonedCreatures && this.summonedCreatures.length > 0) {
       let origin = getConcentrationEffect(this.actor, this.item);
       if (origin) {
@@ -3340,26 +3949,30 @@ export class Workflow {
               dae: {
                 stackable: "noneName"
               },
+              dnd5e: this.casterEffectSource()
             },
           }
           const inCombat = !!(game.combat?.turns.some(combatant => combatant.token?.id === selfTarget?.id));
           const converted = convertDuration(activityDuration, inCombat);
-          if (converted.type === "none") {
-            // Permanent/special duration - no expiry
-            effectData.duration = {
-              startRound: game.combat?.round,
-              startTurn: game.combat?.turn,
-              startTime: game.time?.worldTime
-            }
+          if (converted.type === "none" || activityDuration?.units === "inst") {
+            // Permanent/special duration - no expiry. dnd5e summons are often instantaneous (e.g. find familiar)
+            // @ts-expect-error fvtt-types v14 duration
+            effectData.start = { time: game.time?.worldTime ?? 0, round: game.combat?.round ?? 0, turn: game.combat?.turn ?? 0 };
           } else if (converted.type === "seconds") {
-            effectData.duration = { seconds: Math.max(converted.seconds ?? 1, 1), startTime: game.time?.worldTime }
+            // @ts-expect-error fvtt-types v14 duration
+            effectData.duration = { value: Math.max(converted.seconds ?? 1, 1), units: "seconds" };
+            // @ts-expect-error fvtt-types v14 duration
+            effectData.start = { time: game.time?.worldTime ?? 0 };
           } else if (converted.type === "turns") {
-            effectData.duration = {
-              rounds: converted.rounds,
-              turns: (converted.rounds ?? 0) > 0 ? converted.turns : Math.max(converted.turns ?? 1, 1),
-              startRound: game.combat?.round,
-              startTurn: game.combat?.turn,
+            if ((converted.rounds ?? 0) > 0) {
+              // @ts-expect-error fvtt-types v14 duration
+              effectData.duration = { value: converted.rounds, units: "rounds" };
+            } else {
+              // @ts-expect-error fvtt-types v14 duration
+              effectData.duration = { value: Math.max(converted.turns ?? 1, 1), units: "turns" };
             }
+            // @ts-expect-error fvtt-types v14 duration
+            effectData.start = { round: game.combat?.round ?? 0, turn: game.combat?.turn ?? 0 };
           }
           const effects = await this.actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
           if (effects.length > 0) {
@@ -3371,7 +3984,10 @@ export class Workflow {
         }
       }
     }
+  }
 
+  /** Transformed actors are recorded on the concentration, or on an effect lasting the activity's duration */
+  async finishTransformations(selfTarget: ReturnType<typeof getOrCreateTokenForActor> | Token.Implementation | undefined) {
     if (configSettings.autoUndoTransformations && this.transformedActorUuids && this.transformedActorUuids.length > 0) {
       let origin = getConcentrationEffect(this.actor, this.item);
       if (origin) {
@@ -3406,70 +4022,64 @@ export class Workflow {
               dae: {
                 stackable: "noneName"
               },
-              "midi-qol": { transformedActorUuids: this.transformedActorUuids }
+              "midi-qol": { transformedActorUuids: this.transformedActorUuids },
+              dnd5e: this.casterEffectSource()
             },
           }
           const inCombat = !!(game.combat?.turns.some(combatant => combatant.token?.id === selfTarget?.id));
           if (activityDuration?.units === "inst") {
             // This seems wrong, however lots of dnd5e summons activities have a duration of inst - e.g. find familiar
-            effectData.duration = {
-              startRound: game.combat?.round,
-              startTurn: game.combat?.turn,
-              startTime: game.time?.worldTime
-            }
+            // @ts-expect-error fvtt-types v14 duration
+            effectData.start = { time: game.time?.worldTime ?? 0, round: game.combat?.round ?? 0, turn: game.combat?.turn ?? 0 };
             //@ts-expect-error CONFIG.DND5E
           } else if (CONFIG.DND5E.permanentTimePeriods[activityDuration.units]) {
-            effectData.duration = {
-              startRound: game.combat?.round,
-              startTurn: game.combat?.turn,
-              startTime: game.time?.worldTime
-            }
+            // @ts-expect-error fvtt-types v14 duration
+            effectData.start = { time: game.time?.worldTime ?? 0, round: game.combat?.round ?? 0, turn: game.combat?.turn ?? 0 };
           } else {
             const convertedDuration = convertDuration(activityDuration, inCombat);
             if (convertedDuration.type === "seconds") {
-              effectData.duration = { seconds: Math.max(convertedDuration.seconds ?? 1, 1), startTime: game.time?.worldTime }
+              // @ts-expect-error fvtt-types v14 duration
+              effectData.duration = { value: Math.max(convertedDuration.seconds ?? 1, 1), units: "seconds" };
+              // @ts-expect-error fvtt-types v14 duration
+              effectData.start = { time: game.time?.worldTime ?? 0 };
             } else if (convertedDuration.type === "turns") {
-              effectData.duration = {
-                rounds: convertedDuration.rounds,
-                turns: (convertedDuration.rounds ?? 0) > 0 ? convertedDuration.turns : Math.max(convertedDuration.turns ?? 1, 1),
-                startRound: game.combat?.round,
-                startTurn: game.combat?.turn,
+              if ((convertedDuration.rounds ?? 0) > 0) {
+                // @ts-expect-error fvtt-types v14 duration
+                effectData.duration = { value: convertedDuration.rounds, units: "rounds" };
+              } else {
+                // @ts-expect-error fvtt-types v14 duration
+                effectData.duration = { value: Math.max(convertedDuration.turns ?? 1, 1), units: "turns" };
               }
+              // @ts-expect-error fvtt-types v14 duration
+              effectData.start = { round: game.combat?.round ?? 0, turn: game.combat?.turn ?? 0 };
             }
           }
           await this.actor.createEmbeddedDocuments("ActiveEffect", [effectData]);
         }
       }
     }
+  }
 
-    await this.callMidiHooks("midi-qol.postActiveEffects");
-    // Call onUseMacro if not already called
-    if (configSettings.allowUseMacro && this.workflowOptions.noOnUseMacro !== true) {
-      await this.callMacros(this.item, this.onUseMacros?.getMacros("postActiveEffects"), "OnUse", "postActiveEffects");
-      if (this.ammunition) await this.callMacros(this.ammunition, this.ammunitionOnUseMacros?.getMacros("postActiveEffects"), "OnUse", "postActiveEffects");
+  /** Dead targets untargeted, and the action marked used on the actor's turn */
+  async finishTurnBookkeeping() {
+    // Delayed to let the updates finish; only this workflow's targets, not ones targeted since for another use.
+    if (autoRemoveTargets !== "none") {
+      const finishedTargets = new TokenDocumentSet(this.targets);
+      setTimeout(() => untargetDeadTokens(finishedTargets), 500);
     }
-    if (this.aborted) return this.WorkflowState_Abort;  // TODO This is wrong
-
-    await this.callMidiHooks("midi-qol.RollComplete");
-    if (this.aborted) return this.WorkflowState_Abort;  // TODO This is wrong
-    if (autoRemoveTargets !== "none") setTimeout(untargetDeadTokens, 500); // delay to let the updates finish
-    const inCombat = this.actor && isInCombat(this.actor);
-    let activeCombatants = game.combats?.combats.map(combat => combat.combatant?.token?.id)
-    const isTurn = activeCombatants?.includes(this.token?.id);
-    if (inCombat && isTurn && this.activity.activation?.type === "action" && !this.AoO) {
+    if (this.inCombat && this.isTurn && this.activity.activation?.type === "action" && !this.AoO) {
       await setActionUsed(this.actor);
     }
-    return this.WorkflowState_Cleanup;
   }
-  async WorkflowState_Default(context: WorkflowContext = {}): Promise<WorkflowState> { return this.WorkflowState_Suspend };
+  async WorkflowState_Default(): Promise<WorkflowState> { return this.WorkflowState_Suspend };
 
   initSaveResults() {
     this.saves = new Set();
     this.criticalSaves = new Set();
     this.fumbleSaves = new Set();
-    this.failedSaves = this.activity.hasAttack ? new Set(this.hitTargets) : new Set(this.targets);
+    this.failedSaves = this.activity.hasAttack ? new TokenDocumentSet(this.hitTargets) : new TokenDocumentSet(this.targets);
     this.advantageSaves = new Set();
-    this.disadvantageSaves = new Set();
+    this.disadvantageSaves = new TokenDocumentSet();
     this.saveDisplayData = [];
     this.saveResults = [];
   };
@@ -3497,7 +4107,8 @@ export class Workflow {
     if (!this.actor) return;
 
     const actType = this.activity.actionType || "none";
-    const firstTarget = this.targets.first();
+    // Sight and nearby foes are measured to the first drawn target
+    const firstTarget = this.targets.tokens[0];
 
     // Determine ability for weapon attacks (mwak/rwak use str/dex)
     let attackAbility: string | undefined;
@@ -3576,19 +4187,6 @@ export class Workflow {
           foundry.utils.setProperty(this.actor, "flags.midi.evaluated.disadvantage.attack.hidden", { value: true, effects: ["Hidden Defender"] });
         }
       }
-
-      if (checkRule("hiddenAdvantage") === "effect") {
-        const hiddenToken = this.token ? hasCondition(this.token.actor as Actor, "hidden") : false;
-        const hiddenTarget = hasCondition(firstTarget.actor as Actor, "hidden");
-        if (hiddenToken) {
-          this.attackRollModifierTracker.advantage.add('Attacker hidden', 'Attacker hidden');
-          foundry.utils.setProperty(this.actor, "flags.midi.evaluated.advantage.attack.hidden", { value: true, effects: ["Hidden Attacker"] });
-        }
-        if (hiddenTarget) {
-          this.attackRollModifierTracker.disadvantage.add('Target hidden', 'Target hidden');
-          foundry.utils.setProperty(this.actor, "flags.midi.evaluated.disadvantage.attack.hidden", { value: true, effects: ["Hidden Defender"] });
-        }
-      }
     }
 
     // Nearby foe gives disadvantage on ranged attacks
@@ -3637,26 +4235,6 @@ export class Workflow {
         }
       }
     }
-    // Frightened condition (2024 rules): disadvantage on attacks against the source of fear
-    if (firstTarget && safeGetGameSetting("dnd5e", "rulesVersion") === "modern" && hasCondition(this.actor, "frightened")) {
-      for (const ef of this.actor.allApplicableEffects()) {
-        if (ef.disabled || !ef.statuses.has("frightened")) continue;
-        const origin = ef.origin ? fromUuidSync(ef.origin) : undefined;
-        let sourceActor: Actor | undefined;
-        if (origin instanceof Actor) {
-          sourceActor = origin;
-        } else if (origin) {
-          let doc: any = origin;
-          while (doc && !(doc instanceof Actor)) doc = doc.parent;
-          if (doc instanceof Actor) sourceActor = doc;
-        }
-        if (sourceActor && firstTarget.actor?.uuid === sourceActor.uuid) {
-          this.attackRollModifierTracker.disadvantage.add('frightened', 'Frightened');
-          break;
-        }
-      }
-    }
-
     await this.checkTargetAdvantage();
   }
 
@@ -3676,16 +4254,18 @@ export class Workflow {
 
     // Check target grants.critical and grants.noCritical
     // For multiple targets: crit if ANY target grants crit, no crit if ALL targets grant noCrit
-    if (this.hitTargets.size >= 1) {
+    if (this.hitTargets.count >= 1) {
       // grants.critical - check if ANY target has this flag
-      for (const target of this.hitTargets) {
+      for (const target of this.hitTargets.documents) {
         if (!target?.actor) continue;
         const targetName = target?.name ?? target?.actor?.name ?? "";
         const grants = target?.actor?.flags[MODULE_ID]?.grants?.critical ?? {};
         const fails = target?.actor?.flags[MODULE_ID]?.fail?.critical ?? {};
 
         // Special case: grants.critical.range
-        if (Number.isNumeric(grants.range) && getDistance(target, this.token, { wallsBlock: false }) <= Number(grants.range)) {
+        // Measured to a drawn target (getDistance gives -1 for one not drawn)
+        const drawn = this.hitTargets.placeableOf(target);
+        if (Number.isNumeric(grants.range) && drawn && getDistance(drawn, this.token, { wallsBlock: false }) <= Number(grants.range)) {
           this.attackRollModifierTracker.critical.force('grants.critical.range', `${getFlagDisplayName('grants.critical.range')} (${targetName})`);
         }
 
@@ -3714,7 +4294,7 @@ export class Workflow {
       let allTargetsGrantNoCrit = true;
       const noCritTargets: string[] = [];
       let noCritFlag = "grants.noCritical.all";
-      for (const target of this.hitTargets) {
+      for (const target of this.hitTargets.documents) {
         if (!target?.actor) {
           allTargetsGrantNoCrit = false;
           break;
@@ -3730,22 +4310,17 @@ export class Workflow {
         if (hasNoCritType) noCritFlag = `grants.noCritical.${attackType}`;
         noCritTargets.push(targetName);
       }
-      if (allTargetsGrantNoCrit && this.hitTargets.size > 0) {
+      if (allTargetsGrantNoCrit && this.hitTargets.count > 0) {
         this.attackRollModifierTracker.critical.suppress(noCritFlag, `${getFlagDisplayName(noCritFlag)} (${noCritTargets.join(", ")})`);
       }
     }
 
-    // Tracker computes isCritical from all sources (grants.critical added above)
-    // Persist to chat card if state changed
-    this.persistFields({ isCritical: this.isCritical });
+    this.#persistAttackTracker();
 
     // Update roll with attribution and regenerate HTML if crit/noCrit flags changed
     const criticalChanged = this.attackRollModifierTracker.critical.isForced !== trackerHadCritical;
     const noCriticalChanged = this.attackRollModifierTracker.critical.isSuppressed !== trackerHadNoCritical;
-    if (this.attackRoll && (criticalChanged || noCriticalChanged)) {
-      addAttribution(this.attackRoll, this.attackAttribution);
-      this.attackRollHTML = await midiRenderAttackRoll(this.attackRoll);
-    }
+    if (this.attackRoll && (criticalChanged || noCriticalChanged)) addAttribution(this.attackRoll, this.attackAttribution);
   }
 
   async checkFlankingAdvantage(): Promise<boolean> {
@@ -3754,74 +4329,87 @@ export class Workflow {
       return false;
     }
     this.flankingAdvantage = false;
+    this.flankingRollBonus = undefined;
+    this.flankingAdvantageKind = undefined;
     if (this.item && !(["mwak", "msak"].includes(this.activity.actionType ?? ""))) return false;
+    // Flanking is between an attacker and one enemy: an attack roll against several targets gets none.
+    // Roll a separate attack per target gives each roll its own.
+    if (this.targets.count !== 1) return false;
 
     const token = (fromUuidSync(this.tokenUuid) as TokenDocument)?.object;
-    const target = this.targets.first();
+    // Flanking is measured on the canvas: none for a target not drawn
+    const target = this.targets.tokens[0];
+    if (!target) return false;
     const flankingMode = checkRule("checkFlanking") as string;
     const isFlankedMode = ["ceflanked", "ceflankedNoconga", "midiFlanked", "midiFlankedNoConga"].includes(flankingMode);
+    const isFlankingMode = ["advonly", "ceonly", "midiFlanking"].includes(flankingMode);
+    if (!isFlankedMode && !isFlankingMode) return false;
     const flankingBonusSetting = configSettings.optionalRules.flankingBonus ?? "advantage";
 
-    // Flanked modes: markFlanking applies the flanked status to the target.
-    if (isFlankedMode) {
-      if (flankingBonusSetting === "advantage") {
-        // Advantage mode: flanked status grants advantage via getFlankedStatusChanges
-        await markFlanking(token, target);
-      }
-      // Numeric mode: flanked status is visual-only; bonus computed in recordFlankingBonuses
+    // A fixed bonus goes into the attack roll as a labelled part (attackRollParts)
+    if (flankingBonusSetting !== "advantage") {
+      const bonus = Number(flankingBonusSetting) || 0;
+      const flanked = isFlankedMode ? await computeFlankedStatus(target!) : !!token && await computeFlankingStatus(token, target!);
+      if (bonus && flanked) this.flankingRollBonus = { bonus, kind: isFlankedMode ? "flanked" : "flanking", label: i18n(isFlankedMode ? "midi-qol.Flanked" : "midi-qol.Flanking") };
       return false;
     }
 
-    // Flanking modes (advonly, ceonly, midiFlanking) from here.
-    if (flankingBonusSetting === "advantage") {
-      // markFlanking checks first target and applies attacker status for ceonly/midiFlanking
-      const needsFlanking = await markFlanking(token, target);
-      if (needsFlanking && this.actor) {
-        foundry.utils.setProperty(this.actor, "flags.midi.evaluated.advantage.attack.flanking", { value: true, effects: ["Flanking"] });
-      }
-      if (flankingMode === "advonly") {
-        this.flankingAdvantage = needsFlanking;
-      }
-      return needsFlanking;
+    // Flanked modes: markFlanking applies the flanked status to the target, which grants advantage
+    if (isFlankedMode) {
+      if (await markFlanking(token, target)) this.flankingAdvantageKind = "flanked";
+      return false;
     }
 
-    // Numeric bonus: nothing to do here — per-target flanking bonus
-    // is computed and recorded on target descriptors in recordFlankingBonuses(),
-    // which runs after target descriptors are captured (in WorkflowState_AttackRollComplete).
-    return false;
+    // Flanking modes (advonly, ceonly, midiFlanking): markFlanking applies the attacker's status (ceonly, midiFlanking)
+    const needsFlanking = await markFlanking(token, target);
+    if (needsFlanking) this.flankingAdvantageKind = "flanking";
+    if (needsFlanking && this.actor) {
+      foundry.utils.setProperty(this.actor, "flags.midi.evaluated.advantage.attack.flanking", { value: true, effects: ["Flanking"] });
+    }
+    if (flankingMode === "advonly") {
+      this.flankingAdvantage = needsFlanking;
+    }
+    return needsFlanking;
   }
 
-  async recordFlankingBonuses(): Promise<void> {
-    // Flanking only applies to melee attacks
-    if (!(["mwak", "msak"].includes(this.activity?.actionType ?? ""))) return;
-    const flankingBonusSetting = configSettings.optionalRules.flankingBonus ?? "advantage";
-    if (flankingBonusSetting === "advantage") return;
-    const bonusValue = Number(flankingBonusSetting) || 0;
-    if (!bonusValue) return;
-    const flankingMode = checkRule("checkFlanking") as string;
-    const isFlankingMode = ["advonly", "ceonly", "midiFlanking"].includes(flankingMode);
-    const isFlankedMode = ["ceflanked", "ceflankedNoconga", "midiFlanked", "midiFlankedNoConga"].includes(flankingMode);
-    if (!isFlankingMode && !isFlankedMode) return;
-    if (isFlankingMode && !this.token) return;
-
-    const allDescriptors = this.targetDescriptors;
-    if (!allDescriptors) return;
-    let modified = false;
-    for (const t of this.targets) {
-      const hasBonus = isFlankingMode
-        ? await computeFlankingStatus(this.token!, t)
-        : await computeFlankedStatus(t);
-      if (hasBonus) {
-        const targetDescriptor = getTargetDescriptor(t.actor?.uuid ?? "", allDescriptors) as CombinedTargetDescriptor | undefined;
-        if (targetDescriptor) {
-          targetDescriptor.flankingBonus = bonusValue;
-          modified = true;
-        }
-      }
+  /**
+   * Parts added to a single-target attack roll before it is rolled, labelled so the roll shows them: a fixed
+   * flanking bonus and the target's granted attack bonus (flags.midi-qol.grants.attack.bonus). With several
+   * targets the granted bonus is added per target when hits are checked, as one roll can't carry it for some only.
+   * `modifiers` are the reasons the attack roll's display shows (attackRollModifiers on the roll's options).
+   */
+  attackRollParts(): { parts: string[], modifiers: AttackModifier[] } {
+    const parts: string[] = [];
+    const modifiers: AttackModifier[] = [];
+    this.grantedAttackBonusInRollUuid = undefined;
+    if (this.flankingAdvantageKind)
+      modifiers.push({ kind: this.flankingAdvantageKind, label: i18n(this.flankingAdvantageKind === "flanked" ? "midi-qol.Flanked" : "midi-qol.Flanking"), advantage: true });
+    if (this.targets.count !== 1) return { parts, modifiers };
+    if (this.flankingRollBonus) {
+      parts.push(`${this.flankingRollBonus.bonus}[${this.flankingRollBonus.label}]`);
+      modifiers.push({ kind: this.flankingRollBonus.kind, label: this.flankingRollBonus.label, value: `+${this.flankingRollBonus.bonus}` });
     }
-    if (modified) {
-      this.targetDescriptors = allDescriptors; // trigger setter to persist
+    const targetActor = this.targets.documents[0]?.actor;
+    const granted = targetActor?.flags?.[MODULE_ID]?.grants?.attack?.bonus;
+    if (!targetActor || !granted) return { parts, modifiers };
+    const formulas = [granted.all, granted[this.activity?.actionType ?? ""]].filter(f => f !== undefined && f !== null && `${f}`.trim() !== "");
+    if (!formulas.length) return { parts, modifiers };
+    const grantsFlagKey = `flags.${MODULE_ID}.grants.attack.bonus`;
+    const label = targetActor.allApplicableEffects()
+      // @ts-expect-error fvtt-types v14 ActiveEffect
+      .filter(e => !e.disabled && e.system.changes?.some(c => c.key.startsWith(grantsFlagKey)))
+      .map(e => e.name)
+      .toArray().join(", ") || targetActor.name;
+    const rollData = targetActor.getRollData();
+    for (const formula of formulas) {
+      // Evaluated against the target's data, as the hit check did
+      const resolved = Roll.replaceFormulaData(`${formula}`, rollData);
+      const numeric = Number.isNumeric(resolved);
+      parts.push(numeric ? `${Number(resolved)}[${label}]` : `(${resolved})[${label}]`);
+      modifiers.push({ kind: "granted", label, value: numeric ? `${Number(resolved) >= 0 ? "+" : ""}${Number(resolved)}` : `+${resolved}` });
     }
+    this.grantedAttackBonusInRollUuid = targetActor.uuid;
+    return { parts, modifiers };
   }
 
   async checkTargetAdvantage() {
@@ -3830,9 +4418,9 @@ export class Workflow {
     // This method only handles special rules that require game logic
 
     if (!this.item) return;
-    if (!this.targets?.size) return;
+    if (!this.targets?.count) return;
     const actionType = this.activity.actionType ?? "";
-    const firstTargetDocument = getTokenDocument(this.targets.first());
+    const firstTargetDocument = this.targets.documents[0];
     const firstTarget = getToken(firstTargetDocument);
     if (!firstTargetDocument || !firstTarget) return;
 
@@ -3850,26 +4438,24 @@ export class Workflow {
     }
   }
 
-  async triggerTargetMacros(triggerList: string[], targets: Set<Token.Implementation> = this.targets, options: { saved?: boolean } = {}) {
+  async triggerTargetMacros(triggerList: string[], targets: TokenDocumentSet | Set<TokenOrDocument> = this.targets, options: { saved?: boolean } = {}) {
     let results: Record<string, unknown[]> = {};
-    for (let target of targets) {
-      results[target.document.uuid] = [];
-      let result = results[target.document.uuid];
+    // Every target, drawn or not: macros are given hookTarget's Token or TokenDocument
+    for (let target of targets instanceof TokenDocumentSet ? targets.documents : targets) {
+      const uuid = getTokenDocument(target)?.uuid ?? "";
+      results[uuid] = [];
+      let result = results[uuid];
       const actorOnUseMacros = target.actor?.flags?.[MODULE_ID]?.onUseMacroParts ?? new OnUseMacros();
       const wasAttacked = !!this.activity.attack;
       const wasHit = (this.activity ? wasAttacked : true) && (this.hitTargets?.has(target) || this.hitTargetsEC?.has(target));
       const wasMissed = (this.activity ? wasAttacked : true) && !this.hitTargets?.has(target) && !this.hitTargetsEC?.has(target);
-      const wasDamaged = this.damageList
-        && (this.hitTargets.has(target) || this.hitTargetsEC.has(target))
-        && (this.damageList.some(dl => dl.targetUuid === target.document.uuid && (dl.hpDamage > 0 || dl.tempDamage > 0)));
-
       if (this.targets.has(target) && triggerList.includes("isTargeted")) {
         if (triggerList.includes("isTargeted")) {
           result.push(...await this.callMacros(this.item,
             actorOnUseMacros?.getMacros("isTargeted"),
             "TargetOnUse",
             "isTargeted",
-            { actor: target.actor, token: target })
+            { actor: target.actor, token: hookTarget(target) })
           );
         }
       }
@@ -3878,7 +4464,7 @@ export class Workflow {
           actorOnUseMacros?.getMacros("isPreAttacked"),
           "TargetOnUse",
           "isPreAttacked",
-          { actor: target.actor, token: target })
+          { actor: target.actor, token: hookTarget(target) })
         );
       }
 
@@ -3887,7 +4473,7 @@ export class Workflow {
           actorOnUseMacros?.getMacros("isAttacked"),
           "TargetOnUse",
           "isAttacked",
-          { actor: target.actor, token: target })
+          { actor: target.actor, token: hookTarget(target) })
         );
       }
       if (triggerList.includes("postTargetEffectApplication")) {
@@ -3895,7 +4481,7 @@ export class Workflow {
           actorOnUseMacros?.getMacros("postTargetEffectApplication"),
           "TargetOnUse",
           "postTargetEffectApplication",
-          { actor: target.actor, token: target })
+          { actor: target.actor, token: hookTarget(target) })
         );
       }
       // 13.0.39 isDamaged Hook is always called inside processDamageRoll, so don't do it here
@@ -3905,7 +4491,7 @@ export class Workflow {
       //    actorOnUseMacros?.getMacros("isDamaged"),
       //    "TargetOnUse",
       //    "isDamaged",
-      //    { actor: target.actor, token: target })
+      //    { actor: target.actor, token: hookTarget(target) })
       //  );
       // }
       if (wasHit && triggerList.includes("isHit")) {
@@ -3913,7 +4499,7 @@ export class Workflow {
           actorOnUseMacros?.getMacros("isHit"),
           "TargetOnUse",
           "isHit",
-          { actor: target.actor, token: target })
+          { actor: target.actor, token: hookTarget(target) })
         );
       }
       if (wasMissed && triggerList.includes("isMissed")) {
@@ -3921,7 +4507,7 @@ export class Workflow {
           actorOnUseMacros?.getMacros("isMissed"),
           "TargetOnUse",
           "isMissed",
-          { actor: target.actor, token: target })
+          { actor: target.actor, token: hookTarget(target) })
         );
       }
       if (triggerList.includes("preTargetDamageApplication")) {
@@ -3929,7 +4515,7 @@ export class Workflow {
           actorOnUseMacros?.getMacros("preTargetDamageApplication"),
           "TargetOnUse",
           "preTargetDamageApplication",
-          { actor: target.actor, token: target })
+          { actor: target.actor, token: hookTarget(target) })
         );
       }
 
@@ -3938,7 +4524,7 @@ export class Workflow {
           actorOnUseMacros?.getMacros("preTargetSave"),
           "TargetOnUse",
           "preTargetSave",
-          { actor: target.actor, token: target })
+          { actor: target.actor, token: hookTarget(target) })
         );
       }
 
@@ -3947,7 +4533,7 @@ export class Workflow {
           actorOnUseMacros?.getMacros("isAboutToSave"),
           "TargetOnUse",
           "isAboutToSave",
-          { actor: target.actor, token: target })
+          { actor: target.actor, token: hookTarget(target) })
         );
       }
 
@@ -3958,7 +4544,7 @@ export class Workflow {
           actorOnUseMacros?.getMacros("isSaveSuccess"),
           "TargetOnUse",
           "isSaveSuccess",
-          { actor: target.actor, token: target })
+          { actor: target.actor, token: hookTarget(target) })
         );
       }
       if (this.activityHasSave && triggerList.includes("isSaveFailure") && (!this.saves.has(target) || options.saved === false)) {
@@ -3966,7 +4552,7 @@ export class Workflow {
           actorOnUseMacros?.getMacros("isSaveFailure"),
           "TargetOnUse",
           "isSaveFailure",
-          { actor: target.actor, token: target })
+          { actor: target.actor, token: hookTarget(target) })
         );
       }
       if (this.activityHasSave && triggerList.includes("isSave")) {
@@ -3974,7 +4560,7 @@ export class Workflow {
           actorOnUseMacros?.getMacros("isSave"),
           "TargetOnUse",
           "isSave",
-          { actor: target.actor, token: target })
+          { actor: target.actor, token: hookTarget(target) })
         );
       }
     }
@@ -3993,18 +4579,19 @@ export class Workflow {
     if (await asyncHooksCall(hookName, this) === false) return false;
     if (this.item && await asyncHooksCall(`${hookName}.${this.item.uuid}`, this) === false) return false;
     if (this.activity && await asyncHooksCall(`${hookName}.${this.activity.uuid}`, this) === false) return false;
-    if (await asyncHooksCall(`${hookName}.${this.id}`, this) === false) return false;
+    if (this.id && await asyncHooksCall(`${hookName}.${this.id}`, this) === false) return false;
     const premadesHook = hookName.replace("midi-qol.", "midi-qol.premades.");
     if (await asyncHooksCall(premadesHook, this) === false) return false;
     if (this.item && await asyncHooksCall(`${premadesHook}.${this.item.uuid}`, this) === false) return false;
     if (this.activity && await asyncHooksCall(`${premadesHook}.${this.activity.uuid}`, this) === false) return false;
-    if (await asyncHooksCall(`${premadesHook}.${this.id}`, this) === false) return false;
+    if (this.id && await asyncHooksCall(`${premadesHook}.${this.id}`, this) === false) return false;
     return true;
   }
 
   async expireTargetEffects(expireList: string[]) {
     if (debugEnabled > 0) warn(`expireTargetEffects | ${expireList}`)
-    for (let target of this.targets) {
+    // Every target, drawn or not: a target on another scene or level still has its effects expired
+    for (let target of this.targets.documents) {
       const expiryReason: string[] = [];
       const appliedEffects = getAppliedEffects(target.actor, { includeEnchantments: true });
       if (!appliedEffects) continue; // nothing to expire
@@ -4020,16 +4607,25 @@ export class Workflow {
           // but any damage application by an item will get picked up in applyTokenDamageMany
           // so this is only relevant if you are not auto applying damage
           && (this.hitTargets.has(target) || this.hitTargetsEC.has(target))
-          && (this.damageList.find(dl => dl.targetUuid === target.document.uuid && dl.hpDamage > 0));
-        const wasHealed = this.damageList && (this.damageList.find(dl => dl.targetUuid === target.document.uuid && dl.hpDamage < 0))
+          && (this.damageList.find(dl => dl.targetUuid === target.uuid && dl.hpDamage > 0));
+        const wasHealed = this.damageList && (this.damageList.find(dl => dl.targetUuid === target.uuid && dl.hpDamage < 0))
         //TODO this is going to grab all the special damage types as well which is no good.
         if (wasAttacked && expireList.includes("isAttacked") && specialDuration.includes("isAttacked")) {
           wasExpired = true;
           expiryReason.push("isAttacked")
         }
+        const actionType = this.activity?.actionType;
+        if (wasAttacked && expireList.includes("isAttacked") && specialDuration.includes(`isAttacked:${actionType}`)) {
+          wasExpired = true;
+          expiryReason.push(`isAttacked:${actionType}`);
+        }
         if (wasHit && this.isCritical && expireList.includes("isAttacked") && specialDuration.includes("isHitCritical")) {
           wasExpired = true;
           expiryReason.push("isHitCritical")
+        }
+        if (wasAttacked && !wasHit && expireList.includes("isAttacked") && specialDuration.includes("isMissed")) {
+          wasExpired = true;
+          expiryReason.push("isMissed")
         }
         // If auto applying damage can do a better test when damage application has been calculdated
         if (wasDamaged && expireList.includes("isDamaged") && !configSettings.autoApplyDamage.toLocaleLowerCase().includes("yes")
@@ -4048,6 +4644,10 @@ export class Workflow {
           expiryReason.push("isHit");
 
         }
+        if (wasHit && expireList.includes("isHit") && specialDuration.includes(`isHit:${actionType}`)) {
+          wasExpired = true;
+          expiryReason.push(`isHit:${actionType}`);
+        }
         if ((target.actor?.uuid !== this.actor.uuid && expireList.includes("1Reaction") && specialDuration.includes("1Reaction"))) {
           wasExpired = true;
           expiryReason.push("1Reaction");
@@ -4060,31 +4660,33 @@ export class Workflow {
           }
         }
         if (!this.activity) return wasExpired;
-        if ((this.activity.save || this.activity.check) && expireList.includes("isSaveSuccess") && specialDuration.includes(`isSaveSuccess`) && this.saves.has(target)) {
-          wasExpired = true;
-          expiryReason.push(`isSaveSuccess`);
+        // the save or check of the workflow's save activity (which may be another activity than the one used)
+        const saveDetails = this.saveActivityDetails;
+        if (!saveDetails) return wasExpired;
+        // only targets whose save was rolled (failedSaves starts as every hit target)
+        const saveRoll = this.targetSaveDetails?.[target.uuid]?.saveRoll;
+        if (!saveRoll) return wasExpired;
+        const saved = this.saves.has(target);
+        const failed = !saved && this.failedSaves.has(target);
+        // the ability the target chose, else the save's only one; with several and no choice recorded only the bare keys
+        const offered: string[] = typeof saveDetails.ability === "string" ? [saveDetails.ability] : [...(saveDetails.ability ?? [])];
+        // @ts-expect-error midiChosenId is a custom roll option
+        const chosen: string | undefined = saveRoll.options?.midiChosenId;
+        const abilities = chosen && offered.includes(chosen) ? [chosen] : offered.length === 1 ? offered : [];
+        for (const suffix of ["", ...abilities.map(abl => `.${abl}`)]) {
+          if (expireList.includes("isSaveSuccess") && saved && specialDuration.includes(`isSaveSuccess${suffix}`)) {
+            wasExpired = true;
+            expiryReason.push(`isSaveSuccess${suffix}`);
+          }
+          if (expireList.includes("isSaveFailure") && failed && specialDuration.includes(`isSaveFailure${suffix}`)) {
+            wasExpired = true;
+            expiryReason.push(`isSaveFailure${suffix}`);
+          }
+          if (expireList.includes("isSave") && specialDuration.includes(`isSave${suffix}`)) {
+            wasExpired = true;
+            expiryReason.push(`isSave${suffix}`);
+          }
         }
-        if ((this.activity.save || this.activity.check) && expireList.includes("isSaveFailure") && specialDuration.includes(`isSaveFailure`) && !this.saves.has(target)) {
-          wasExpired = true;
-          expiryReason.push(`isSaveFailure`);
-        }
-        if ((this.activity.save || this.activity.check) && expireList.includes("isSave") && specialDuration.includes(`isSave`)) {
-          wasExpired = true;
-          expiryReason.push(`isSave`);
-        }
-        const abl = this.activity.save?.ability ?? this.activity.check?.ability;
-        if ((this.activity.save || this.activity.check) && expireList.includes(`isSaveSuccess`) && specialDuration.includes(`isSaveSuccess.${abl}`) && this.saves.has(target)) {
-          wasExpired = true;
-          expiryReason.push(`isSaveSuccess.${abl}`);
-        };
-        if ((this.activity.save || this.activity.check) && expireList.includes(`isSaveFailure`) && specialDuration.includes(`isSaveFailure.${abl}`) && !this.saves.has(target)) {
-          wasExpired = true;
-          expiryReason.push(`isSaveFailure.${abl}`);
-        };
-        if ((this.activity.save || this.activity.check) && expireList.includes(`isSave`) && specialDuration.includes(`isSave.${abl}`)) {
-          wasExpired = true;
-          expiryReason.push(`isSave.${abl}`);
-        };
         return wasExpired;
       }).map(ef => ef.uuid);
       if (expiredEffects.length > 0) {
@@ -4105,10 +4707,10 @@ export class Workflow {
     return `${actorMacros},${itemMacros}`;
   }
 
-  async rollBonusDamage(damageBonusMacro: string) {
-    const extraDamages = (await this.callMacros(this.item, damageBonusMacro, "DamageBonus", "DamageBonus"))?.deepFlatten();
-    if (!extraDamages) return;
-    let rolls: Roll[] = [];
+  async rollBonusDamage(damageBonusMacro: string, item: Item.Implementation | undefined = this.item): Promise<Roll[]> {
+    const extraDamages = (await this.callMacros(item, damageBonusMacro, "DamageBonus", "DamageBonus"))?.deepFlatten();
+    if (!extraDamages) return [];
+    const rolls: Roll[] = [];
     try {
       for (let damageEntry of extraDamages) {
         if (!damageEntry || typeof damageEntry !== "object") continue;
@@ -4119,7 +4721,6 @@ export class Workflow {
           if (!damageRoll) continue;
           damageType = getDamageType(damageType);
           if (!damageType && flavor && getDamageType(flavor)) damageType = getDamageType(flavor);
-          // @ts-expect-error no dnd5e-types
           if (!damageType && this.damageRolls) damageType = this.damageRolls[0].options?.type;
           if (!damageType) damageType = MidiQOL.MQdefaultDamageType;
           const rollOptions = {
@@ -4127,21 +4728,38 @@ export class Workflow {
             flavor: flavor ?? damageType
           }
           // @ts-expect-error no dnd5e-types
-          rolls.push(await new CONFIG.Dice.DamageRoll(damageRoll, this.item.getRollData() ?? this.actor.getRollData(), rollOptions).evaluate());
+          rolls.push(await new CONFIG.Dice.DamageRoll(damageRoll, item?.getRollData() ?? this.actor.getRollData(), rollOptions).evaluate());
         }
       }
-      await this.setBonusDamageRolls(rolls);
     } catch (err) {
       const message = `midi-qol | rollBonusDamage | error in evaluating${extraDamages} in bonus damage`
       TroubleShooter.recordError(err, message);
       console.warn(message, err);
-      this.bonusDamageRolls = undefined;
-      this.rawBonusDamageDetail = [];
+      return [];
     }
-    if (this.bonusDamageRolls && this.workflowOptions?.damageRollDSN !== false) {
-      await displayDSNForRoll(this.bonusDamageRolls, "damageRoll");
+    return rolls;
+  }
+
+  // Run item-level + ammunition-level DamageBonus macros and store the combined rolls.
+  // Ammunition macros run with the ammo item as their context so `rolledItem`/`macroItem`
+  // resolve to the arrow rather than the bow.
+  async rollAllBonusDamage(): Promise<void> {
+    const rolls: (Roll | undefined)[] = [];
+    const itemMacros = this.getDamageBonusMacros();
+    if (itemMacros) rolls.push(...await this.rollBonusDamage(itemMacros));
+    if (this.ammunition) {
+      const ammoMacros = this.ammunitionOnUseMacros?.getMacros("damageBonus");
+      if (ammoMacros?.length) rolls.push(...await this.rollBonusDamage(ammoMacros, this.ammunition));
     }
-    return;
+    // Filter undefined — a macro that throws bubbles up as `undefined` from callMacros' catch
+    // wrapper and a future macro author may return undefined rolls directly.
+    const validRolls = rolls.filter((r): r is Roll => r instanceof Roll);
+    if (!validRolls.length) return;
+    setDamageRollMinTerms(validRolls);
+    await this.setBonusDamageRolls(validRolls);
+    if (this.workflowOptions?.damageRollDSN !== false) {
+      await displayDSNForRoll(this.bonusDamageRolls!, "damageRoll", undefined, undefined, this.actor);
+    }
   }
 
   // TODO: Kill?
@@ -4185,47 +4803,50 @@ export class Workflow {
     let superSaverUuids: string[] = [];
     let semiSuperSavers: TokenDocument[] = [];
     let semiSuperSaverUuids: string[] = [];
-    for (let target of this.targets) {
-      targets.push(target.document);
-      targetUuids.push(target.document.uuid);
+    // Every member, drawn or not
+    for (let target of this.targets.documents) {
+      targets.push(target);
+      targetUuids.push(target.uuid);
     }
-    for (let save of this.saves) {
-      saves.push(save.document);
-      saveUuids.push(save.document.uuid);
+    for (let save of this.saves.documents) {
+      saves.push(save);
+      saveUuids.push(save.uuid);
     }
-    for (let hit of this.hitTargets) {
-      hitTargets.push(hit.document);
-      hitTargetUuids.push(hit.document.uuid);
+    for (let hit of this.hitTargets.documents) {
+      hitTargets.push(hit);
+      hitTargetUuids.push(hit.uuid);
     }
-    for (let hit of this.hitTargetsEC) {
-      hitTargetsEC.push(hit.document);
-      hitTargetUuidsEC.push(hit.document.uuid);
+    for (let hit of this.hitTargetsEC.documents) {
+      hitTargetsEC.push(hit);
+      hitTargetUuidsEC.push(hit.uuid);
     }
 
-    for (let failed of this.failedSaves) {
-      failedSaves.push(failed.document);
-      failedSaveUuids.push(failed.document.uuid);
+    for (let failed of this.failedSaves.documents) {
+      failedSaves.push(failed);
+      failedSaveUuids.push(failed.uuid);
     }
-    for (let critical of this.criticalSaves) {
-      criticalSaves.push(critical.document);
-      criticalSaveUuids.push(critical.document.uuid);
+    for (let critical of this.criticalSaves.documents) {
+      criticalSaves.push(critical);
+      criticalSaveUuids.push(critical.uuid);
     }
-    for (let fumble of this.fumbleSaves) {
-      fumbleSaves.push(fumble.document);
-      fumbleSaveUuids.push(fumble.document.uuid);
+    for (let fumble of this.fumbleSaves.documents) {
+      fumbleSaves.push(fumble);
+      fumbleSaveUuids.push(fumble.uuid);
     }
-    for (let save of this.superSavers) {
-      superSavers.push(save.document);
-      superSaverUuids.push(save.document.uuid);
+    for (let save of this.superSavers.documents) {
+      superSavers.push(save);
+      superSaverUuids.push(save.uuid);
     };
-    for (let save of this.semiSuperSavers) {
-      semiSuperSavers.push(save.document);
-      semiSuperSaverUuids.push(save.document.uuid);
+    for (let save of this.semiSuperSavers.documents) {
+      semiSuperSavers.push(save);
+      semiSuperSaverUuids.push(save.uuid);
     };
     const itemData = (item?.toObject(false) ?? {}) as Item.Source & { uuid?: string };
     itemData.uuid = item?.uuid; // provide the uuid so the actual item can be recovered
+    // Macros reading itemData.actionType get the action type of the activity being used.
+    const activity = this.activity;
     //@ts-expect-error no dnd5e-types
-    Object.defineProperty(itemData, "actionType", { get() { return item?.actionType } });
+    Object.defineProperty(itemData, "actionType", { get() { return (activity ?? item?.system.activities?.contents[0])?.actionType } });
     return {
       actor: this.actor,
       actorData: this.actor.toObject(false),
@@ -4235,7 +4856,6 @@ export class Workflow {
       attackRoll: this.attackRoll,
       attackTotal: this.attackTotal,
       bonusDamageDetail: this.rawBonusDamageDetail,
-      bonusDamageHTML: this.bonusDamageHTML,
       bonusDamageRolls: this.bonusDamageRolls,
       bonusDamageRoll: this.bonusDamageRoll,
       bonusDamageTotal: this.bonusDamageTotal,
@@ -4265,7 +4885,6 @@ export class Workflow {
       itemData,
       itemUuid: item?.uuid,
       otherDamageDetail: this.rawOtherDamageDetail,
-      otherDamageList: this.otherDamageList,
       otherDamageTotal: this.otherDamageTotal,
       rollData: (item ?? this.actor)?.getRollData() ?? {},
       rollOptions: this.rollOptions,
@@ -4386,14 +5005,13 @@ export class Workflow {
    */
   private resolveFunctionMacro(name: string, context: CallMacroContext): ResolvedMacro {
     const func = name.replace("function.", "").trim();
-return {
+    return {
       item: context.macroItem,
       macroActivity: context.macroActivity,
-      macroData: {
-        name: "function call",
-        type: "script",
-        command: `return await ${func}({ speaker, actor, token, character, item, rolledItem, macroItem, args, scope, workflow })`
-      }
+      macro: DAE.createSyntheticMacro(
+        `return await ${func}({ speaker, actor, token, character, item, rolledItem, macroItem, args, scope, workflow })`,
+        "function call"
+      )
     };
   }
 
@@ -4416,12 +5034,13 @@ return {
 
     // DAE itemData fallback - look for item data stored in effect flags
     if (actorToUse instanceof Actor && uuid) {
-      const itemData = resolveDAEItemData(actorToUse, uuid);
-      if (itemData) {
+      const itemData = DAE.getActorItemData(actorToUse, uuid) as Item.InitializedData | undefined;
+      const command = itemData ? DAE.getItemMacroCommand(itemData) : undefined;
+      if (itemData && command) {
         return {
           item: itemData,
           macroActivity: context.macroActivity,
-          macroData: itemData?.flags?.dae?.macro ?? itemData?.flags?.itemacro?.macro,
+          macro: DAE.createSyntheticMacro(command),
           // @ts-expect-error uuid may not be on data
           sourceItemUuid: itemData?.uuid
         };
@@ -4465,28 +5084,16 @@ return {
    */
   private async resolveWorldMacro(name: string, context: CallMacroContext): Promise<ResolvedMacro | undefined> {
     const macroName = name.startsWith("Macro.") ? name.slice(6) : name;
-    let macro = game.macros?.getName(macroName);
+    const macro = await DAE.resolveWorldMacro(macroName);
 
-    if (!macro) {
-      const doc = await fromUuid(macroName);
-      if (doc instanceof Item) {
-        return {
-          item: doc,
-          macroActivity: context.macroActivity,
-          macroData: doc.flags?.dae?.macro ?? doc.flags?.itemacro?.macro,
-          sourceItemUuid: doc.uuid
-        };
-      } else if (doc instanceof Macro) {
-        macro = doc as unknown as typeof macro;
-      }
-    }
+    if (!macro) return undefined;
 
-    if (macro?.type === "chat") {
+    if (macro.type === "chat") {
       macro.execute();
-      return undefined; // Chat macros handle themselves
+      return undefined;
     }
 
-    return macro ? { item: context.macroItem, macroActivity: context.macroActivity, macro } : undefined;
+    return { item: context.macroItem, macroActivity: context.macroActivity, macro };
   }
 
   /**
@@ -4535,13 +5142,7 @@ return {
       return undefined;
     }
 
-    const data = foundry.utils.mergeObject(
-      { name: "midi generated macro", type: "script", command: "" },
-      macroData
-    );
-    data.ownership = { default: CONST.DOCUMENT_OWNERSHIP_LEVELS.OWNER };
-    data.author = game.user?.id;
-    return new CONFIG.Macro.documentClass(data);
+    return DAE.createSyntheticMacro(macroData.command, macroData.name ?? "midi generated macro");
   }
 
   /**
@@ -4603,47 +5204,30 @@ return {
   async removeEffectsButton() {
     if (!this.itemCardUuid) return;
     const chatMessage = this.chatCard;
-    if (chatMessage?.content) {
-      const buttonRe = /<button[^>]*?data-action="midiApplyEffects"[\s\S]*?<\/button>/;
-      let content = chatMessage.content.replace(buttonRe, "");
-      await this.performThrottledUpdate(chatMessage, { content });
-    }
+      return await this.performThrottledUpdate(chatMessage!,
+        { "system.midi.progress": { effectsApplied: true } } as ChatMessage.UpdateData);
   }
   async displayUtilityRolls() {
     const chatMessage = this.chatCard;
-    let newFlags = {};
-    let content;
-    if (chatMessage?.content) { // display the attack roll
+    let section: MidiCardSection | undefined;
+    if (chatMessage) { // display the utility roll
       const utilityRoll = this.utilityRoll; // will concat as needed
-      //let searchRe = /<div class="midi-qol-attack-roll">.*?<\/div>/;
-      let searchRe = /<div[^>]*?class="midi-qol-utility-roll[^"]*"[\s\S]*?<div class="end-midi-qol-utility-roll">/
       // Display roll name if available, otherwise default to utility activity type title
       const rollString = this.activity?.roll?.name || i18n("DND5E.UTILITY.Title");
-      let replaceString = `<div class="midi-qol-utility-roll"><div class="midi-roll-label">${rollString}</div>${this.utilityRollHTML}<div class="end-midi-qol-utility-roll">`
-      content = chatMessage.content.replace(searchRe, replaceString);
+      section = { label: rollString, rollType: "utility" };
       if (debugEnabled > 0) warn("displayUtilityRoll |", this.utilityRoll)
-      newFlags = {
-        "midi-qol":
-        {
-          type: MESSAGE_TYPES.OTHER,
-          // roll: utilityRoll?.roll,
-        }
-      }
     }
-    // chatRolls, not just this roll: message.rolls is where the rolls are stored now, so a partial
-    // array here would drop the ones already made.
-    await this.performThrottledUpdate(chatMessage, { content, flags: newFlags, rolls: this.chatRolls });
+    this.#persistRolls();
+    await this.performThrottledUpdate(chatMessage, this.#sectionUpdate("utility", section, {}));
   }
 
-  async displayAttackRoll(displayOptions: { GMOnlyAttackRoll?: boolean } = {}) {
+  // `_displayOptions.GMOnlyAttackRoll` is no longer used: the card's hit result is worked out from its records
+  async displayAttackRoll(_displayOptions: { GMOnlyAttackRoll?: boolean } = {}) {
     // @ts-expect-error CONFIG.Dice.D20Roll not typed
     const ADV_MODE: { DISADVANTAGE: number, NORMAL: number, ADVANTAGE: number } = CONFIG.Dice.D20Roll.ADV_MODE;
     const chatMessage = this.chatCard;
-    let newFlags = {};
-    let content;
-    if (chatMessage?.content) { // display the attack roll
-      content = chatMessage.content;
-      let searchRe = /<div[^>]*?class="midi-qol-attack-roll[^"]*"[\s\S]*?<div class="end-midi-qol-attack-roll">/
+    let section: MidiCardSection | undefined;
+    if (chatMessage) { // display the attack roll
       // Determine attack label based on attackRollModifierTracker.advantageMode
       let attackString: string;
       const mode = this.attackRoll?.options?.advantageMode ?? this.attackRollModifierTracker.advantageMode ?? ADV_MODE.NORMAL;
@@ -4657,143 +5241,110 @@ return {
       if (configSettings.addFakeDice) // addFakeDice => roll 2d20 always - don't show advantage/disadvantage or players will know the 2nd d20 is fake
         attackString = i18n("DND5E.Attack");
 
-      // Add attribution info icon if there's any attribution data
-      let attributionIcon = "";
-      if (Object.keys(this.attackAttribution).length > 0) {
-        const tooltipContent = await this.renderAttributionTooltip();
-        if (tooltipContent) {
-          attributionIcon = ` <span class="midi-attribution-info" data-tooltip-html="${foundry.utils.escapeHTML(tooltipContent)}" data-tooltip-direction="DOWN"><i class="fas fa-info-circle"></i></span>`;
-        }
-      }
+      // Named, not stored: the attack roll is already in `message.rolls`, and so are its attributions,
+      // so the card renders both from there rather than carrying a second copy.
+      section = { label: attackString, rollType: "attack" };
 
-      let replaceString = `<div class="midi-qol-attack-roll midi-qol-section-filled"><div class="midi-roll-label">${attackString}${attributionIcon}</div>${this.attackRollHTML}<div class="end-midi-qol-attack-roll">`
-
-      content = content.replace(searchRe, replaceString);
-      if (this.attackRollCount > 1) {
-        // Match rollAttack button - handles both multi mode (no span) and single mode (with span)
-        // Also handles optional style attribute with flexible spacing
-        const attackButtonRe = /(<button[^>]*data-action="rollAttack"[^>]*>)(?:<span>)?(\[\d*\] )*([^<]+)(?:<\/span>)?(<\/button>)/;
-        content = content.replace(attackButtonRe, `$1<span>[${this.attackRollCount}] $3</span>$4`);
-        const confirmButtonRe = /<button class="midi-qol-confirm-damage-roll-complete" data-action="confirm-damage-roll-complete">(\[[\d ]*\])*([^<]+)<\/button>/;
-        content = content.replace(confirmButtonRe, `<button class="midi-qol-confirm-damage-roll-complete" data-action="confirm-damage-roll-complete">[${this.attackRollCount} ${this.damageRollCount + 1}] $2</button>`);
-      }
-
-      if (this.attackRoll?.dice.length) {
-        const d: any = this.attackRoll.dice[0]; // should be a dice term but DiceTerm.options not defined
-        const isD20 = (d.faces === 20);
-        if (isD20) {
-          this.d20AttackRoll = d.total;
-        }
-      }
+      // Success/failure/critical/fumble classes are applied at render time
+      // by ChatMessageMidi._applyAttackRollHighlight, not baked into content.
+      const d20 = this.attackRoll ? Workflow.d20Of(this.attackRoll) : undefined;
+      if (d20 !== undefined) this.d20AttackRoll = d20;
       if (debugEnabled > 0) warn("displayAttackRoll |", this.attackRoll)
-      newFlags = {
-        "midi-qol": {
-          GMOnlyAttackRoll: displayOptions.GMOnlyAttackRoll ?? false,
-          //@ts-expect-error no dnd5e types
-          isHit: configSettings.autoCheckHit === "none" ? (this.attackRoll?.isSuccess ?? false) : this.hitTargets.size > 0,
-          isHitEC: this.hitTargetsEC.size > 0,
-          // roll: this.attackRoll,
-          type: MESSAGE_TYPES.ATTACK,
-          d20AttackRoll: this.d20AttackRoll,
-          hitTargetUuids: Array.from(this.hitTargets).map(t => t.document.uuid),
-          hitECTargetUuids: Array.from(this.hitTargetsEC).map(t => t.document.uuid),
-          isCritical: this.isCritical,
-          isFumble: this.isFumble,
-          targets: Array.from(this.targets).map(t => ({ uuid: t.document.uuid, name: t.document.name })),
-        },
-
-      }
     }
-    await this.performThrottledUpdate(chatMessage, { content, flags: newFlags, rolls: this.chatRolls });
+    // The damage button is already showing, so it takes its label with the roll that decides a critical.
+    this.#persistRolls();
+    await this.performThrottledUpdate(chatMessage, this.#sectionUpdate("attack", section,
+      { "system.midi.dmgBtnText": this.#damageButtonText() }));
+  }
+
+  #damageButtonText(): string {
+    let text = (this.rollOptions.isCritical || this.isCritical) ? i18n("DND5E.Critical")
+      : i18n(this.activity.actionType === "heal" ? "DND5E.HEAL.HealingButton" : "DND5E.Damage");
+    if (this.rollOptions.fastForwardDamage && configSettings.showFastForward) text += ` ${i18n("midi-qol.fastForward")}`;
+    return text;
+  }
+
+  /** The card update for one display method's section, with `extras` */
+  #sectionUpdate(
+    name: SectionName,
+    section: MidiCardSection | undefined,
+    extras: Record<string, unknown> = {}
+  ): ChatMessage.UpdateData {
+    return this.#sectionsUpdate(section ? { [name]: section } : {}, extras);
+  }
+
+  /** The saves section's own data: its rows are drawn from the records and the save rolls (UsageCardMessage) */
+  #saveSectionData(templateData: Record<string, any>): Record<string, unknown> {
+    const { saves, ...data } = templateData;
+    return { ...data, dc: this.saveActivity?.save?.dc.value ?? this.saveActivity?.check?.dc.value ?? null };
+  }
+
+  /** As `#sectionUpdate`, for a display method that fills more than one slot in a single update. */
+  #sectionsUpdate(
+    sections: Partial<Record<SectionName, MidiCardSection>>,
+    extras: Record<string, unknown> = {}
+  ): ChatMessage.UpdateData {
+    const updates: Record<string, unknown> = { ...extras };
+    for (const [name, section] of Object.entries(sections)) updates[`system.midi.sections.${name}`] = this.#storedSection(name, section);
+    return this.#withRollMessageFlags(updates) as ChatMessage.UpdateData;
+  }
+
+  /**
+   * A section as its own card stores it: a roll section's label and a section's usual template are worked out when it is
+   * drawn (UsageCardMessage). A card it doesn't own (a damage-only workflow's) keeps them.
+   */
+  #storedSection(name: string, section: MidiCardSection | undefined): MidiCardSection | undefined {
+    if (!section || !this.ownsCard) return section;
+    const { label, template, ...rest } = section;
+    const stored: MidiCardSection = rest;
+    if (template && template !== SECTION_TEMPLATES[name]) stored.template = template;
+    if (!section.rollType && label) stored.label = label;
+    // An empty section is not stored at all: the hits section (rows from the records) is kept by its empty label
+    const data = (stored as { data?: object }).data;
+    if (!Object.keys(stored).some(key => key !== "data" || (data && !foundry.utils.isEmpty(data)))) stored.label = label ?? "";
+    return stored;
   }
 
   async displayDamageRolls() {
     const chatMessage = this.chatCard;
-    if (!chatMessage?.content) {
+    if (!chatMessage) {
       const message = `midi-qol | displayDamageRolls | no chat message to display damage rolls`;
       console.warn(message);
       TroubleShooter.recordError(new Error(message), message);
       return;
     }
-    let content = chatMessage.content;
-    if ((getRemoveDamageButtons(this.activity) && configSettings.confirmAttackDamage === "none") || this.workflowType === "TrapWorkflow") {
-      // Match rollDamage button from activity-card.hbs
-      const damageRe = /<button[^>]*?data-action="rollDamage"[\s\S]*?<\/button>/
-      const formulaRe = /<button[^>]*?data-action="rollFormula"[\s\S]*?<\/button>/
-      content = content?.replace(damageRe, "<div></div>")
-      content = content?.replace(formulaRe, "")
+    const sections: Partial<Record<SectionName, MidiCardSection>> = {};
+    if (this.damageRolls?.length) {
+      sections.damage = { label: this.damageFlavor ?? "", rollType: "defaultDamage" };
+      if (this.otherDamageRolls?.length) sections.otherDamage = { label: this.otherDamageFlavor ?? "", rollType: "otherDamage" };
+    } else if (this.otherDamageRolls?.length) {
+      sections[this.useOther ? "otherDamage" : "damage"] = { label: this.otherDamageFlavor ?? "", rollType: "otherDamage" };
     }
-    let newFlags = {};
-    if (chatMessage) {
-      if (this.damageRollHTML) {
-        if (!this.useOther) {
-          const searchRe = /<div[^>]*?class="midi-qol-damage-roll[^"]*"[\s\S]*?<div class="end-midi-qol-damage-roll">/;
-          const replaceString = `<div class="midi-qol-damage-roll midi-qol-section-filled"><div class="midi-roll-label">${this.damageFlavor}</div>${this.damageRollHTML || ""}<div class="end-midi-qol-damage-roll">`
-          content = content.replace(searchRe, replaceString);
-        } else {
-          const otherSearchRe = /<div[^>]*?class="midi-qol-other-damage-roll[^"]*"[\s\S]*?<div class="end-midi-qol-other-damage-roll">/;
-          const otherReplaceString = `<div class="midi-qol-other-damage-roll midi-qol-section-filled"><div class="midi-roll-label">${this.damageFlavor}</div>${this.damageRollHTML || ""}<div class="end-midi-qol-other-damage-roll">`
-          content = content.replace(otherSearchRe, otherReplaceString);
-        }
-        if (this.otherDamageRollHTML) {
-          const otherSearchRe = /<div[^>]*?class="midi-qol-other-damage-roll[^"]*"[\s\S]*?<div class="end-midi-qol-other-damage-roll">/;
-          const otherReplaceString = `<div class="midi-qol-other-damage-roll midi-qol-section-filled"><div class="midi-roll-label">${this.otherDamageFlavor}${this.otherDamageRollHTML || ""}</div><div class="end-midi-qol-other-damage-roll">`
-          content = content.replace(otherSearchRe, otherReplaceString);
-        }
-        if (this.bonusDamageRolls) {
-          const bonusSearchRe = /<div[^>]*?class="midi-qol-bonus-damage-roll[^"]*"[\s\S]*?<div class="end-midi-qol-bonus-damage-roll">/;
-          const bonusReplaceString = `<div class="midi-qol-bonus-damage-roll midi-qol-section-filled"><div class="midi-roll-label">${this.bonusDamageFlavor}${this.bonusDamageHTML || ""}</div><div class="end-midi-qol-bonus-damage-roll">`
-          content = content.replace(bonusSearchRe, bonusReplaceString);
-        }
-      } else {
-        if (this.otherDamageRollHTML) {
-          const otherSearchRe = /<div[^>]*?class="midi-qol-damage-roll[^"]*"[\s\S]*?<div class="end-midi-qol-damage-roll">/;
-          const otherReplaceString = `<div class="midi-qol-damage-roll midi-qol-section-filled"><div class="midi-roll-label">${this.otherDamageFlavor}</div>${this.otherDamageRollHTML || ""}<div class="end-midi-qol-damage-roll">`
-          content = content.replace(otherSearchRe, otherReplaceString);
-        }
-        if (this.bonusDamageRolls) {
-          const bonusSearchRe = /<div[^>]*?class="midi-qol-bonus-damage-roll[^"]*"[\s\S]*?<div class="end-midi-qol-bonus-damage-roll">/;
-          const bonusReplaceString = `<div class="midi-qol-bonus-damage-roll midi-qol-section-filled"><div class="midi-roll-label">${this.bonusDamageFlavor}</div>${this.bonusDamageHTML || ""}<div class="end-midi-qol-bonus-damage-roll">`
-          content = content.replace(bonusSearchRe, bonusReplaceString);
-        }
-      }
+    if (this.bonusDamageRolls) sections.bonusDamage = { label: this.bonusDamageFlavor ?? "", rollType: "bonusDamage" };
 
-      const midiAttackTargets = Array.from(this.targets).map(token => {
-        const t = getTokenDocument(token);
-        return {
-          name: t?.name,
-          img: t?.actor?.img,
-          uuid: t?.actor?.uuid,
-          //@ts-expect-error no dnd5e-types
-          ac: t?.actor?.system?.attributes.ac.value,
-        }
-      });
-      newFlags = foundry.utils.mergeObject(newFlags, {
-        "midi-qol": {
-          type: MESSAGE_TYPES.DAMAGE,
-          damageDetail: this.useOther ? undefined : damageDetailToObject(this.rawDamageDetail),
-          otherDamageDetail: this.useOther ? damageDetailToObject(this.rawDamageDetail) : damageDetailToObject(this.rawOtherDamageDetail),
-          bonusDamageDetail: damageDetailToObject(this.rawBonusDamageDetail),
-          sourceActorUuid: this.actor.uuid,
-          damageTotal: this.useOther ? undefined : this.damageTotal,
-          [WorkflowDataFlags.otherDamageTotal]: this.useOther ? this.damageTotal : this.otherDamageTotal,
-          [WorkflowDataFlags.bonusDamageTotal]: this.bonusDamageTotal,
-        }
-      }, { overwrite: true, inplace: false });
+    if (!this.ownsCard) {
+      // Another card (a damage-only workflow's macro gave it): its rolls stay and these are added. Its targets, counts and
+      // flags are its own workflow's.
+      const ownRoll = (roll: Roll) => foundry.utils.getProperty(roll, `options.${MODULE_ID}.addedBy`) === this.id;
+      const existing = (chatMessage.rolls as Roll[]).filter(roll => !ownRoll(roll));
+      const added = this.chatRolls.map(roll => { foundry.utils.setProperty(roll, `options.${MODULE_ID}.addedBy`, this.id); return roll; });
+      return await this.performThrottledUpdate(chatMessage, this.#sectionsUpdate(sections, { rolls: [...existing, ...added] }));
     }
 
-    if (this.damageRollCount > 1) {
-      // Match rollDamage button - handles both multi mode (no span) and single mode (with span)
-      const damageButtonRe = /(<button[^>]*data-action="rollDamage"[^>]*>)(?:<span>)?(\[\d*\] )*([^<]+)(?:<\/span>)?(<\/button>)/;
-      content = content.replace(damageButtonRe, `$1<span>[${this.damageRollCount}] $3</span>$4`);
-      const confirmButtonRe = /<button class="midi-qol-confirm-damage-roll-complete" data-action="confirm-damage-roll-complete">(\[[\d ]*\])*([^<]+)<\/button>/;
-      content = content.replace(confirmButtonRe, `<button class="midi-qol-confirm-damage-roll-complete" data-action="confirm-damage-roll-complete">[${this.attackRollCount} ${Math.max(this.damageRollCount, 1)}] $2</button>`);
-    } else {
-      // Match rollDamage button - handles both multi mode (no span) and single mode (with span)
-      const damageButtonRe = /(<button[^>]*data-action="rollDamage"[^>]*>)(?:<span>)?(\[\d*\] )*([^<]+)(?:<\/span>)?(<\/button>)/;
-      content = content.replace(damageButtonRe, `$1<span>$3</span>$4`);
-    }
-    return await this.performThrottledUpdate(chatMessage, { "content": content, flags: newFlags, rolls: this.chatRolls }, false);
+    this.#persistRolls();
+    return await this.performThrottledUpdate(chatMessage,
+      this.#sectionsUpdate(sections, {
+        // Refreshed as well as at displayHits: reactions resolve in between (Uncanny Dodge after the hit)
+        ...this.#targetsUpdate()
+      }));
+  }
+
+  /** Attack per target: one target's hit or miss, from its own use, on this use's card */
+  async addSplitAttackResult(split: Workflow) {
+    this.hitDisplayData = { ...(this.hitDisplayData ?? {}), ...(split.hitDisplayData ?? {}) };
+    this.hitTargets = this.hitTargets.union(split.hitTargets);
+    this.hitTargetsEC = this.hitTargetsEC.union(split.hitTargetsEC);
+    if (configSettings.autoCheckHit !== "none") await this.displayHits(this.whisperAttackCard);
   }
 
   async displayHitTargets(whisper = false) {
@@ -4801,17 +5352,10 @@ return {
     this.needsHitTargetsDisplayed = false;
     // @ts-expect-error no dnd5e-types
     if (this.item.type === "feat" && ["ench", "class", undefined].includes(this.activity.actionType)) return;
-    for (let target of this.targets) {
+    for (let target of this.targets.documents) {
       if (!target) continue;
-      let img = target.document?.texture.src ?? target.actor?.img ?? "";
-      // @ts-expect-error no dnd5e-types
-      if (configSettings.usePlayerPortrait && target.actor?.type === "character") {
-        img = target.actor.img ?? target.document?.texture.src ?? "";
-      }
-      if (foundry.helpers.media.VideoHelper.hasVideoExtension(img ?? "")) {
-        img = (await game.video?.createThumbnail(img ?? "", { width: 100, height: 100 })) ?? "";
-      }
-      const tokenUuid = target.document.uuid;
+      const img = await tokenPortrait(target);
+      const tokenUuid = target.uuid;
       // @ts-expect-error no dnd5e-types
       const baseAc = target.actor?.system?.attributes?.ac?.value ?? 10;
       this.hitDisplayData[tokenUuid] = {
@@ -4821,7 +5365,6 @@ return {
         acClass: (target.actor as Actor)?.hasPlayerOwner ? "" : "midi-qol-npc-ac",
         img,
         gmName: getTokenName(target),
-        playerName: getTokenPlayerName(target) ?? "",
         uuid: tokenUuid,
         showAC: !!this.activity.attack,
         acDisplay: `${baseAc}`,
@@ -4845,21 +5388,26 @@ return {
       isGM: game.user?.isGM,
     };
     if (debugEnabled > 0) warn("displayHits |", templateData, whisper);
-    const hitContent = await foundry.applications.handlebars.renderTemplate("modules/midi-qol/templates/hits.html", templateData) || "No Targets";
     const chatMessage = this.chatCard;
 
-    if (chatMessage?.content) {
-      let searchString = /<div[^>]*?class="midi-qol-hits-display[^"]*"[\s\S]*?<div class="end-midi-qol-hits-display">/;
-      let replaceString = `<div class="midi-qol-hits-display midi-qol-section-filled">${hitContent}<div class="end-midi-qol-hits-display">`
-      let content = chatMessage.content.replace(searchString, replaceString);
-
-      const update = {
-        content,
-        flags: { "midi-qol": { type: MESSAGE_TYPES.HITS } },
-        // TODO: May not be required
-        style: CONST.CHAT_MESSAGE_STYLES.OTHER
-      }
-      await this.performThrottledUpdate(chatMessage, update);
+    if (chatMessage) {
+      // The data, not the markup: a list (uuid keys have dots, which the update would split), the Token reduced to its id,
+      // and nothing per viewer (oneCard, collapsibleTargets, isGM are added when drawn)
+      const entries = Object.entries(this.hitDisplayData ?? {});
+      // Its own card draws the rows from the records (UsageCardMessage); another's stores them
+      if (this.ownsCard) this.#persisted.setHitRows(entries.map(([, hit]: [string, any]) => [getTokenDocument(hit?.target), {
+        hitClass: hit?.hitClass ?? "", hitSymbol: hit?.hitSymbol || null, hitShowAC: hit?.showAC || null,
+        acDisplay: hit?.acDisplay || null, acTooltip: hit?.acTooltip || null, acIcons: hit?.acIcons?.length ? hit.acIcons : null
+      }] as [TokenDocument.Implementation | undefined, RecordFacts]).filter((e): e is [TokenDocument.Implementation, RecordFacts] => !!e[0]));
+      const hits = this.ownsCard ? undefined : entries.map(([actorUuid, hit]: [string, any]) =>
+        ({ ...hit, actorUuid, target: { id: hit?.target?.id ?? hit?.target?.document?.id ?? "" } }));
+      const section = {
+        label: "",
+        template: SECTION_TEMPLATES.hits,
+        // hits.html shows only the rows: the attack's name and total are the card's own
+        data: hits ? { hits } : {}
+      };
+      await this.performThrottledUpdate(chatMessage, this.#sectionUpdate("hits", section, this.#targetsUpdate()));
     }
   }
 
@@ -4883,8 +5431,8 @@ return {
           halfDamage.push(`${this.damageFlavor} &frac12;`);
       }
     }
-    if ((this.otherActivity?.save || this.otherActivity?.check) && (this.otherActivity?.damage?.parts.length ?? 0) > 0) {
-      switch (getSaveMultiplierForActivity(this.otherActivity)) {
+    if (this.otherSaveActivity && (this.otherSaveActivity.damage?.parts.length ?? 0) > 0) {
+      switch (getSaveMultiplierForActivity(this.otherSaveActivity)) {
         case 0:
           noDamage.push(`${this.otherDamageFlavor} &#48;`)
           break;
@@ -4902,7 +5450,6 @@ return {
   }
   //TODO refactor this with displaysaves
   async displaySaveTargets(_whisper = false) {
-    this.saveTargetsDisplayed = true;
     this.saveDisplayData = [];
     let rollType: string = "";
     let rollAbilities: string[] = [];
@@ -4937,31 +5484,22 @@ return {
         rollTools = [skillOrTool];
       }
     }
-    for (let target of this.targets) {
-      const targetDocument = target.document;
-      let img = targetDocument.texture.src ?? target.actor?.img ?? "";
-      // @ts-expect-error no dnd5e-types
-      if (configSettings.usePlayerPortrait && (target.actor as Actor).type === "character") {
-        img = target.actor?.img ?? targetDocument.texture.src ?? "";
-      }
-
-      if (foundry.helpers.media.VideoHelper.hasVideoExtension(img)) {
-        img = await game.video?.createThumbnail(img, { width: 100, height: 100 }) ?? "";
-      }
+    for (const target of this.targets.documents) {
+      const targetDocument = target;
+      const img = await tokenPortrait(targetDocument);
 
       let isPlayerOwned = !!target.actor?.hasPlayerOwner;
       this.saveDisplayData.push({
         gmName: getTokenName(target),
-        playerName: getTokenPlayerName(target) ?? "",
         img,
         targetClass: isPlayerOwned ? "midi-qol-player-target" : "midi-qol-npc-target",
-        target,
+        target: hookTarget(target),
         saveSymbol: "",
         saveTotalClass: "",
         rollTotal: "",
         rollDetail: "",
         rollHTML: "",
-        id: target.id,
+        id: target.id ?? "",
         adv: undefined,
         saveClass: ""
       });
@@ -4971,18 +5509,16 @@ return {
       fullDamageText,
       halfDamageText,
       noDamageText,
-      hasDamageText: !!(fullDamageText || halfDamageText || noDamageText),
       saveDisplayFlavor: await this.computeSaveDisplayFlavor(rollDC, rollType, { rollAbilities, rollSkills, rollTools }),
       saves: this.saveDisplayData,
       // TODO force roll damage
     }
     const chatMessage = this.chatCard;
 
-    const saveContent = await foundry.applications.handlebars.renderTemplate("modules/midi-qol/templates/saves.html", templateData);
-    let searchRe = /<div[^>]*?class="midi-qol-saves-display">[\s\S]*?<div class="end-midi-qol-saves-display">/;
-    let replaceString = `<div class="midi-qol-saves-display"><div data-item-id="${this.item.id}">${saveContent}</div><div class="end-midi-qol-saves-display">`
-    let content = chatMessage.content.replace(searchRe, replaceString);
-    await this.performThrottledUpdate(chatMessage, { content, flags: { "midi-qol": { type: MESSAGE_TYPES.SAVES } } });
+    const section = { label: "", template: SECTION_TEMPLATES.saves,
+      data: this.#saveSectionData(templateData) };
+    await this.performThrottledUpdate(chatMessage,
+      this.#sectionUpdate("saves", section));
   }
   async displaySaves(_whisper: boolean = false) {
     let { fullDamageText, halfDamageText, noDamageText } = this.computeSaveFlavors();
@@ -4990,75 +5526,88 @@ return {
       fullDamageText,
       halfDamageText,
       noDamageText,
-      hasDamageText: !!(fullDamageText || halfDamageText || noDamageText),
       saveDisplayFlavor: this.saveDisplayFlavor,
       saves: this.saveDisplayData,
       // TODO force roll damage
     }
     let chatMessage = this.chatCard; // XXX await asyncGetCachedDocument(this.itemCardUuid);
-    if (chatMessage?.content) {
+    if (chatMessage) {
       templateData.saveDisplayFlavor = this.saveDisplayFlavor;
-      const saveContent = await foundry.applications.handlebars.renderTemplate("modules/midi-qol/templates/saves.html", templateData);
-      let searchRe: RegExp;
-      let replaceString: string;
-      let midiTargets = Array.from(this.targets.map(t => t.document));
-      let midiTargetDescriptors: CombinedTargetDescriptor[] | undefined;
-
-      if (midiTargets.length) {
-        const saves = this.saves?.map(t => t.document.uuid);
-        const semiSuperSavers = this.semiSuperSavers?.map(t => t.document.uuid);
-        const superSavers = this.superSavers?.map(t => t.document.uuid);
-        const targetDescriptors = this.targetDescriptors;
-        midiTargetDescriptors = midiTargets.map(t => {
-          let uncannyDodge = !!(t.actor?.flags?.[MODULE_ID]?.["uncanny-dodge"] && this.activity.attack);
-          let saveMults = {
-            otherDamage: this.otherActivity ? getSaveMultiplierForActivity(this.otherActivity) : 1,
-            defaultDamage: getSaveMultiplierForActivity(this.activity),
-            bonusDamage: getSaveMultiplierForActivity(this.activity)
-          };
-
-          const targetDescriptor = getTargetDescriptor(t.actor?.uuid ?? "", targetDescriptors) ?? {}
-          return foundry.utils.mergeObject({
-            name: t.name,
-            img: t.actor?.img as string,
-            uuid: t.actor?.uuid ?? "",
-            //@ts-expect-error no dnd5e-types
-            ac: hasCoverTotal(t.actor) ? null : t?.actor?.system.attributes.ac.value as number,
-            saved: saves?.has(t.uuid),
-            semiSuperSaver: semiSuperSavers?.has(t.uuid),
-            superSaver: superSavers?.has(t.uuid),
-            saveMults,
-            itemType: this.item.type,
-            uncannyDodge,
-          }, targetDescriptor);
-        })
-      }
       if (this.workflowType !== "DamageOnlyWorkflow") {
-        searchRe = /<div[^>]*?class="midi-qol-saves-display">[\s\S]*?<div class="end-midi-qol-saves-display">/;
-        replaceString = `<div class="midi-qol-saves-display"><div data-item-id="${this.item.id}">${saveContent}</div><div class="end-midi-qol-saves-display">`
-        let content = chatMessage.content.replace(searchRe, replaceString);
-        const update = {
-          content,
-          /* rolls: this.chatRolls */
-          flags: {
-            "midi-qol": {
-              type: MESSAGE_TYPES.SAVES,
-              saveUuids: Array.from(this.saves).map(t => t.document.uuid),
-              failedSaveUuids: Array.from(this.failedSaves).map(t => t.document.uuid),
-              superSaverUuids: Array.from(this.superSavers).map(t => t.document.uuid),
-              semiSuperSaverUuids: Array.from(this.semiSuperSavers).map(t => t.document.uuid),
-              criticalSaveUuids: Array.from(this.criticalSaves).map(t => t.document.uuid),
-              fumbleSaveUuids: Array.from(this.fumbleSaves).map(t => t.document.uuid),
-              advantageSaveUuids: Array.from(this.advantageSaves).map(t => t.document.uuid),
-              sourceActorUuid: this.actor.uuid,
-            },
-            dnd5e: { targets: midiTargetDescriptors }
-          },
-          style: CONST.CHAT_MESSAGE_STYLES.OTHER
-        };
-        await this.performThrottledUpdate(chatMessage, update);
+        const section = { label: "", template: SECTION_TEMPLATES.saves,
+          data: this.#saveSectionData(templateData) };
+        this.#persistRolls();
+        await this.performThrottledUpdate(chatMessage, this.#sectionUpdate("saves", section, this.#targetsUpdate()));
       }
     }
+  }
+
+  /**
+   * The workflow's targets as dnd5e records them (`system.targets`, TargetsField's own descriptors): dnd5e takes them from
+   * the user's targets when the card is created, and midi settles its targets later (templates, confirmation).
+   */
+  #targetsUpdate(): Record<string, unknown> {
+    const TargetsField = globalThis.dnd5e?.dataModels?.chatMessage?.fields?.TargetsField;
+    if (!TargetsField?.getDescriptors) return {};
+    const tokens = this.targets.documents;
+    if (!tokens.length) return {};
+    // midi's detail for the damage tray goes in the card's state and records (cardTargetDetail), or on the descriptors of
+    // a card the workflow does not own (a damage-only workflow's)
+    const descriptors = TargetsField.getDescriptors(tokens) as Record<string, unknown>[];
+    const details = this.buildMidiTargetDescriptors(tokens);
+    if (!this.ownsCard) {
+      const byToken = new Map(details.map(d => [d.token, d]));
+      for (const descriptor of descriptors) {
+        const detail = byToken.get(descriptor.token as string);
+        if (!detail) continue;
+        const { saved, superSaver, semiSuperSaver, saveMults, uncannyDodge, uncannyDodgeIcon } = detail;
+        Object.assign(descriptor, { saved, superSaver, semiSuperSaver, saveMults, uncannyDodge, uncannyDodgeIcon });
+      }
+      return { "system.targets": descriptors };
+    }
+    // Only a save, or Evasion on a failed one, uses them
+    if (details[0]?.saveMults && details.some(d => d.saved || d.superSaver || d.semiSuperSaver)) this.#persisted.setScalar("saveMults", details[0].saveMults);
+    for (const detail of details) {
+      const document = fromUuidSync(detail.token) as TokenDocument.Implementation | null;
+      if (document) this.#persisted.setRecordFacts(document, { uncannyDodge: detail.uncannyDodge || undefined, uncannyDodgeIcon: detail.uncannyDodgeIcon || undefined });
+    }
+    return { "system.targets": descriptors };
+  }
+
+  /**
+   * Each target's descriptor with midi's detail for the damage tray (save results and multipliers, uncanny dodge), which
+   * DamageApplicationElementMidi.getTargetOptions reads back into `options.midi` (#targetsUpdate stores it)
+   */
+  buildMidiTargetDescriptors(targets: TokenDocument.Implementation[]): CombinedTargetDescriptor[] {
+    const saves = new Set(this.saves.uuids);
+    const semiSuperSavers = new Set(this.semiSuperSavers.uuids);
+    const superSavers = new Set(this.superSavers.uuids);
+    const existing = this.targetDescriptors;
+    const saveMults = this.damageSaveMultipliers();
+    return targets.map(t => {
+      // What the damage calculation used, if it has run; the live flag is transient for reactions.
+      const applied = this.midiTargetDetail?.[t.uuid];
+      const uncannyDodge = applied
+        ? !!applied.uncannyDodge
+        : !!(t.actor?.flags?.[MODULE_ID]?.["uncanny-dodge"] && this.activity?.attack);
+      const uncannyDodgeIcon = applied?.uncannyDodgeIcon as string | undefined;
+      // The card's entry keeps what was recorded at roll time; midi's own detail is always recomputed.
+      const recorded = getTargetDescriptor(t.actor?.uuid ?? "", existing);
+      return {
+        name: t.name,
+        img: t.actor?.img as string,
+        actor: t.actor?.uuid ?? "",
+        token: t.uuid,
+        //@ts-expect-error no dnd5e-types
+        ac: recorded ? recorded.ac : (hasCoverTotal(t.actor) ? null : t?.actor?.system.attributes.ac.value as number),
+        saved: saves?.has(t.uuid),
+        semiSuperSaver: semiSuperSavers?.has(t.uuid),
+        superSaver: superSavers?.has(t.uuid),
+        saveMults,
+        uncannyDodge,
+        uncannyDodgeIcon
+      } as CombinedTargetDescriptor;
+    });
   }
 
   get chatRolls(): Roll[] {
@@ -5068,7 +5617,27 @@ return {
     if (this.damageRolls) messageRolls.push(...this.damageRolls);
     if (this.bonusDamageRolls) messageRolls.push(...this.bonusDamageRolls);
     if (this.otherDamageRolls) messageRolls.push(...this.otherDamageRolls);
+    /*
+     * Saves go last so `rolls[0]` keeps meaning what it did to anything still indexing it. Only those the card's own
+     * save and check messages don't hold: another module's, or one midi changed.
+     */
+    const saves = Object.values(this.tokenSaves ?? {});
+    if (saves.length) {
+      const card = this.itemCardUuid ? fromUuidSync(this.itemCardUuid) as Dnd5eChatMessage | null : null;
+      const linked = [...(card?.getAssociatedRolls?.("save") ?? []), ...(card?.getAssociatedRolls?.("check") ?? [])];
+      for (const roll of saves) if (this.#keepsSaveRoll(roll, linked)) messageRolls.push(roll);
+    }
     return messageRolls;
+  }
+
+  /**
+   * A save roll goes on the card unless the card's linked save or check message for its token has it (dnd5e's own
+   * save rolls, midi's or from the card's buttons). Other modules' are kept: their messages may not last.
+   */
+  #keepsSaveRoll(roll: Roll, linked: ChatMessage.Implementation[]): boolean {
+    if (foundry.utils.getProperty(roll, `options.${MODULE_ID}.external`)) return true;
+    const tokenId = String(foundry.utils.getProperty(roll, `options.${MODULE_ID}.targetUuid`) ?? "").split(".").pop();
+    return !linked.some(message => message.speaker?.token === tokenId && message.rolls?.[0]?.total === roll.total);
   }
 
   /**
@@ -5105,49 +5674,40 @@ return {
    * @param target The target token
    * @returns Promise resolving to the image URL string
    */
-  protected async getTargetPortraitImage(target: Token): Promise<string> {
-    const targetDocument = target.document;
-    let img = targetDocument.texture.src ?? target.actor?.img ?? "";
-
-    // @ts-expect-error no dnd5e-types
-    if (configSettings.usePlayerPortrait && target.actor?.type === "character") {
-      img = target.actor.img ?? targetDocument.texture.src ?? "";
-    }
-
-    if (foundry.helpers.media.VideoHelper.hasVideoExtension(img)) {
-      img = await game.video?.createThumbnail(img, { width: 100, height: 100 }) ?? "";
-    }
-
-    return img;
+  protected async getTargetPortraitImage(target: TokenOrDocument): Promise<string> {
+    const document = getTokenDocument(target);
+    return document ? tokenPortrait(document) : target.actor?.img ?? "";
   }
 
   /**
-   * Checks if target should auto-succeed due to Sculpt Spells or Careful Spells features
-   * Sculpt Spells: Evocation wizard feature - pre-selected targets auto-succeed on saves
-   * Careful Spells: Sorcerer metamagic - pre-selected targets auto-succeed on saves
-   * @param target The target token to check
-   * @returns true if target should auto-succeed, false otherwise
+   * Sculpt Spells and Careful Spell (2024): an area use's creatures targeted before casting are the caster's choice.
+   * They succeed on the save and take no damage where a save halves it.
    */
-  protected checkSculptOrCarefulSpells(target: Token): boolean {
-    // Sculpt Spells: Evocation spells auto-succeed for pre-selected targets (adds to superSavers)
+  protected checkSculptOrCarefulSpells(target: TokenOrDocument): boolean {
+    if (!(this.rangeTargeting || this.tempTargetConfirmation) || !this.preSelectedTargets.has(target)) return false;
+    const conditionData = createConditionData({ workflow: this, target });
     // @ts-expect-error no dnd5e-types - accessing .school property
-    const isEvocationSpell = this.activity.item?.system.school === "evo";
-    if (this.actor.flags?.[MODULE_ID]?.sculptSpells &&
-        (this.rangeTargeting || this.tempTargetConfirmation) &&
-        isEvocationSpell &&
-        this.preSelectedTargets.has(target)) {
-      this.superSavers = this.superSavers.add(target);
-      return true;
-    }
+    const sculpted = this.activity.item?.system.school === "evo" && evalAllConditions(this.actor, `flags.${MODULE_ID}.sculptSpells`, conditionData);
+    // @ts-expect-error no dnd5e-types
+    const isSpell = this.item.type === "spell";
+    const careful = !sculpted && isSpell && this.#carefulTargets().has(target)
+      && evalAllConditions(this.actor, `flags.${MODULE_ID}.carefulSpells`, conditionData);
+    if (!sculpted && !careful) return false;
+    this.superSavers = this.superSavers.add(target);
+    return true;
+  }
 
-    // Careful Spells: Pre-selected targets auto-succeed
-    if (this.actor.flags?.[MODULE_ID]?.carefulSpells &&
-        (this.rangeTargeting || this.tempTargetConfirmation) &&
-        this.preSelectedTargets.has(target)) {
-      return true;
-    }
-
-    return false;
+  #carefulProtected: TokenDocumentSet | undefined;
+  /** Careful Spell's creatures: the first pre-selected targets, up to the caster's Charisma modifier (minimum 1) */
+  #carefulTargets(): TokenDocumentSet {
+    if (this.#carefulProtected) return this.#carefulProtected;
+    const chosen = this.preSelectedTargets.documents.filter(document => this.targets.has(document));
+    // @ts-expect-error no dnd5e-types
+    const max = Math.max(1, Number(this.actor.system.abilities?.cha?.mod) || 0);
+    this.#carefulProtected = new TokenDocumentSet(chosen.slice(0, max));
+    if (chosen.length > max && evalAllConditions(this.actor, `flags.${MODULE_ID}.carefulSpells`, createConditionData({ workflow: this })))
+      ui.notifications?.warn(i18nFormat("midi-qol.CarefulSpellTooMany", { max, names: this.#carefulProtected.documents.map(token => getTokenName(token)).join(", ") }));
+    return this.#carefulProtected;
   }
 
   /**
@@ -5161,7 +5721,7 @@ return {
    * @returns Updated roll info or null if no bonus applies
    */
   protected async applyConcentrationSaveBonus(
-    target: Token,
+    target: TokenOrDocument,
     saveRoll: Roll,
     resultDC: number,
     isCritical: boolean,
@@ -5169,8 +5729,12 @@ return {
   ): Promise<{ saveRoll: Roll, saveRollTotal: number, saved: boolean } | null> {
     if (!this.item.flags?.[MODULE_ID]?.isConcentrationCheck) return null;
 
+    // Only reached when set on the actor directly; effects are mapped by DAE. Remove in 14.6.10.
     const checkBonus = target.actor?.flags?.[MODULE_ID]?.concentrationSaveBonus;
     if (!checkBonus) return null;
+    foundry.utils.logCompatibilityWarning(
+      "midi-qol | flags.midi-qol.concentrationSaveBonus is deprecated; use system.attributes.concentration.roll.bonus. Setting it on an actor directly stops working in 14.6.10.",
+      { once: true });
 
     //@ts-expect-error
     const D20Roll = CONFIG.Dice.D20Roll as typeof Roll;
@@ -5196,40 +5760,26 @@ return {
    * @param coverSaveBonus Computed cover bonus (for label when no cover status); total cover displays as ∞
    */
   protected async buildSaveDisplayEntry(
-    target: Token,
+    target: TokenOrDocument,
     saveRoll: Roll,
     saved: boolean,
     rollDC: number | undefined,
     coverSaveBonus: number = 0,
   ): Promise<void> {
     const saveRollTotal = coverSaveBonus >= TOTAL_COVER ? Infinity : (saveRoll.total ?? 0);
-    let adv = "";
-    if (configSettings.displaySaveAdvantage) {
-      adv = this.advantageSaves.has(target) ? `(${i18n("DND5E.Advantage")})` : "";
-      if (this.disadvantageSaves?.has(target)) adv = `(${i18n("DND5E.Disadvantage")})`;
-    }
 
     const img = await this.getTargetPortraitImage(target);
     const isPlayerOwned = target.actor?.hasPlayerOwner ?? false;
 
-    let rollHTML = await midiRenderRoll(saveRoll);
+    let rollHTML = await renderSaveRollHTML(saveRoll);
     //@ts-expect-error midiChosenId is a custom roll option
     const midiChosenId: string | undefined = saveRoll.options?.midiChosenId;
-    if (midiChosenId) {
-      let choiceTitle = "";
-      if (GameSystemConfig.abilities[midiChosenId]) {
-        const abilityLabel = GameSystemConfig.abilities[midiChosenId].label ?? "";
-        choiceTitle = i18nFormat("DND5E.SavePromptTitle", { ability: abilityLabel });
-      } else if (GameSystemConfig.skills[midiChosenId]) {
-        const skillLabel = GameSystemConfig.skills[midiChosenId].label ?? "";
-        choiceTitle = i18nFormat("DND5E.SkillPromptTitle", { skill: skillLabel, ability: "" });
-      } else {
-        const toolLabel = getToolLabel(midiChosenId);
-        if (toolLabel && toolLabel !== midiChosenId) choiceTitle = i18nFormat("DND5E.ToolPromptTitle", { tool: toolLabel });
-      }
-      if (choiceTitle) rollHTML = `<div style="font-weight:bold; text-align:center;">${choiceTitle}</div>${rollHTML}`;
-    }
     const targetDocUuid = getTokenDocument(target)?.uuid ?? "none";
+
+    // Tagged so the roll can be found on the card: `rollType` the way every other midi roll is
+    // tagged, and the target uuid because saves are per-target and the card has no other way back.
+    foundry.utils.setProperty(saveRoll, `options.${MODULE_ID}.rollType`, "save");
+    foundry.utils.setProperty(saveRoll, `options.${MODULE_ID}.targetUuid`, targetDocUuid);
 
     // Retrieve the per-target saveDetails for attribution tracking
     const saveDetails = this.targetSaveDetails?.[targetDocUuid];
@@ -5254,6 +5804,8 @@ return {
       }
     }
     const advMode = chosenTracker ?? saveDetails?.modifierTracker;
+    // Keys held when the creature's own roll was asked for change it after the tracker was built: name them.
+    if (saveDetails?.heldModifiers) advMode?.reconcileWithRoll(saveRoll?.options?.advantageMode, false);
     // @ts-expect-error CONFIG.Dice.D20Roll not typed
     const ADV_MODE: { DISADVANTAGE: number, NORMAL: number, ADVANTAGE: number } = CONFIG.Dice.D20Roll.ADV_MODE;
     const mode = saveRoll?.options?.advantageMode ?? advMode?.advantageMode ?? ADV_MODE.NORMAL;
@@ -5269,6 +5821,14 @@ return {
     if (totalSaveCover >= TOTAL_COVER) coverLabel = "systems/dnd5e/icons/svg/statuses/cover-total.svg";
     else if (totalSaveCover >= THREE_QUARTERS_COVER) coverLabel = "systems/dnd5e/icons/svg/statuses/cover-three-quarters.svg";
     else if (totalSaveCover >= HALF_COVER) coverLabel = "systems/dnd5e/icons/svg/statuses/cover-half.svg";
+    const targetDocument = getTokenDocument(target);
+    if (targetDocument) this.#persisted.setRecordFacts(targetDocument, {
+      saveTotal: isFinite(saveRollTotal) ? saveRollTotal : null,
+      saveCover: totalSaveCover >= TOTAL_COVER ? "total" : totalSaveCover >= THREE_QUARTERS_COVER ? "threeQuarters" : totalSaveCover >= HALF_COVER ? "half" : undefined,
+      saveCoverAuto: coverSaveBonus >= TOTAL_COVER || undefined,
+      saveMode: mode || null,
+      saveAttribution: advMode?.attribution && !foundry.utils.isEmpty(advMode.attribution) ? attributionTriples(advMode.attribution) : undefined
+    });
 
     // Build save tooltip showing breakdown: "15 = 1d20(12) + 3 vs DC 14"
     let saveTooltip: string | undefined;
@@ -5287,10 +5847,9 @@ return {
 
     this.saveDisplayData?.push({
       gmName: getTokenName(target),
-      playerName: getTokenPlayerName(target) ?? "",
       img,
       targetClass: isPlayerOwned ? "midi-qol-player-target" : "midi-qol-npc-target",
-      target,
+      target: hookTarget(target),
       saveSymbol: (rollDC === null) ? "" : (
         ((target.actor as Actor).hasPlayerOwner ? "" : "midi-qol-npc-save-symbol")
         + " midi-qol-save-symbol "
@@ -5300,7 +5859,7 @@ return {
       rollTotal: isFinite(saveRollTotal) ? String(saveRollTotal) : "∞",
       rollDetail: "",
       rollHTML,
-      id: target.id,
+      id: target.id ?? "",
       modifierTracker: saveDetails?.modifierTracker,  // Store per-target modifierTracker for attribution
       attributionTooltip: foundry.utils.escapeHTML(attributionTooltip),  // Escaped for data-tooltip-html, always shown
       hasAttribution: Object.keys(advMode?.attribution ?? {}).length > 0,
@@ -5318,7 +5877,7 @@ return {
    * @returns Object with player, roll settings, and module flags
    */
   protected determineTargetRollSettings(
-    target: Token,
+    target: TokenOrDocument,
     flagRollType: string | undefined,
     simulate: boolean
   ): {
@@ -5380,15 +5939,16 @@ return {
    * @returns The extra cover bonus to add to the save (above what dnd5e already includes)
    */
   protected async calculateCoverSaveBonus(
-    target: Token,
+    target: TokenOrDocument,
     template: foundry.canvas.placeables.MeasuredTemplate.Implementation | undefined | null,
-    rollAbility: string | undefined | null
+    rollAbility: string | undefined | null,
+    templateCoverOrigin?: { x: number, y: number, elevation?: number }
   ): Promise<number> {
     if (!this.item || !this.activityHasSave || rollAbility !== "dex") {
       return 0;
     }
 
-    const targetDocument = target.document;
+    const targetDocument = getTokenDocument(target);
     const targetActor = target.actor;
     //@ts-expect-error no dnd5e-types
     let statusCoverBonus: number = targetActor?.system?.attributes?.ac?.cover ?? 0;
@@ -5397,13 +5957,17 @@ return {
     // Get the raw module-computed cover bonus
     let moduleCoverBonus = 0;
 
-    // Determine the cover origin point: explicit coverOrigin > template center > caster token
+    // Determine the cover origin point: explicit coverOrigin > templateCoverOrigin > template placeable > caster token
     let position: { x: number, y: number } | undefined;
-    let originElevation: number = this.token?.document?.elevation ?? 0;
+    let originElevation: number = this.token ? tokenSourceElevation(this.token) : 0;
 
     if (this.workflowOptions.coverOrigin) {
       position = { x: this.workflowOptions.coverOrigin.x, y: this.workflowOptions.coverOrigin.y };
       originElevation = this.workflowOptions.coverOrigin.elevation ?? originElevation;
+    } else if (templateCoverOrigin) {
+      // v14: pre-computed cover origin from template/region shape data
+      position = { x: templateCoverOrigin.x, y: templateCoverOrigin.y };
+      originElevation = templateCoverOrigin.elevation ?? originElevation;
     } else if (template) {
       position = foundry.utils.duplicate(template.center);
       const dimensions = canvas.dimensions;
@@ -5411,37 +5975,16 @@ return {
         position.x += (template.document.width ?? 1) / (dimensions?.distance ?? 5) / 2 * (dimensions?.size ?? 100);
         position.y += (template.document.width ?? 1) / (dimensions?.distance ?? 5) / 2 * (dimensions?.size ?? 100);
       }
-      const region: any = template.document;
-      originElevation = region.documentName === "Region"
-        ? Number.isFinite(region.elevation.bottom) ? region.elevation.bottom : originElevation
-        : template.document.elevation;
+      originElevation = template.document.elevation;
     }
 
     if (position) {
       // Cover calculation from a point (coverOrigin, template center, etc.)
       if (configSettings.optionalRules.coverCalculation === "levelsautocover"
         && installedModules.get("levelsautocover")) {
-        moduleCoverBonus = computeCoverBonus({
-          center: position,
-          x: position.x,
-          y: position.y,
-          id: this.token?.id,
-          elevation: originElevation,
-          getCenterPoint() { return { x: position.x, y: position.y }; },
-          document: {
-            x: position.x,
-            y: position.y,
-            elevation: originElevation,
-            disposition: targetDocument?.disposition,
-            object: { id: this.token?.id },
-          }
-        } as unknown as Token, target, this.activity);
-      } else if (configSettings.optionalRules.coverCalculation === "simbuls-cover-calculator"
-        && installedModules.get("simbuls-cover-calculator")) {
-        const coverData = await globalThis.CoverCalculator.checkCoverViaCoordinates(
-          position.x, position.y, false, 'AoE', false, target);
-        if (coverData?.data.results.cover === 3) moduleCoverBonus = TOTAL_COVER;
-        else moduleCoverBonus = -coverData.data.results.value;
+        // From the template's origin, as a point (AutoCover's point source), the caster making it
+        moduleCoverBonus = computeCoverBonus(this.token, target, this.activity,
+          { origin: { x: position.x, y: position.y, elevation: originElevation } });
       } else if (configSettings.optionalRules.coverCalculation === "tokencover" && installedModules.get("tokencover")) {
         if (this.token) moduleCoverBonus = computeCoverBonus(foundry.utils.deepClone(this.token, { center: position } as any), target, this.activity);
       } else if (configSettings.optionalRules.coverCalculation === "simplecover5e"
@@ -5498,11 +6041,16 @@ return {
       return { isCritical: false, isFumble: false };
     }
     const dterm = saveRoll.terms[0] as foundry.dice.terms.DiceTerm;
-    const diceRoll = dterm?.results?.find(result => result.active)?.result ?? fallbackTotal;
+    // The value the die counts as, except under midi's auto-success/fail, which force the result without a natural
+    // crit/fumble: the face decides, and an auto-fail is never critical nor an auto-success a fumble (as for attacks).
+    // @ts-expect-error midiAutoResult is a custom roll option
+    const autoResult: "fail" | "success" | undefined = saveRoll.options?.midiAutoResult;
+    const diceRoll = activeDiceTotal(dterm, !autoResult) ?? fallbackTotal;
+    // dnd5e's D20Die holds the thresholds; another die (e.g. Custom D&D 5e's 3d6) brings its own.
     //@ts-expect-error no dnd5e-types
-    const isFumble = diceRoll <= (dterm.options?.fumble ?? 1);
+    const isFumble = autoResult !== "success" && diceRoll <= (dterm.options?.criticalFailure ?? dterm.options?.fumble ?? 1);
     //@ts-expect-error no dnd5e-types
-    const isCritical = diceRoll >= (dterm.options?.critical ?? 20);
+    const isCritical = autoResult !== "fail" && diceRoll >= (dterm.options?.criticalSuccess ?? dterm.options?.critical ?? 20);
     return { isCritical, isFumble };
   }
 
@@ -5511,7 +6059,7 @@ return {
    * @param target The target token
    * @param result The roll result array
    */
-  protected updateAdvantageTrackingFromRoll(target: Token, result: Roll[]): void {
+  protected updateAdvantageTrackingFromRoll(target: TokenOrDocument, result: Roll[]): void {
     const advantageMode = result[0]?.options?.advantageMode;
     if (advantageMode !== undefined) {
       // Standard dnd5e roll with advantageMode
@@ -5533,8 +6081,6 @@ return {
       this.advantageSaves.delete(target);
       this.disadvantageSaves.delete(target);
     }
-    // Trigger setter to persist advantageSaves after in-place mutations
-    this.advantageSaves = this.advantageSaves;
   }
 
   /**
@@ -5635,7 +6181,7 @@ return {
   /**
    * Build a Monks Token Bar save request for a target
    */
-  buildMonksTokenBarRequest(target: Token, saveDetails: AnyMutableObject): MonksTokenBarRequest {
+  buildMonksTokenBarRequest(target: TokenOrDocument, saveDetails: AnyMutableObject): MonksTokenBarRequest {
     // Monks TokenBar's getTokenEntries reads: token, advantage, disadvantage, request, fastForward.
     // dc/showdc are read from the top-level options (2nd arg to requestRoll), not per-token.
     // We don't pass fastForward — let Monks use its own bypass-roll-dialog setting instead.
@@ -5649,7 +6195,7 @@ return {
   /**
    * Build a Flash Rolls 5e save request for a target
    */
-  buildFlashRollsRequest(target: Token, saveDetails: AnyMutableObject): FlashRollsRequest {
+  buildFlashRollsRequest(target: TokenOrDocument, saveDetails: AnyMutableObject): FlashRollsRequest {
     // dispatchFlashRollsSaves aggregates these into a single FlashAPI.requestRoll call,
     // reading only: token, advantage, disadvantage from per-target entries.
     return {
@@ -5662,7 +6208,7 @@ return {
   /**
    * Build an Epic Rolls 5e save request for a target
    */
-  buildEpicRollsRequest(target: Token, saveDetails: AnyMutableObject): EpicRollsRequest {
+  buildEpicRollsRequest(target: TokenOrDocument, saveDetails: AnyMutableObject): EpicRollsRequest {
     return {
       actorUuid: (target.actor as Actor).uuid,
       advantage: saveDetails.advantage as boolean | undefined,
@@ -5695,7 +6241,7 @@ return {
       request = `skill:${rollSkills[0]}`;
     }
 
-    const showdc = shouldDisplaySaveDC(this.actor);
+    const showdc = challengeVisibleToPlayers(this.actor);
 
     // MTB requestRoll options only reads: request, silent, rollmode, dc, showdc, callback
     const buildRequestData = (tokenData: MonksTokenBarRequest[], rollMode: string): AnyMutableObject => {
@@ -5713,20 +6259,21 @@ return {
     };
 
     if (!whisper) {
+      // monks-tokenbar uses the legacy roll-mode vocabulary ("roll" = public) — translate at the boundary.
       const rollMode = ((this.activity.midiProperties?.rollMode ?? "default") !== "default")
-        ? this.activity.midiProperties!.rollMode
-        : getRollModes().PUBLIC;
+        ? toLegacyRollMode(this.activity.midiProperties!.rollMode)
+        : "roll";
       timedExecuteAsGM("monksTokenBarSaves", buildRequestData(monkRequests, rollMode));
     } else {
       // Whisper mode - send GM and player requests separately with different roll modes
       const playerRollMode = ((this.activity.midiProperties?.rollMode ?? "default") !== "default")
-        ? this.activity.midiProperties!.rollMode
+        ? toLegacyRollMode(this.activity.midiProperties!.rollMode)
         : "roll";
       if (monkRequestsPlayer.length > 0) {
         timedExecuteAsGM("monksTokenBarSaves", buildRequestData(monkRequestsPlayer, playerRollMode));
       }
       if (monkRequestsGM.length > 0) {
-        timedExecuteAsGM("monksTokenBarSaves", buildRequestData(monkRequestsGM, getRollModes().PRIVATE));
+        timedExecuteAsGM("monksTokenBarSaves", buildRequestData(monkRequestsGM, "gmroll"));
       }
     }
   }
@@ -5760,7 +6307,10 @@ return {
       flashRequestType = "savingthrow"; // default
     }
 
-    const flashRollKey = rollAbilities?.[0] ?? rollSkills?.[0] ?? rollTools?.[0];
+    // A tool or skill check also lists the ability it is rolled with; its key is the tool or skill (https://gitlab.com/tposney/midi-qol/-/issues/1575).
+    const flashRollKey = rollType === "skill" ? rollSkills?.[0]
+      : rollType === "tool" ? rollTools?.[0]
+        : rollAbilities?.[0];
     if (!flashRollKey) {
       flashRequestType = "custom";
     }
@@ -5773,10 +6323,13 @@ return {
       disadvantage: flashRequests.some(r => r.disadvantage) || undefined,
       skipRollDialog: true,
       sendAsRequest: true,
+      // flash-rolls-5e uses the legacy roll-mode vocabulary ("roll" = public) — translate at the boundary.
       rollMode: ((this.activity.midiProperties?.rollMode ?? "default") !== "default")
-        ? this.activity.midiProperties!.rollMode
+        ? toLegacyRollMode(this.activity.midiProperties!.rollMode)
         : "roll",
       workflowId: this.id,
+      // Links the save messages to the card, as dnd5e's own save buttons do.
+      originMessageId: this.itemCardId,
     };
 
     timedExecuteAsGM("flashTokenBarSaves", flashRequest);
@@ -5805,7 +6358,7 @@ return {
       type,
       options: {
         DC: rollDC,
-        showDC: shouldDisplaySaveDC(this.actor),
+        showDC: challengeVisibleToPlayers(this.actor),
         blindRoll: configSettings.autoCheckSaves === "whisper",
         showRollResults: false,
         hideNames: true,
@@ -5821,28 +6374,28 @@ return {
 
     //@ts-expect-error
     ui.EpicRolls5e.requestRoll(rerRequest).then((rerResult: {
-      cancelled: boolean;
+      canceled: boolean;
       results: {
         actor: Actor.Implementation;
         roll: unknown;
       }[];
     }) => {
-      if (rerResult.cancelled) {
-        let roll = new BasicRoll("-1");
-        roll = roll.evaluateSync({ strict: false });
-        for (let uuid of rerRequest.actors) {
-          const fn = this.saveRequests[uuid];
-          delete this.saveRequests[uuid];
-          fn(roll);
+      // A cancelled request, or an actor with no roll, counts as a failed save rather than leaving the save waiting.
+      const failed = () => new BasicRoll("-1").evaluateSync({ strict: false });
+      if (!rerResult.canceled) {
+        for (const rerRoll of rerResult.results) {
+          const actorUuid = rerRoll.actor?.uuid;
+          const fn = actorUuid ? this.saveRequests[actorUuid] : undefined;
+          if (!fn || !rerRoll.roll) continue;
+          delete this.saveRequests[actorUuid!];
+          fn(Roll.fromJSON(JSON.stringify(rerRoll.roll)));
         }
-      } else {
-        for (let rerRoll of rerResult.results) {
-          const actorUuid = rerRoll.actor.uuid;
-          const fn = this.saveRequests[actorUuid];
-          delete this.saveRequests[actorUuid];
-          const roll = Roll.fromJSON(JSON.stringify(rerRoll.roll));
-          fn(roll);
-        }
+      }
+      for (const uuid of rerRequest.actors) {
+        const fn = this.saveRequests[uuid];
+        if (!fn) continue;
+        delete this.saveRequests[uuid];
+        fn(failed());
       }
     });
   }
@@ -5851,7 +6404,7 @@ return {
    * Create a player chat save request with timeout handling
    */
   createPlayerChatSaveRequest(
-    target: Token,
+    target: TokenOrDocument,
     player: User,
     saveDetails: AnyMutableObject,
     rollType: string,
@@ -5871,10 +6424,11 @@ return {
     const BasicRoll = CONFIG.Dice.BasicRoll as typeof Roll;
 
     const requestId = target?.id ?? foundry.utils.randomID();
-    const saveDisplay = (this.activity.saveDisplay ?? "default") === "default" ? configSettings.autoCheckSaves : this.activity.saveDisplay;
+    const saveDisplay = saveDisplayMode();
 
     const promise = new Promise<Roll[] | Roll | null>((resolve) => {
       this.saveRequests[requestId] = resolve;
+      this.saveRequestKinds[requestId] = { rollType, abilities: rollAbilities, skills: rollSkills, tools: rollTools };
 
       // Set a timeout for taking over the roll
       if (configSettings.playerSaveTimeout > 0) {
@@ -5884,20 +6438,20 @@ return {
             delete this.saveTimeouts[requestId];
             let result: Roll[] | null;
 
-            // Only pass target DC if player should see success/failure (based on autoCheckSaves and visibility)
-            const showTargetDC = configSettings.autoCheckSaves !== "whisper" && shouldDisplaySaveDC(this.actor);
-            if (!game.user?.isGM && saveDisplay === "allShow") {
-              // Non-GM users don't have permission to create chat cards impersonating the GM
-              const rollMode = ((this.activity.midiProperties?.rollMode ?? "default") !== "default")
-                ? this.activity.midiProperties?.rollMode
-                : getRollModes().PUBLIC;
+            // The DC goes on the roll so dnd5e can tell success from failure; who sees it is decided when the card is shown.
+            const showTargetDC = true;
+            // A player's client rolls only its own creatures: another player's save is made by a GM, as the player's
+            // roll would have been (its mode, its whispers); with no GM connected, here without prompts.
+            const owned = !!target.actor?.isOwner;
+            if (!game.user?.isGM && (saveDisplay === "allShow" || !owned) && preferredActiveGM()) {
               result = await timedAwaitExecuteAsGM("rollAbility", {
                 saveDetails,
                 displayOptions: {
                   fastForward: true,
                   chatMessage: showRoll,
-                  rollMode,
-                  showTargetDC
+                  rollMode: this.playerSaveMessageMode(),
+                  showTargetDC,
+                  forUserId: player.id
                 }
               });
             } else {
@@ -5915,8 +6469,11 @@ return {
                   fastForward: true,
                   recomputeAdvantage: true, // compute advantage/disadvantage from flags in roll function
                   saveItemUuid: this.saveItem?.uuid,
+                  saveActivityUuid: this.saveActivity?.uuid,
                   isConcentrationCheck: saveDetails.isConcentrationCheck,
                   workflowOptions: saveDetails.workflowOptions,
+                  // Another player's creature, rolled here because no GM is connected: nobody here may answer its prompts
+                  unattended: !owned,
                   rollAbilities,
                   rollSkills,
                   rollTools,
@@ -5969,11 +6526,31 @@ return {
     return { promise, requestCard };
   }
 
+  /** A save's message mode with no player rolling it: the activity's own, else by the save display */
+  defaultSaveMessageMode(): string {
+    if ((this.activity.midiProperties?.rollMode ?? "default") !== "default") return toMessageMode(this.activity.midiProperties!.rollMode);
+    return ["whisper", "gmOnly"].includes(saveDisplayMode()) ? "gm" : "public";
+  }
+
+  /** The message mode of a player's own save roll: the activity's own, else by Player roll saves */
+  playerSaveMessageMode(): string {
+    if ((this.activity.midiProperties?.rollMode ?? "default") !== "default") return this.defaultSaveMessageMode();
+    switch (configSettings.playerRollSaves) {
+      case "noneDialogPublic":
+      case "nonePublic": return "public";
+      case "noneDialogPrivate":
+      case "none": return "gm";
+      case "noneDialogSelf": return "self";
+      case "noneDialogBlind": return "blind";
+      default: return this.defaultSaveMessageMode();
+    }
+  }
+
   /**
    * Create a standard socketlib save roll
    */
   createStandardSaveRoll(
-    target: Token,
+    target: TokenOrDocument,
     saveDetails: SaveDetails,
     whisper: boolean,
     showRoll: boolean,
@@ -5993,27 +6570,19 @@ return {
     // Fall back to rolling as the current user
     if (!owner) owner = game.user;
 
-    let rollMode = ((this.activity.midiProperties?.rollMode ?? "default") !== "default")
-      ? this.activity.midiProperties!.rollMode
-      : whisper ? getRollModes().PRIVATE : getRollModes().PUBLIC;
+    let rollMode = owner?.isGM ? this.defaultSaveMessageMode() : this.playerSaveMessageMode();
 
-    if (!owner?.isGM) {
-      if ((this.activity.midiProperties?.rollMode ?? "default") === "default") {
-        if (["noneDialogPublic", "nonePublic"].includes(configSettings.playerRollSaves)) {
-          rollMode = getRollModes().PUBLIC;
-        } else if (["noneDialogPrivate", "none"].includes(configSettings.playerRollSaves)) {
-          rollMode = getRollModes().PRIVATE;
-        } else if (configSettings.playerRollSaves === "noneDialogSelf") {
-          rollMode = getRollModes().SELF;
-        } else if (configSettings.playerRollSaves === "noneDialogBlind") {
-          rollMode = getRollModes().BLIND;
-        }
-      }
+    // An NPC's save message is kept to the GM when players don't see this card's challenge, as its row in midi's saves
+    // section isn't shown to them. Respect an explicit activity rollMode.
+    if ((this.activity.midiProperties?.rollMode ?? "default") === "default"
+      && !target.actor?.hasPlayerOwner
+      && !challengeVisibleToPlayers(this.actor)
+      && ["public", "ic"].includes(rollMode)) {
+      rollMode = "gm";
     }
 
-    // Only pass target DC if player should see success/failure (based on autoCheckSaves and visibility)
-    // GM always sees DC, non-GM only when visibility allows and not whisper mode
-    const showTargetDC = owner?.isGM || (configSettings.autoCheckSaves !== "whisper" && shouldDisplaySaveDC(this.actor));
+    // The DC goes on the roll so dnd5e can tell success from failure; who sees it is decided when the card is shown.
+    const showTargetDC = true;
     return socketlibSocket.executeAsUser("rollAbility", owner?.id, {
       saveDetails,
       displayOptions: {
@@ -6030,6 +6599,44 @@ return {
    * Returns the promise and optionally adds to module-specific request arrays
    */
   queueTargetSaveRoll(options: QueueSaveRollOptions): { promise: Promise<Roll[] | Roll | null> | null, requestCard: Promise<ChatMessage | undefined> | undefined } {
+    const queued = this.queueTargetSaveRollRequest(options);
+    const { target, saveDetails, rollInfo, displayOptions, playerInfo: { player } } = options;
+    const queuedPromise = queued.promise;
+    if (!queuedPromise || queued.friendly || !player || player.isGM) return { promise: queuedPromise, requestCard: queued.requestCard };
+    // The GM can answer for a player who hasn't rolled (the player list): rolled for them, or on the GM's screen
+    const rollForThem = (fastForward: boolean, mode?: "advantage" | "disadvantage") => unTimedExecuteAsGM("rollAbility", {
+      saveDetails: mode ? { ...saveDetails, advantage: mode === "advantage", disadvantage: mode === "disadvantage" } : saveDetails,
+      // As the player's own roll would have been shown (their roll mode; private and self whispered to them, blind not)
+      displayOptions: { fastForward, chatMessage: displayOptions.showRoll, rollMode: this.playerSaveMessageMode(), showTargetDC: true, forUserId: player.id }
+    });
+    const requestIds = [target.id, target.actor?.uuid].filter((id): id is string => !!id);
+    const what = [...rollInfo.abilities, ...rollInfo.skills, ...rollInfo.tools].map(key => key.toUpperCase()).join("/");
+    const promise = trackPlayerWait<Roll[] | Roll | null>({
+      kind: rollInfo.type === "save" ? "save" : "check",
+      userId: player.id!,
+      actorUuid: target.actor?.uuid,
+      tokenUuid: getTokenDocument(target)?.uuid,
+      label: i18nFormat("midi-qol.PlayerWaits.SaveLabel", {
+        what, type: i18n(rollInfo.type === "save" ? "DND5E.SavingThrow" : "DND5E.AbilityCheck"), item: this.item?.name ?? ""
+      }),
+      choices: {
+        roll: { label: "midi-qol.PlayerWaits.Choice.normal", value: () => rollForThem(true) },
+        advantage: { label: "midi-qol.PlayerWaits.Choice.advantage", value: () => rollForThem(true, "advantage") },
+        disadvantage: { label: "midi-qol.PlayerWaits.Choice.disadvantage", value: () => rollForThem(true, "disadvantage") },
+        gmRoll: () => rollForThem(false)
+      },
+      onSettled: () => {
+        for (const id of requestIds) {
+          delete this.saveRequests[id];
+          clearTimeout(this.saveTimeouts[id]);
+          delete this.saveTimeouts[id];
+        }
+      }
+    }, () => queuedPromise);
+    return { promise, requestCard: queued.requestCard };
+  }
+
+  queueTargetSaveRollRequest(options: QueueSaveRollOptions): { promise: Promise<Roll[] | Roll | null> | null, requestCard: Promise<ChatMessage | undefined> | undefined, friendly?: boolean } {
     const { target, saveDetails, rollInfo, isMagicSave, displayOptions, playerInfo, moduleFlags, moduleRequests } = options;
     const { type: rollType, abilities: rollAbilities, skills: rollSkills, tools: rollTools, action: rollAction } = rollInfo;
     const { whisper, showRoll, showRollDialog, simulate } = displayOptions;
@@ -6038,7 +6645,7 @@ return {
     // Check for friendly roll first
     const friendlyRoll = this.getFriendlyTargetRoll(saveDetails as { isFriendly: boolean });
     if (friendlyRoll) {
-      return { promise: friendlyRoll, requestCard: undefined };
+      return { promise: friendlyRoll, requestCard: undefined, friendly: true };
     }
 
     // Monks Token Bar
@@ -6100,17 +6707,17 @@ return {
    * Process a single target's save result - determine if saved, apply bonuses, update tracking sets
    */
   async processTargetSaveResult(
-    target: Token,
+    target: TokenOrDocument,
     result: Roll[],
     context: ProcessTargetSaveContext
   ): Promise<void> {
-    const { rollDC, rollAbility, rollType, template, D20Roll } = context;
+    const { rollDC, rollAbility, rollType, template, templateCoverOrigin, D20Roll } = context;
 
     let saveRollTotal = result.reduce((acc, r) => acc + r.total!, 0);
     let saveRolls = result;
     this.updateAdvantageTrackingFromRoll(target, result);
     let { isFumble, isCritical } = this.determineCriticalOrFumble(saveRolls[0], saveRollTotal);
-    const coverSaveBonus = await this.calculateCoverSaveBonus(target, template, rollAbility);
+    const coverSaveBonus = await this.calculateCoverSaveBonus(target, template, rollAbility, templateCoverOrigin);
     if (coverSaveBonus > 0 && coverSaveBonus < TOTAL_COVER && saveRolls[0]) {
       // Inject cover bonus into the roll so it's visible in the roll tooltip
       const OperatorTerm = foundry.dice.terms.OperatorTerm;
@@ -6152,9 +6759,10 @@ return {
     if (isCritical) this.criticalSaves = this.criticalSaves.add(target);
 
     // Trigger target macros that might modify the roll
-    if (configSettings.allowUseMacro && this.workflowOptions.noTargetOnUseMacro !== true) {
-      const rollResults = await this.triggerTargetMacros(["isSave", "isSaveSuccess", "isSaveFailure"], new Set([target]), { saved }) as Record<string, Roll[]>;
-      const newRolls = rollResults[target.document.uuid];
+    const token = getToken(target);
+    if (token && configSettings.allowUseMacro && this.workflowOptions.noTargetOnUseMacro !== true) {
+      const rollResults = await this.triggerTargetMacros(["isSave", "isSaveSuccess", "isSaveFailure"], new Set([token]), { saved }) as Record<string, Roll[]>;
+      const newRolls = rollResults[token.document.uuid];
       if (newRolls?.[0] instanceof Roll) {
         saveRolls = newRolls;
         saveRollTotal = newRolls.reduce((acc, r) => acc + (r?.total ?? 0), 0);
@@ -6203,14 +6811,12 @@ return {
   /**
    * Update the saves and failedSaves sets based on whether the target saved
    */
-  updateSaveFailSets(target: Token, saved: boolean): void {
+  updateSaveFailSets(target: TokenOrDocument, saved: boolean): void {
     if (saved) {
       this.saves = this.saves.add(target);
       this.failedSaves.delete(target);
-      this.failedSaves = this.failedSaves;
     } else {
       this.saves.delete(target);
-      this.saves = this.saves;
       this.failedSaves = this.failedSaves.add(target);
     }
   }
@@ -6219,7 +6825,7 @@ return {
    * Apply fail bonuses (flags.midi-qol.save.fail) if the save failed
    */
   async applyFailedSaveBonuses(
-    target: Token,
+    target: TokenOrDocument,
     result: Roll[],
     saveRolls: Roll[],
     rollType: string,
@@ -6237,14 +6843,19 @@ return {
 
     let newRoll: Roll;
     if (owner?.isGM && game.user?.isGM) {
-      newRoll = await bonusCheck(target.actor!, result[0], rollType, failAbilityFlagsLength ? `fail.${rollAbility}` : "fail.all");
+      newRoll = await bonusCheck(target.actor!, result[0], rollType, failAbilityFlagsLength ? `fail.${rollAbility}` : "fail.all", { system: { origin: this.itemCardId } });
     } else {
-      newRoll = await socketlibSocket.executeAsUser("bonusCheck", owner?.id, {
+      // The GM can answer for a player who hasn't decided (the player list): the roll stands
+      newRoll = await trackPlayerWait<Roll>({
+        kind: "bonus", userId: owner.id!, actorUuid: target.actor?.uuid, tokenUuid: getTokenDocument(target)?.uuid,
+        label: i18nFormat("midi-qol.PlayerWaits.BonusLabel", { item: this.item?.name ?? "" }),
+        choices: { skip: () => result[0] }
+      }, () => socketlibSocket.executeAsUser("bonusCheck", owner?.id, {
         actorUuid: (target.actor as Actor).uuid,
         result: JSON.stringify(result[0].toJSON()),
         rollType,
         selector: failFlagsLength ? "fail.all" : `fail.${rollAbility}`
-      });
+      }));
     }
 
     const updatedSaveRolls = [...saveRolls];
@@ -6289,7 +6900,7 @@ return {
    * A roll is always ONE type, so a single map suffices.
    */
   async buildSaveDetailsForTarget(
-    target: Token,
+    target: TokenOrDocument,
     context: {
       rollDC: number | undefined;
       rollType: string | undefined;
@@ -6302,7 +6913,7 @@ return {
     }
   ): Promise<SaveDetails> {
     const { rollDC, rollType, isMagicSave, actorDisposition, rollAbilities, rollSkills, rollTools } = context;
-    const targetDocument = target.document;
+    const targetDocument = getTokenDocument(target);
 
     const saveDetails: SaveDetails = {
       actorUuid: target.actor?.uuid ?? "",
@@ -6314,7 +6925,8 @@ return {
       isConcentrationCheck: undefined,
       rollDC: rollDC ?? 0,
       saveItemUuid: this.saveItem?.uuid ?? "",
-      workflowId: this.id,
+      saveActivityUuid: this.saveActivity?.uuid,
+      workflowId: this.id ?? "",
       itemCardUuid: this.itemCardUuid ?? "",
       workflowOptions: this.workflowOptions,
       rollType: rollType ?? "save",
@@ -6323,54 +6935,38 @@ return {
       rollTools,
       itemId: this.saveActivity?.item.id ?? "",
     };
+    // A creature rolling its own check or save (Hide, Search) rolls it with the keys held when it was used.
+    const event = this.rollOptions.event as AugmentedEvent | undefined;
+    if (event && target.actor?.uuid === this.actor?.uuid)
+      saveDetails.heldModifiers = eventModifiers(event);
 
-    // Check ability advantage/disadvantage from settings, source grants flags, and magic resistance/vulnerability
-    // Use the shared helper to compute full trackers (advantage + roll modifiers) for all abilities
-    const abilityId = this.saveActivity!.save?.ability?.first() ?? this.saveActivity!.check?.ability ?? "";
+    // Trackers (advantage and roll modifiers) for each choice the roll offers: abilities for a save or plain check,
+    // else the skills or tools, each rolled with its ability.
+    const isSkillOrTool = rollType === "skill" || rollType === "tool";
+    const choiceIds = rollType === "skill" ? rollSkills : rollType === "tool" ? rollTools : rollAbilities;
+    const checkAbility = this.saveActivity?.check?.ability || undefined;
+    const abilityFor = isSkillOrTool ? checkActivityAbilities(this.saveActivity, target.actor) : undefined;
+    const isConcentrationCheck = this.item.flags?.[MODULE_ID]?.isConcentrationCheck;
+    // A concentration check's save also takes the concentration advantage flags.
     const preComputedMap = await buildPreComputedAdvantageMap(
       target.actor!,
-      rollType ?? "",
-      rollAbilities,
-      { workflow: this, isMagicSave: !!isMagicSave }
+      (rollType === "save" && isConcentrationCheck) ? "concentration" : rollType ?? "",
+      choiceIds,
+      { workflow: this, isMagicSave: !!isMagicSave },
+      abilityFor
     );
 
-    // Get the default ability's tracker for saveDetails
-    const defaultAbilityData = preComputedMap[abilityId];
+    const defaultId = isSkillOrTool ? choiceIds[0] : (this.saveActivity!.save?.ability?.first() ?? checkAbility ?? "");
+    const defaultData = preComputedMap[defaultId ?? ""];
     // tracker is always a RollModifierTracker instance here (before socketlib serialization)
-    saveDetails.modifierTracker = defaultAbilityData?.tracker instanceof RollModifierTracker ? defaultAbilityData.tracker : undefined;
-    saveDetails.advantage = defaultAbilityData?.hasAdvantage;
-    saveDetails.disadvantage = defaultAbilityData?.hasDisadvantage;
-    saveDetails.isConcentrationCheck = this.item.flags?.[MODULE_ID]?.isConcentrationCheck;
+    saveDetails.modifierTracker = defaultData?.tracker instanceof RollModifierTracker ? defaultData.tracker : undefined;
+    saveDetails.advantage = defaultData?.hasAdvantage;
+    saveDetails.disadvantage = defaultData?.hasDisadvantage;
+    saveDetails.isConcentrationCheck = isConcentrationCheck;
 
-    // Pre-compute advantage for all choices when multiple are available.
-    // A roll is always ONE type (save, skill check, or tool check), so we use a single object.
+    // A roll is always ONE type (save, skill check, or tool check), so one map covers its choices.
     // tracker.toJSON() is called automatically during socketlib transmission; GMAction reconstructs.
-    const multipleChoices = rollAbilities.length > 1 || rollSkills.length > 1 || rollTools.length > 1;
-    if (multipleChoices) {
-      // Determine which type has multiple choices and build the object
-      let choiceMap: Record<string, PreComputedAdvantage>;
-      if (rollAbilities.length > 1) {
-        // Already computed above for abilities
-        choiceMap = preComputedMap;
-      } else if (rollSkills.length > 1) {
-        choiceMap = await buildPreComputedAdvantageMap(
-          target.actor!,
-          "skill",
-          rollSkills,
-          { workflow: this, isMagicSave: false }
-        );
-      } else {
-        choiceMap = await buildPreComputedAdvantageMap(
-          target.actor!,
-          "tool",
-          rollTools,
-          { workflow: this, isMagicSave: false }
-        );
-      }
-
-      // Copy the choice map data to saveDetails (tracker is always an instance here, before socketlib)
-      saveDetails.advantageByChoice = choiceMap;
-    }
+    if (choiceIds.length > 1) saveDetails.advantageByChoice = preComputedMap;
 
     // Check for friendly target auto-fail/success from activity settings
     if (saveDetails.isFriendly && saveDetails.modifierTracker) {
@@ -6418,17 +7014,20 @@ return {
    */
 
   async checkSaves(whisper = false, simulate = false) {
+    if (!simulate) await this.flushCardWrites();
     this.initSaveResults();
     this.targetSaveDetails = {};
     if (debugEnabled > 1) debug(`checkSaves: whisper ${whisper}  hit targets ${this.hitTargets}`)
-    if (this.hitTargets.size <= 0 && this.hitTargetsEC.size <= 0) {
+    if (this.hitTargets.count <= 0 && this.hitTargetsEC.count <= 0) {
       this.saveDisplayFlavor = `<span>${i18n("midi-qol.noSaveTargets")}</span>`
       return;
     }
 
     if (!this.saveActivity) return;
-    const allHitTargets = new Set([...this.hitTargets, ...this.hitTargetsEC]);
-    if (allHitTargets.size === 0) return;
+    // Every hit target rolls, drawn or not, as its Token when it has one: cover, reactions, hooks and target macros need it
+    const hitSet = this.hitTargets.union(this.hitTargetsEC);
+    const allHitTargets: TokenOrDocument[] = hitSet.documents.map(document => hitSet.placeableOf(document) ?? document);
+    if (allHitTargets.length === 0) return;
     let rollDC = this.saveActivity?.save?.dc.value ?? this.saveActivity?.check?.dc.value;
     //@ts-expect-error
     const D20Roll = CONFIG.Dice.D20Roll as typeof Roll;
@@ -6447,7 +7046,6 @@ return {
 
     const { flags: moduleFlags, requests: moduleRequests } = this.computeModuleIntegrationSettings(simulate, flagRollType ?? "");
     const { playerMonksTB, playerFlashTB, playerEpicRolls } = moduleFlags;
-    const saveDisplay = (this.activity.saveDisplay ?? "default") === "default" ? configSettings.autoCheckSaves : this.activity.saveDisplay;
     // @ts-expect-error no dnd5e-types
     const isMagicSave = this.item.type === "spell" || this.activity.midiProperties?.magicEffect;
 
@@ -6461,8 +7059,9 @@ return {
 
       for (let target of allHitTargets) {
         if (!target || !target?.actor) continue;
-        let showRoll = saveDisplay === "allShow";
-        if (simulate) showRoll = false;
+        // Every save gets a message, linked to the card; each viewer's "Summarize chat cards" decides whether it
+        // shows in the log or folds into the card.
+        const showRoll = !simulate;
         if (!this.item.flags?.[MODULE_ID]?.noProvokeReaction && !this.workflowOptions.noProvokeReaction) {
           await doReactions(target, this.tokenUuid, this.attackRoll ?? new Roll(""), "reactionsave", { workflow: this, activity: this.activity, item: this.item })
         }
@@ -6485,11 +7084,14 @@ return {
 
         this.saveDetails = saveDetails;
         // Store per-target saveDetails for later retrieval during result processing
-        const targetDocUuid = getTokenDocument(target)?.uuid;
-        if (targetDocUuid && this.targetSaveDetails) this.targetSaveDetails[targetDocUuid] = saveDetails;
-        // Call preTargetSave hook - allows external modules to modify saveDetails/tracker before the roll
-        await asyncHooksCallAll("midi-qol.preTargetSave", target, this, saveDetails);
-        if (configSettings.allowUseMacro && this.workflowOptions.noTargetOnUseMacro !== true) await this.triggerTargetMacros(["preTargetSave"], new Set([target]));
+        const targetUuid = getTokenDocument(target)?.uuid;
+        if (targetUuid && this.targetSaveDetails) this.targetSaveDetails[targetUuid] = saveDetails;
+        // preTargetSave: modules may change saveDetails/tracker before the roll. Every target, as its Token, or its
+        // TokenDocument when it has none (another scene or level); target macros run for a Token only
+        const token = getToken(target);
+        const saver = token ?? getTokenDocument(target);
+        await asyncHooksCallAll("midi-qol.preTargetSave", saver && hookTarget(saver), this, saveDetails);
+        if (token && configSettings.allowUseMacro && this.workflowOptions.noTargetOnUseMacro !== true) await this.triggerTargetMacros(["preTargetSave"], new Set([token]));
 
         // Queue the save roll using the appropriate handler
         const { promise, requestCard } = this.queueTargetSaveRoll({
@@ -6558,14 +7160,34 @@ return {
     this.saveResults = results.filter(r => !!r).flat();
 
     // Get template for area target saves (also when templateUuid is set explicitly via midiOptions)
+    // v14: templates are backed by Regions — resolve either type for cover origin
     let template: foundry.canvas.placeables.MeasuredTemplate.Implementation | undefined | null;
+    let templateCoverOrigin: { x: number, y: number, elevation?: number } | undefined;
     if (this.templateUuid) {
-      const templateDocument = await fromUuid(this.templateUuid) as MeasuredTemplateDocument | null;
-      template = templateDocument?.object;
+      const doc = await fromUuid(this.templateUuid);
+      if (doc?.documentName === "Region") {
+        // v14 Region-backed template: extract cover origin from shape data
+        const regionDoc = doc as RegionDocument.Implementation;
+        const origin = regionShapeOrigin(regionDoc);
+        if (origin) templateCoverOrigin = { ...origin, elevation: regionDoc.elevation?.bottom ?? 0 };
+      } else {
+        const templateDoc = doc as MeasuredTemplateDocument | null;
+        template = templateDoc?.object ?? undefined;
+        // If we have a placeable, compute cover origin from it
+        if (template) {
+          templateCoverOrigin = foundry.utils.duplicate(template.center);
+          const dimensions = canvas.dimensions;
+          if (template.document.t === "rect") {
+            templateCoverOrigin.x += (template.document.width ?? 1) / (dimensions?.distance ?? 5) / 2 * (dimensions?.size ?? 100);
+            templateCoverOrigin.y += (template.document.width ?? 1) / (dimensions?.distance ?? 5) / 2 * (dimensions?.size ?? 100);
+          }
+          templateCoverOrigin.elevation = template.document.elevation;
+        }
+      }
     }
 
     // Process each target's save result
-    const processContext = { rollDC, rollAbility: rollAbilities[0], rollType, template, D20Roll };
+    const processContext = { rollDC, rollAbility: rollAbilities[0], rollType, template, templateCoverOrigin, D20Roll };
     let i = 0;
     for (let target of allHitTargets) {
       if (!target.actor) continue; // these were skipped when doing the rolls so they can be skipped now
@@ -6600,7 +7222,7 @@ return {
 
   async computeSaveDisplayFlavor(rollDC: number | undefined, rollType: string, options: { rollAbilities: string[], rollSkills: string[], rollTools: string[] }): Promise<string> {
     let { rollAbilities, rollSkills, rollTools } = options;
-    const allHitTargets = new Set([...this.hitTargets, ...this.hitTargetsEC]);
+    const allHitTargets = this.hitTargets.union(this.hitTargetsEC).documents;
     let DCString = i18n("DND5E.AbbreviationDC") ?? "DC";
     if (DCString === "DND5E.AbbreviationDC") DCString = "DC";
     DCString = `${DCString} ${rollDC}`;
@@ -6608,7 +7230,7 @@ return {
     const dcLabel = `<label class="midi-qol-saveDC">${DCString}</label>`;
 
     if (rollType === "save") {
-      const throwLabel = i18n(allHitTargets.size > 1 ? "midi-qol.saving-throws" : "midi-qol.saving-throw");
+      const throwLabel = i18n(allHitTargets.length > 1 ? "midi-qol.saving-throws" : "midi-qol.saving-throw");
       const lines = rollAbilities.map(ability =>
         `${dcLabel} ${GameSystemConfig.abilities[ability]?.label ?? ability} ${throwLabel}`
       );
@@ -6617,7 +7239,7 @@ return {
       if (rollAbilities.length === 0) {
         return `${dcLabel} ${i18n("midi-qol.plain-d20-roll")}:`;
       }
-      const checkLabel = i18n(allHitTargets.size > 1 ? "midi-qol.ability-checks" : "midi-qol.ability-check");
+      const checkLabel = i18n(allHitTargets.length > 1 ? "midi-qol.ability-checks" : "midi-qol.ability-check");
       const lines = rollAbilities.map(ability =>
         `${dcLabel} ${GameSystemConfig.abilities[ability]?.label ?? ability} ${checkLabel}:`
       );
@@ -6676,54 +7298,30 @@ return {
     const func = this.saveRequests[requestId];
     delete this.saveRequests[requestId];
     if (debugEnabled > 0) debug(`flashSavingCheck | Resolving save for ${requestId} with roll total ${data.total}`);
+    // Kept on the card: Flash Rolls may delete its save messages once rolled
+    foundry.utils.setProperty(data.roll, `options.${MODULE_ID}.external`, "flash-rolls-5e");
     func(data.roll);
   }
 
-  async displayChatCardWithoutDamageDetail() {
-    let chatMessage = getCachedDocument(this.itemCardUuid) as ChatMessage.Implementation | undefined;
-    let data: ChatMessage.CreateData | undefined;
-    if (chatMessage?.content) {
-      let content = chatMessage.content;
-      data = chatMessage!.toObject();
-      content = data.content || "";
-      let searchRe = /<div[^>]*?class="midi-qol-damage-roll[^"]*"[\s\S]*?<div class="end-midi-qol-damage-roll">/;
-      let replaceString = `<div class="midi-qol-damage-roll"><div class="end-midi-qol-damage-roll">`
-      content = content.replace(searchRe, replaceString);
-      searchRe = /<div[^>]*?class="midi-qol-other-roll"[\s\S]*?<div class="end-midi-qol-other-roll">/;
-      replaceString = `<div class="midi-qol-other-roll"><div class="end-midi-qol-other-roll">`
-      content = content.replace(searchRe, replaceString);
-      searchRe = /<div[^>]*?class="midi-qol-bonus-roll">[\s\S]*?<div class="end-midi-qol-bonus-roll">/;
-      replaceString = `<div class="midi-qol-bonus-roll"><div class="end-midi-qol-bonus-roll">`
-      content = content.replace(searchRe, replaceString);
-    }
-    if (installedModules.get("ready-set-roll-5e")) return;
-    if (data && this.currentAction === this.WorkflowState_Completed) {
-      if (this.itemCardUuid) {
-        await Workflow.removeItemCardButtons(this.itemCardUuid, { removeAllButtons: true });
-      }
-      delete data._id;
-      const itemCard = await CONFIG.ChatMessage.documentClass.create(data);
-      this.itemCardUuid = itemCard?.uuid;
-    }
-  }
-
-  async callDamageHooksAndMacros(damages: DamageListEntry, token: Token.Implementation) {
+  async callDamageHooksAndMacros(damages: DamageListEntry, token: TokenOrDocument) {
     this.damageItem = damages;
     if (configSettings.allowUseMacro && !this.workflowOptions?.noTargetOnUseMacro && this.item.flags) {
       await this.triggerTargetMacros(["preTargetDamageApplication"], new Set([token]));
     }
-    await asyncHooksCallAll(`midi-qol.preTargetDamageApplication`, token, { item: this.item, workflow: this, damageItem: damages, ditem: damages });
+    await asyncHooksCallAll(`midi-qol.preTargetDamageApplication`, hookTarget(token), { item: this.item, workflow: this, damageItem: damages, ditem: damages });
 
-    if ((damages.hpDamage !== 0 || damages.tempDamage > 0) && (this.hitTargets.has(token) || this.hitTargetsEC.has(token) || this.otherActivity?.save || this.otherActivity?.check)) {
+    // A creature at 0 HP loses no hit points but is still damaged (e.g. ends Stable).
+    const damagedAtZero = (damages.oldHP ?? 1) <= 0 && (damages.totalDamage ?? 0) > 0 && (damages.hpDamage ?? 0) >= 0;
+    if ((damages.hpDamage !== 0 || damages.tempDamage > 0 || damagedAtZero) && (this.hitTargets.has(token) || this.hitTargetsEC.has(token) || this.otherActivity?.save || this.otherActivity?.check)) {
       let healedDamaged = damages.hpDamage < 0 ? "isHealed" : "isDamaged";
-      await asyncHooksCallAll(`midi-qol.${healedDamaged}`, token, { item: this.item, workflow: this, damageItem: damages, ditem: damages });
+      await asyncHooksCallAll(`midi-qol.${healedDamaged}`, hookTarget(token), { item: this.item, workflow: this, damageItem: damages, ditem: damages });
       const actorOnUseMacros = foundry.utils.getProperty(token.actor ?? {}, midiFlag(`onUseMacroParts`)) as OnUseMacros ?? new OnUseMacros();
       // It seems applyTokenDamageMany without a this gets through to here - so a silly guard in place TODO come back and fix this properly
       if (this.callMacros) await this.callMacros(this.item,
         actorOnUseMacros?.getMacros(healedDamaged),
         "TargetOnUse",
         healedDamaged,
-        { actor: token.actor, token: token });
+        { actor: token.actor, token: hookTarget(token) });
       healedDamaged = damages.hpDamage < 0 ? "isHealed" : "isDamaged";  //recalculate what the total damage and trigger the correct special duration expiration.
       const expiredEffects = getAppliedEffects(token?.actor, { includeEnchantments: true }).filter(ef => {
         const specialDuration = ef.flags?.dae?.specialDuration;
@@ -6767,36 +7365,31 @@ return {
 
   processSaveRoll(message: ChatMessage.Implementation, _html: HTMLElement | ChatMessage.Database.CreateOptions, _dataOrUserId: ChatMessage.MessageData | string) {
     if (!this.saveRequests) return {};
-    const ddbglFlags = message.flags && message.flags["ddb-game-log"];
-    const isDDBGL = ddbglFlags?.cls === "save" && !ddbglFlags?.pending;
-    const isRoll = message.flags?.dnd5e?.messageType === "roll";
-    let requestId = message?.speaker?.token;
-    if (!requestId && isDDBGL) requestId = message?.speaker?.actor;
+    // An initiative roll by the same token is not the save being waited for
+    const isRoll = isDnd5eRollMessage(message) && dnd5eRollType(message) !== "initiative";
+    const requestId = message?.speaker?.token;
     if (debugEnabled > 0) warn("processSaveRoll |", requestId, this.saveRequests)
     if (!requestId) return true;
 
-    // TODO check the roll against the sort of roll we are waiting for.
     if (!this.saveRequests[requestId] || !isRoll) return true;
+    // Only the kind of roll asked for answers it: another roll by the same token (a different save, an attack) doesn't
+    const kind = this.saveRequestKinds[requestId];
+    if (kind && !rollAnswersRequest(message, kind)) return true;
 
     if (this.saveRequests[requestId]) {
       clearTimeout(this.saveTimeouts[requestId]);
       const handler = this.saveRequests[requestId]
       delete this.saveRequests[requestId];
+      delete this.saveRequestKinds[requestId];
       delete this.saveTimeouts[requestId];
-      if (configSettings.undoWorkflow) {
-        if (this.undoData) this.undoData.chatCardUuids.push(message.uuid);
-        unTimedExecuteAsGM("updateUndoChatCardUuids", this.undoData);
-      }
+      // A save another module rolled may not be linked to the card: record it for undo.
+      if (configSettings.undoWorkflow && this.undoData) unTimedExecuteAsGM("addUndoChatCards", { id: this.undoData.id, chatCardUuids: [message.uuid] });
       handler(message.rolls[0])
-    }
-    const saveDisplay = (this.activity.saveDisplay ?? "default") === "default" ? configSettings.autoCheckSaves : (this.activity.saveDisplay as string)
-    if (game.user?.id !== message.author?.id && !["allShow"].includes(saveDisplay)) {
-      setTimeout(() => ui.chat?.element.querySelector(`[data-message-id="${message.id}"]`)?.remove(), 100);
     }
     return true;
   }
 
-  async checkSuperSaver(token: Token.Implementation, abilities: Set<string> | undefined): Promise<boolean> {
+  async checkSuperSaver(token: TokenOrDocument, abilities: Set<string> | undefined): Promise<boolean> {
     if (!abilities) return false;
     for (let ability of abilities.values()) {
       const flags = token.actor?.flags?.[MODULE_ID]?.superSaver;
@@ -6809,15 +7402,11 @@ return {
         const flagVal = await evalActivationCondition(this, flags[ability], token, { errorReturn: false });
         if (flagVal) return true;
       }
-      // @ts-expect-error no dnd5e-types
-      if (this.actor.flags?.[MODULE_ID]?.sculptSpells && this.item.school === "evo" && this.preSelectedTargets.has(token)) {
-        return true;
-      }
     }
     return false;
   }
 
-  async checkSemiSuperSaver(token: Token.Implementation, abilities: Set<string> | undefined): Promise<boolean> {
+  async checkSemiSuperSaver(token: TokenOrDocument, abilities: Set<string> | undefined): Promise<boolean> {
     if (!abilities) return false;
     for (let ability of abilities.values()) {
       const flags = token.actor?.flags?.[MODULE_ID]?.semiSuperSaver;
@@ -6846,38 +7435,41 @@ return {
   //   return ({ total, formula, terms: [{ options: { advantage, disadvantage } }] });
   // }
 
+  /** The attack's die as it counts (a min/max such as rolls.attack.min 20 counts) */
+  static diceRollOf(roll: Roll): number {
+    const term = roll.terms[0];
+    if (term instanceof foundry.dice.terms.NumericTerm) return Number(term.total);
+    return activeDiceTotal(term as foundry.dice.terms.DiceTerm) ?? Number(term?.total);
+  }
+
+  /** The attack's d20 result, or a die replacing the d20 that dnd5e accepts as one (e.g. Custom D&D 5e's 2d10) */
+  static d20Of(roll: Roll): number | undefined {
+    const d: any = roll.dice[0]; // should be a dice term but DiceTerm.options not defined
+    if (!d) return undefined;
+    const isD20 = (d.faces === 20) || ("validD20Roll" in roll && !!roll.validD20Roll);
+    return isD20 ? d.total : undefined;
+  }
+
   async processAttackRoll() {
     if (!this.attackRoll) return;
     const terms = this.attackRoll.terms;
+    this.diceRoll = Workflow.diceRollOf(this.attackRoll);
 
-    if (terms[0] instanceof foundry.dice.terms.NumericTerm) {
-      this.diceRoll = Number(terms[0].total);
-    } else {
-      const dterm = terms[0] as foundry.dice.terms.DiceTerm;
-      const activeResult = dterm.results?.find(d => d.active);
-      this.diceRoll = activeResult ? Number(activeResult.result) : Number(terms[0].total);
-    }
-
-    // For natural critical/fumble detection, use the actual die face when auto-success/fail
-    // is active (min99/max1 from success.attack/fail.attack flags), since those just force
-    // hit/miss without implying a natural crit/fumble. Regular min/max modifiers (e.g. min20
-    // from min.attack.all) should use terms[0].total which includes the modifier adjustment.
+    // Critical/fumble from the value the die counts as (a min/max such as rolls.attack.min 20 counts), as dnd5e does;
+    // midi's auto-success/fail (min99/max1) force hit/miss without implying a natural crit/fumble, so they use the face.
     let critFumbleDiceRoll = this.diceRoll;
-    if (this.attackRollModifierTracker.modifiers.willSucceed || this.attackRollModifierTracker.modifiers.willFail) {
-      if (!(terms[0] instanceof foundry.dice.terms.NumericTerm)) {
-        const dterm = terms[0] as foundry.dice.terms.DiceTerm;
-        const activeResult = dterm.results?.find(d => d.active);
-        if (activeResult) critFumbleDiceRoll = Number(activeResult.result);
-      }
+    const autoResult = this.attackRollModifierTracker.modifiers.willSucceed || this.attackRollModifierTracker.modifiers.willFail;
+    if (!autoResult && !(terms[0] instanceof foundry.dice.terms.NumericTerm)) {
+      critFumbleDiceRoll = activeDiceTotal(terms[0] as foundry.dice.terms.DiceTerm, true) ?? critFumbleDiceRoll;
     }
 
     // @ts-expect-error no dnd5e-types
     let criticalThreshold = this.attackRoll.options.criticalSuccess ?? 20;
-    if (this.targets.size > 0) {
-      const midiFlags = this.targets.first()?.actor?.flags[MODULE_ID];
+    if (this.targets.count > 0) {
+      const midiFlags = this.targets.documents[0]?.actor?.flags[MODULE_ID];
       let targetCrit = criticalThreshold;
       if (midiFlags?.grants?.criticalThreshold) {
-        const conditionData = createConditionData({ workflow: this, target: this.targets.first(), actor: this.actor });
+        const conditionData = createConditionData({ workflow: this, target: this.targets.documents[0], actor: this.actor });
         targetCrit = await evalCondition(midiFlags.grants.criticalThreshold, conditionData, { errorReturn: criticalThreshold, async: true });
       }
       if (isNaN(targetCrit) || !Number.isNumeric(targetCrit)) targetCrit = criticalThreshold;
@@ -6916,7 +7508,7 @@ return {
     // Evaluate target grants.fumble and grants.noFumble flags
     // Note: grants.critical/noCritical are checked in processCriticalFlags on hitTargets
     // because you only get crit bonus from targets you actually hit
-    if (this.targets.size >= 1) {
+    if (this.targets.count >= 1) {
       const targetGrantsFumbleFlags: CriticalModifierFlags = {
         criticalFlags: [],
         noCriticalFlags: [],
@@ -6925,7 +7517,7 @@ return {
       };
 
       // grants.fumble - check if ANY target has this flag
-      for (const target of this.targets) {
+      for (const target of this.targets.documents) {
         if (target?.actor) {
           const targetName = target?.name ?? target?.actor?.name ?? "";
           await computeTargetCriticalModifiers(target.actor, targetName, targetGrantsFumbleFlags, this.attackRollModifierTracker, { workflow: this, grantsActor: this.actor });
@@ -6939,7 +7531,7 @@ return {
         let allTargetsGrantNoFumble = true;
         const noFumbleTargets: string[] = [];
         let noFumbleFlag = "grants.noFumble.all";
-        for (const target of this.targets) {
+        for (const target of this.targets.documents) {
           if (!target?.actor) {
             allTargetsGrantNoFumble = false;
             break;
@@ -6955,28 +7547,20 @@ return {
           if (hasNoFumbleType) noFumbleFlag = `grants.noFumble.${actionType}`;
           noFumbleTargets.push(targetName);
         }
-        if (allTargetsGrantNoFumble && this.targets.size > 0) {
+        if (allTargetsGrantNoFumble && this.targets.count > 0) {
           this.attackRollModifierTracker.fumble.suppress(noFumbleFlag, `${getFlagDisplayName(noFumbleFlag)} (${noFumbleTargets.join(", ")})`);
         }
       }
     }
 
-    // Tracker now computes final isCritical/isFumble from:
-    // override > noCritical/noFumble > forceCritical/forceFumble > naturalCritical/naturalFumble
-    // Access tracker state via this.isCritical / this.isFumble getters
-
-    // Persist to chat card (triggers via setter which uses override, but we want to persist computed state)
-    this.persistFields({ isCritical: this.isCritical, isFumble: this.isFumble });
-    this.persistAttackTracker();
+    // The tracker decides: override > noCritical/noFumble > forceCritical/forceFumble > natural
+    this.#persistAttackTracker();
 
     this.attackTotal = this.attackRoll.total ?? 0;
     if (debugEnabled > 1) debug("processAttackRoll: ", this.diceRoll, this.attackTotal, this.isCritical, this.isFumble);
 
-    // Update roll with attribution and regenerate HTML if crit/fumble occurred
-    if (this.isCritical || this.isFumble) {
-      addAttribution(this.attackRoll, this.attackAttribution);
-      this.attackRollHTML = await midiRenderAttackRoll(this.attackRoll);
-    }
+    // The roll's attribution when a crit/fumble occurred
+    if (this.isCritical || this.isFumble) addAttribution(this.attackRoll, this.attackAttribution);
   }
 
   protected recordAttackStats() {
@@ -7096,11 +7680,12 @@ return {
     if (bonusFlags.length > 0) {
       const displayBonusRolls: boolean | undefined = bonusFlags.reduce((acc: boolean | undefined, flag) => (acc || (foundry.utils.getProperty(flagOwners[flag] ?? this.actor ?? {}, `${flag}.displayBonusRolls`) as boolean)), undefined)
         ?? checkMechanic("displayBonusRolls") as boolean;
+      await this.flushCardWrites(); // a person decides next
       const newRoll = await bonusDialog.bind(this)(bonusFlags, attackBonus, displayBonusRolls, `${this.actor.name} - ${i18n("DND5E.Attack")} ${i18n("DND5E.Roll")}`, this.attackRoll!, "attackRoll", { flagOwners })
       if (newRoll) this.setAttackRoll(newRoll);
     }
-    if (this.targets.size === 1) {
-      const target = this.targets.first()!;
+    if (this.targets.count === 1) {
+      const target = this.targets.documents[0]!;
       // Use the AC captured at roll time (matches what checkHits will compare against
       // via computeTargetAC). Falls back to live ac.value when no descriptor exists.
       const descriptor = getTargetDescriptor(target.actor?.uuid ?? "", this.targetDescriptors);
@@ -7126,6 +7711,7 @@ return {
         if (bonusFlags.length > 0) {
           const displayBonusRolls: boolean | undefined = bonusFlags.reduce((acc: boolean | undefined, flag: string) => (acc || (foundry.utils.getProperty(flagOwners[flag] ?? this.actor ?? {}, `${flag}.displayBonusRolls`) as boolean)), undefined)
             ?? checkMechanic("displayBonusRolls") as boolean;
+          await this.flushCardWrites(); // a person decides next
           const newRoll = await bonusDialog.bind(this)(bonusFlags, attackBonus, displayBonusRolls, `${this.actor.name} - ${i18n("DND5E.Attack")} ${i18n("DND5E.Roll")}`, this.attackRoll, "attackRoll", { flagOwners });
           if (newRoll) this.setAttackRoll(newRoll);
         }
@@ -7136,8 +7722,8 @@ return {
 
   async processDamageRollBonusFlags(damageRolls: Roll[]): Promise<Roll[]> {
     let damageBonus = "damage.all";
-    const rollMode = safeGetGameSetting("core", "rollMode");
-    const hideDSN = game.user?.isGM && [getRollModes().SELF, getRollModes().BLIND, getRollModes().PRIVATE].includes(rollMode);
+    const rollMode = safeGetGameSetting("core", "messageMode") as string;
+    const hideDSN = game.user?.isGM && ["self", "blind", "gm"].includes(rollMode);
     if (this.activity) damageBonus = `damage.${this.activity.actionType}`;
     const { keys: allOptionalKeys, owners: flagOwners } = this.collectOptionalFlagSources();
     const ownerOfShort = (flag: string): any => flagOwners[`flags.${MODULE_ID}.optional.${flag}`] ?? this.actor;
@@ -7151,11 +7737,11 @@ return {
       })
       .map(flag => midiFlag(`optional.${flag}`));
     if (bonusFlags.length > 0) {
-      // this.damageRollHTML = await midiRenderDamageRoll(this.damageRoll);
       // this.damamgeRollHTML = $(this.damageRolHTML).find(".dice-roll").remove();
       // TODO dnd3 work out what this means for multiple rolls
       const displayBonusRolls: boolean | undefined = bonusFlags.reduce((acc: boolean | undefined, flag: string) => (acc || (foundry.utils.getProperty(flagOwners[flag] ?? this.actor ?? {}, `${flag}.displayBonusRolls`) as boolean)), undefined)
         ?? checkMechanic("displayBonusRolls") as boolean;
+      await this.flushCardWrites(); // a person decides next
       let newRoll = await bonusDialog.bind(this)(bonusFlags, damageBonus, displayBonusRolls === true, `${this.actor.name} - ${i18n("DND5E.Damage")} ${i18n("DND5E.Roll")}`, damageRolls[0], "damageRoll", { hideDSN, damageRolls, flagOwners })
       if (newRoll) damageRolls[0] = newRoll;
     }
@@ -7165,7 +7751,7 @@ return {
   recordTargetACModifiers() {
     this.targetACModifiers = new Map() as Map<string, number>;
     const allTargetDescriptors = this.targetDescriptors;
-    for (let targetToken of this.targets) {
+    for (let targetToken of this.targets.documents) {
       let targetActor = targetToken.actor;
       if (!targetActor) continue; // tokens without actors are an abomination and we refuse to deal with them.
       const targetDescriptor = getTargetDescriptor(targetActor.uuid, allTargetDescriptors);
@@ -7184,12 +7770,15 @@ return {
     // check for a hit/critical/fumble
     if (this.activity.target?.affects?.type === "self") {
       this.targets = await getOrCreateTokenForActorAsSet(this.actor);
-      this.hitTargets = new Set(this.targets)
+      this.hitTargets = new TokenDocumentSet(this.targets)
     } else this.hitTargets = new Set();
 
     this.hitDisplayData = {};
     const challengeModeArmorSet = !([undefined, false, "none"].includes((checkRule("challengeModeArmor") as string | boolean | undefined)));
-    for (let targetToken of this.targets) {
+    for (const targetDocument of this.targets.documents) {
+      // Not drawn (another scene or level): its actor's AC, with no cover or reactions
+      const drawnToken = this.targets.placeableOf(targetDocument);
+      const targetToken: TokenOrDocument = drawnToken ?? targetDocument;
       let targetName = configSettings.useTokenNames && targetToken.name ? targetToken.name : targetToken.actor?.name;
       let targetActor = targetToken.actor;
       if (!targetActor) continue; // tokens without actors are an abomination and we refuse to deal with them.
@@ -7241,29 +7830,19 @@ return {
         ignoreCover ||= await evalAllConditionsAsync(this.actor, `flags.dnd5e.sharpShooter`, conditionData);
       }
 
-      // Flanking bonus (fixed-value mode): reduce effective AC for this target
-      // flankingBonus is recorded per-target in recordFlankingBonuses() before checkHits()
-      let flankingACMod = 0;
-      const flankingBonusSetting = configSettings.optionalRules.flankingBonus ?? "advantage";
-      if (flankingBonusSetting !== "advantage") {
-        const allDescriptors = this.targetDescriptors;
-        const targetFlankDescriptor = getTargetDescriptor(targetActor.uuid, allDescriptors) as CombinedTargetDescriptor | undefined;
-        flankingACMod = targetFlankDescriptor?.flankingBonus ?? 0;
-      }
-
       // Compute effective AC: reconciles status cover with module cover (status as minimum),
       // applies attack-specific reductions (ignoreFullCover, sharpShooter, spellSniper, ignoreCover),
-      // and incorporates flanking and targetACMod.
-      let acResult = this.token
-        ? computeTargetAC(this.token, targetToken, this.activity, { ignoreCover, flankingMod: flankingACMod, targetACMod })
+      // and incorporates targetACMod.
+      let acResult = this.token && drawnToken
+        ? computeTargetAC(this.token, drawnToken, this.activity, { ignoreCover, targetACMod })
         : undefined;
 
       let targetAC = vehicleACOverride ?? acResult?.effectiveAC
         //@ts-expect-error no dnd5e-types
         ?? (Number.parseInt(targetActor.system.attributes.ac.value ?? 10) + targetACMod);
-      let bonusAC = acResult?.effectiveCoverBonus ?? 0;
 
-      const midiFlagsAttackBonus = targetActor.flags?.[MODULE_ID]?.grants?.attack?.bonus;
+      // Already in the attack roll for a single target (attackRollParts)
+      const midiFlagsAttackBonus = this.grantedAttackBonusInRollUuid === targetActor.uuid ? undefined : targetActor.flags?.[MODULE_ID]?.grants?.attack?.bonus;
       let reactionACDelta = 0;
       let reactionItemName: string | undefined;
       if (!this.isFumble) {
@@ -7291,12 +7870,12 @@ return {
               const preReactionRawAC: number = targetToken.actor?.system.attributes.ac?.value ?? 10;
               reactionACDelta = result.ac - preReactionRawAC;
               reactionItemName = result.name;
-              targetAC = result.ac + (acResult?.appliedCoverDelta ?? 0) + targetACMod - flankingACMod;
+              targetAC = result.ac + (acResult?.appliedCoverDelta ?? 0) + targetACMod;
             } else if (result?.uuid && isFinite(targetAC)) {
               // Spell reaction (e.g. Shield) was used but didn't return ac directly.
               // The actor's AC has been updated by the reaction workflow — recompute effective AC.
-              const postReactionACResult = this.token
-                ? computeTargetAC(this.token, targetToken, this.activity, { ignoreCover, flankingMod: flankingACMod, targetACMod })
+              const postReactionACResult = this.token && drawnToken
+                ? computeTargetAC(this.token, drawnToken, this.activity, { ignoreCover, targetACMod })
                 : undefined;
               if (postReactionACResult && postReactionACResult.effectiveAC !== targetAC) {
                 // Show the reaction's contribution separately: restore pre-reaction baseAC and track the delta
@@ -7305,7 +7884,6 @@ return {
                 postReactionACResult.baseAC = preReactionBaseAC;
                 acResult = postReactionACResult;
                 targetAC = acResult.effectiveAC;
-                bonusAC = acResult.effectiveCoverBonus;
                 reactionItemName = result.itemName ?? result.name;
               }
             }
@@ -7323,7 +7901,7 @@ return {
           if (!this.item.flags?.[MODULE_ID]?.noProvokeReaction && !this.workflowOptions.noProvokeReaction) {
             result = await doReactions(targetToken, this.tokenUuid, this.attackRoll, "reaction", { activity: this.activity, item: this.item, workflow: this, workflowOptions });
           }
-          if (!Workflow.getWorkflow(this.id)) // workflow has been removed - bail out
+          if (!Workflow.findWorkflow(this.id)) // workflow has been removed - bail out
             return;
           // targetAC already has cover, flanking, and targetACMod from computeTargetAC (via acResult.effectiveAC)
           // Only update if the hit reaction returned a new AC total
@@ -7332,11 +7910,11 @@ return {
             const preReactionRawAC: number = targetToken.actor?.system.attributes.ac?.value ?? 10;
             reactionACDelta = result.ac - preReactionRawAC;
             reactionItemName = result.name;
-            targetAC = result.ac + (acResult?.appliedCoverDelta ?? 0) - flankingACMod;
+            targetAC = result.ac + (acResult?.appliedCoverDelta ?? 0);
           } else if (result?.uuid) {
             // Spell reaction was used but didn't return ac directly — recompute effective AC.
-            const postReactionACResult = this.token
-              ? computeTargetAC(this.token, targetToken, this.activity, { ignoreCover, flankingMod: flankingACMod, targetACMod })
+            const postReactionACResult = this.token && drawnToken
+              ? computeTargetAC(this.token, drawnToken, this.activity, { ignoreCover, targetACMod })
               : undefined;
             if (postReactionACResult && postReactionACResult.effectiveAC !== targetAC) {
               const preReactionBaseAC = acResult?.baseAC ?? postReactionACResult.baseAC;
@@ -7344,7 +7922,6 @@ return {
               postReactionACResult.baseAC = preReactionBaseAC;
               acResult = postReactionACResult;
               targetAC = acResult.effectiveAC;
-              bonusAC = acResult.effectiveCoverBonus;
               reactionItemName = result.itemName ?? result.name;
             }
           }
@@ -7360,7 +7937,7 @@ return {
           // TODO what else to do once rolled
         }
         const optionalCrits = checkRule("optionalCritRule") as number;
-        if (this.targets.size === 1 && configSettings.optionalRulesEnabled && optionalCrits > -1) {
+        if (this.targets.documents.length === 1 && configSettings.optionalRulesEnabled && optionalCrits > -1) {
           if (checkRule("criticalNat20") && this.isCritical) {
             // criticalNat20 rule: natural 20 always crits, so don't change
           } else {
@@ -7372,35 +7949,31 @@ return {
         hitResultNumeric = this.isCritical ? "++" : !isFinite(targetAC) ? `${attackTotal}/∞` : `${attackTotal}/${Math.abs(attackTotal - targetAC)}`;
       }
 
-      const midiFlagsActorFail = this.actor.flags?.[MODULE_ID]?.fail;
-      if (midiFlagsActorFail) {
+      // An auto success or failure decides the hit whatever the AC
+      let forcedResult = false;
+      {
         const conditionData = createConditionData({ workflow: this, target: targetToken, actor: this.actor });
-        let failFlag: string | undefined;
-        if (await evalAllConditionsAsync(this.actor, midiFlag(`fail.attack.${this.activity.actionType}`), conditionData))
-          failFlag = `fail.attack.${this.activity.actionType}`;
-        else if (await evalAllConditionsAsync(this.actor, midiFlag(`fail.attack.all`), conditionData))
-          failFlag = "fail.attack.all";
-        else if (await evalAllConditionsAsync(this.actor, midiFlag(`fail.all`), conditionData))
-          failFlag = "fail.all";
+        const actionType = this.activity.actionType;
+        const attackFields = [`abilities.${this.activity.ability}.attack.roll`, "rolls.attack", `rolls.attack.${actionType}`];
+        // dnd5e's roll fields, then midi's flag for every roll
+        const firstMatch = async (kind: "fail" | "success"): Promise<string | undefined> => {
+          for (const path of attackFields)
+            if (await evalAllConditionsAsync(this.actor, `system.${path}.${kind}`, conditionData)) return `${path}.${kind}`;
+          if (await evalAllConditionsAsync(this.actor, midiFlag(`${kind}.all`), conditionData)) return `${kind}.all`;
+          return undefined;
+        };
+        const failFlag = await firstMatch("fail");
         if (failFlag) {
           isHit = false;
           isHitEC = false;
+          forcedResult = true;
           this.attackRollModifierTracker.critical.setOverride(false, failFlag, getFlagDisplayName(failFlag));
         }
-      }
-      const midiFlagsActorSuccess = this.actor.flags?.[MODULE_ID]?.success;
-      if (midiFlagsActorSuccess) {
-        const conditionData = createConditionData({ workflow: this, target: targetToken, actor: this.actor });
-        let successFlag: string | undefined;
-        if (await evalAllConditionsAsync(this.actor, midiFlag(`success.attack.${this.activity.actionType}`), conditionData))
-          successFlag = `success.attack.${this.activity.actionType}`;
-        else if (await evalAllConditionsAsync(this.actor, midiFlag(`success.attack.all`), conditionData))
-          successFlag = "success.attack.all";
-        else if (await evalAllConditionsAsync(this.actor, midiFlag(`success.all`), conditionData))
-          successFlag = "success.all";
+        const successFlag = await firstMatch("success");
         if (successFlag) {
           isHit = true;
           isHitEC = false;
+          forcedResult = true;
           this.attackRollModifierTracker.fumble.setOverride(false, successFlag, getFlagDisplayName(successFlag));
         }
       }
@@ -7419,6 +7992,7 @@ return {
         if (grantsSuccessFlag) {
           isHit = true;
           isHitEC = false;
+          forcedResult = true;
           this.attackRollModifierTracker.fumble.setOverride(false, grantsSuccessFlag, getFlagDisplayName(grantsSuccessFlag));
         }
         let grantsFailFlag: string | undefined;
@@ -7429,6 +8003,7 @@ return {
         if (grantsFailFlag) {
           isHit = false;
           isHitEC = false;
+          forcedResult = true;
           this.attackRollModifierTracker.critical.setOverride(false, grantsFailFlag, getFlagDisplayName(grantsFailFlag));
         }
       }
@@ -7439,7 +8014,26 @@ return {
       if (!this.challengeModeScale) this.challengeModeScale = {};
       this.challengeModeScale[targetToken.actor?.uuid ?? "dummy"] = hitScale;
       if (this.isCritical && isFinite(targetAC)) isHit = true;
-      if (isHit || (this.isCritical && isFinite(targetAC))) this.hitTargets = this.hitTargets.add(targetToken);
+      // Premades decide last (midi-qol.premades.checkHitTarget): a changed AC or critical is tested again, unless an auto
+      // success or failure decided the hit; a changed result (isHit, isHitEC) is kept as set
+      const acBefore = targetAC;
+      const criticalBefore = this.isCritical;
+      const hitCheck = { workflow: this, target: hookTarget(targetToken), attackTotal: attackTotal + attackBonus, targetAC, isHit, isHitEC, isCritical: this.isCritical, isFumble: this.isFumble };
+      await asyncHooksCallAll("midi-qol.premades.checkHitTarget", hitCheck);
+      if (hitCheck.isCritical !== this.isCritical) this.attackRollModifierTracker.critical.setOverride(!!hitCheck.isCritical, "checkHitTarget", "midi-qol.premades.checkHitTarget");
+      if (hitCheck.isFumble !== this.isFumble) this.attackRollModifierTracker.fumble.setOverride(!!hitCheck.isFumble, "checkHitTarget", "midi-qol.premades.checkHitTarget");
+      if (typeof hitCheck.targetAC === "number" && !Number.isNaN(hitCheck.targetAC)) targetAC = hitCheck.targetAC;
+      const retest = targetAC !== acBefore || this.isCritical !== criticalBefore;
+      if (hitCheck.isHit !== isHit || hitCheck.isHitEC !== isHitEC) {
+        isHit = !!hitCheck.isHit;
+        isHitEC = !!hitCheck.isHitEC;
+      } else if (retest && !forcedResult) {
+        isHit = isFinite(targetAC) && (attackTotal + attackBonus >= targetAC || this.isCritical);
+        if (challengeModeArmorSet) isHit = isFinite(targetAC) && (this.attackTotal > targetAC || this.isCritical);
+        if (targetEC) isHitEC = challengeModeArmorSet && this.attackTotal <= targetAC && this.attackTotal >= targetEC && isFinite(targetAC);
+      }
+      if (retest) hitResultNumeric = this.isCritical ? "++" : !isFinite(targetAC) ? `${attackTotal}/∞` : `${attackTotal}/${Math.abs(attackTotal - targetAC)}`;
+      if (isHit) this.hitTargets = this.hitTargets.add(targetToken);
       if (isHitEC) this.hitTargetsEC = this.hitTargetsEC.add(targetToken);
       if (isHit || isHitEC) await this.processCriticalFlags();
       // acBonus flag is no longer set by computeCoverBonus — nothing to clear.
@@ -7478,17 +8072,10 @@ return {
       }
       let hitStyle = "";
 
-      let img = targetToken.document.texture.src || targetToken.actor?.img || "";
-      // @ts-expect-error no dnd5e-types
-      if (configSettings.usePlayerPortrait && targetToken.actor?.type === "character") {
-        img = targetToken.actor?.img || targetToken.document.texture.src || "";
-      }
-      if (foundry.helpers.media.VideoHelper.hasVideoExtension(img ?? "")) {
-        img = await game.video?.createThumbnail(img ?? "", { width: 100, height: 100 }) ?? "";
-      }
+      const img = await tokenPortrait(targetDocument);
 
       if (this.isFumble) hitResultNumeric = "--";
-      const targetUuid = targetToken.document.uuid;
+      const targetUuid = targetDocument.uuid;
 
       const effectiveAC = targetAC - attackBonus;
       const acDisplay = !isFinite(targetAC) ? "∞" : `${effectiveAC}`;
@@ -7517,18 +8104,6 @@ return {
         }
       }
 
-      const isMeleeAction = ["mwak", "msak"].includes(this.activity?.actionType ?? "");
-      if (flankingACMod > 0 && isMeleeAction) {
-        const flankingMode = checkRule("checkFlanking") as string;
-        const isFlankedMode = ["ceflanked", "ceflankedNoconga", "midiFlanked", "midiFlankedNoConga"].includes(flankingMode);
-        acIcons.push({
-          img: isFlankedMode ? "modules/midi-qol/icons/encirclement.svg" : "icons/svg/sword.svg",
-          tooltip: `-${flankingACMod}: ${isFlankedMode ? i18n("midi-qol.Flanked") : i18n("midi-qol.Flanking")}`,
-          cssClass: "midi-qol-ac-icon-img"
-        });
-        acTooltipParts += ` -${flankingACMod}`;
-      }
-
       if (reactionACDelta) {
         acIcons.push({ img: "modules/midi-qol/icons/reaction.svg", tooltip: `${reactionACDelta > 0 ? "+" : ""}${reactionACDelta}: ${i18n("DND5E.Reaction")}: ${reactionItemName}`, cssClass: "midi-qol-ac-icon", useDnd5eIcon: true });
         acTooltipParts += ` ${reactionACDelta > 0 ? "+" : ""}${reactionACDelta}`;
@@ -7537,7 +8112,8 @@ return {
       if (attackBonus) {
         const grantsFlagKey = `flags.${MODULE_ID}.grants.attack.bonus`;
         const grantsEffectNames = targetActor.allApplicableEffects()
-          .filter(e => !e.disabled && e.changes?.some(c => c.key.startsWith(grantsFlagKey)))
+          // @ts-expect-error fvtt-types v14 ActiveEffect
+          .filter(e => !e.disabled && e.system.changes?.some(c => c.key.startsWith(grantsFlagKey)))
           .map(e => e.name)
           .toArray();
         if (grantsEffectNames.length) {
@@ -7554,7 +8130,7 @@ return {
 
       this.hitDisplayData[targetUuid] = {
         targetClass: !!targetToken.actor?.hasPlayerOwner ? "midi-qol-player-target" : "midi-qol-npc-target",
-        target: targetToken,
+        target: hookTarget(targetToken),
         actorUuid: targetToken.actor?.uuid,
         uuid: targetUuid,
         hitStyle,
@@ -7572,25 +8148,58 @@ return {
         showAC: true,
         img,
         gmName: getTokenName(targetToken),
-        playerName: getTokenPlayerName(targetToken.document) ?? "",
         hitResultNumeric,
         attackTotal,
         isHit: ["hit", "critical", "isHitEC"].includes(isHitResult)
       };
     }
-    if (configSettings.allowUseMacro && !options.noTargetOnUseMacro) await this.triggerTargetMacros(["isHit"], new Set([...this.hitTargets, ...this.hitTargetsEC]));
+    if (configSettings.allowUseMacro && !options.noTargetOnUseMacro) await this.triggerTargetMacros(["isHit"], this.hitTargets.union(this.hitTargetsEC));
     if (configSettings.allowUseMacro && !options.noTargetOnUseMacro) await this.triggerTargetMacros(["isMissed"], this.targets.difference(this.hitTargets).difference(this.hitTargetsEC));
-    this.hitTargets = this.hitTargets; // force update
-    this.hitTargetsEC = this.hitTargetsEC; // force update
-    this.persistAttackTracker();
+    this.#persistAttackTracker();
+  }
+
+  /** Link a card roll to the card as dnd5e links the rolls it posts (Roll#getOriginatingMessage, options.rollType). */
+  #linkRollToCard(roll: Roll, rollType: "attack" | "damage") {
+    if (this.itemCardId) foundry.utils.setProperty(roll, "options.originatingMessage", this.itemCardId);
+    const type = rollType === "damage" && this.activity?.type === "heal" ? "healing" : rollType;
+    if (!foundry.utils.getProperty(roll, "options.rollType")) foundry.utils.setProperty(roll, "options.rollType", type);
+  }
+
+  /**
+   * Run one of dnd5e's rolls for `subject`, keeping the flags other modules put on its message config: midi rolls without
+   * dnd5e's messages, so they go on the card with its next roll update (midi's, dnd5e's and core's left out). dnd5e
+   * rolls on a copy of the message config.
+   */
+  async keepRollMessageFlags<T>(subject: unknown, roll: () => Promise<T>): Promise<T> {
+    const id = Hooks.on("dnd5e.postRollConfiguration", (_rolls, config, _dialog, message) => {
+      if ((config as { subject?: unknown }).subject === subject) this.addRollMessageFlags(message as { data?: Record<string, unknown> });
+    });
+    try { return await roll(); } finally { Hooks.off("dnd5e.postRollConfiguration", id); }
+  }
+
+  addRollMessageFlags(message: { data?: Record<string, unknown> } | undefined) {
+    const data: { flags?: Record<string, unknown> } = foundry.utils.expandObject(message?.data ?? {});
+    const flags = data.flags;
+    if (!flags) return;
+    for (const [scope, value] of Object.entries(flags)) {
+      if ([MODULE_ID, "dnd5e", "core"].includes(scope) || !value || typeof value !== "object") continue;
+      this.#rollMessageFlags[scope] = foundry.utils.mergeObject(this.#rollMessageFlags[scope] ?? {}, value, { inplace: false });
+    }
+  }
+  #rollMessageFlags: Record<string, object> = {};
+
+  /** A card update carrying the kept roll message flags; midi's own flags in the update win. */
+  #withRollMessageFlags<T extends Record<string, unknown>>(updates: T): T {
+    if (!Object.keys(this.#rollMessageFlags).length) return updates;
+    const flags = foundry.utils.mergeObject(foundry.utils.deepClone(this.#rollMessageFlags), (updates.flags as object) ?? {}, { inplace: false });
+    return { ...updates, flags };
   }
 
   async setAttackRoll(roll: Roll) {
     this.attackRoll = roll;
     foundry.utils.setProperty(roll, "options.midi-qol.rollType", "attack");
+    this.#linkRollToCard(roll, "attack");
     this.attackTotal = roll.total ?? 0;
-    // foundry.utils.setProperty(roll, "options.flavor", `${this.otherDamageItem.name} - ${i18nSystem("Bonus")}`);
-    this.attackRollHTML = await midiRenderAttackRoll(roll);
   }
 
   async setUtilityRolls(rolls: Array<Roll> | Roll | undefined | null) {
@@ -7600,11 +8209,7 @@ return {
     };
     if (rolls instanceof Roll) rolls = [rolls];
     this.utilityRolls = rolls;
-    this.utilityRollHTML = "";
-    for (let roll of this.utilityRolls) {
-      foundry.utils.setProperty(roll, `options.${MODULE_ID}.rollType`, "utility");
-      this.utilityRollHTML += await midiRenderFormulaRoll(roll);
-    }
+    for (let roll of this.utilityRolls) foundry.utils.setProperty(roll, `options.${MODULE_ID}.rollType`, "utility");
   }
 
   setUtilityRoll(roll: Roll) {
@@ -7641,17 +8246,36 @@ return {
     if (rolls instanceof Roll) rolls = [rolls];
     if (!this.damageRolls) this.damageRolls = [];
     this.damageRolls = this.damageRolls.concat(rolls.map(roll => this.convertRollToDamageRoll(roll)));
-    this.damageTotal = sumRolls(this.damageRolls, "positive")
-    this.healingAdjustedDamageTotal = sumRolls(this.damageRolls, "negativeIgnoreTemp")
-    this.damageRollHTML = "";
     for (let roll of this.damageRolls) {
       foundry.utils.setProperty(roll, `options.${MODULE_ID}.rollType`, "defaultDamage");
+      this.#linkRollToCard(roll, "damage");
       foundry.utils.setProperty(roll, "options.flavor", "");
-      this.damageRollHTML += await midiRenderDamageRoll(roll);
     }
-    this.rawDamageDetail = createDamageDetail({ roll: this.damageRolls, activity: this.activity, defaultType: this.defaultDamageType });
+    this.deriveDamage();
     this.damageDetail = foundry.utils.deepClone(this.rawDamageDetail);
     return;
+  }
+
+  /** Totals and detail from the damage rolls; also how a rebuilt workflow gets them back */
+  deriveDamage() {
+    this.damageTotal = sumRolls(this.damageRolls, "positive");
+    this.rawDamageDetail = createDamageDetail({ roll: this.damageRolls, activity: this.activity, defaultType: this.defaultDamageType });
+  }
+
+  deriveBonusDamage() {
+    const rolls = this.bonusDamageRolls ?? [];
+    this.bonusDamageTotal = sumRolls(rolls, "positive");
+    this.rawBonusDamageDetail = createDamageDetail({ roll: rolls, activity: this.activity, defaultType: this.defaultDamageType });
+  }
+
+  deriveOtherDamage() {
+    const rolls = this.otherDamageRolls ?? [];
+    this.otherDamageTotal = sumRolls(rolls, "positive");
+    const isAmmunition = (roll: Roll) => !!foundry.utils.getProperty(roll, `options.${MODULE_ID}.ammunition`);
+    const detailOf = (rolls: Roll[]) => rolls.length ? createDamageDetail({ roll: rolls, activity: this.activity, defaultType: this.defaultDamageType }) : [];
+    // The ammunition's damage marked as such
+    this.rawOtherDamageDetail = detailOf(rolls.filter(roll => !isAmmunition(roll)))
+      .concat(detailOf(rolls.filter(isAmmunition)).map(d => ({ ...d, midiAmmunition: true })));
   }
 
   async setDamageRolls(rolls: Array<Roll> | Roll | undefined | null) {
@@ -7661,7 +8285,6 @@ return {
     };
 
     if (rolls instanceof Roll) rolls = [rolls];
-    // @ts-expect-error no dnd5e-types
     const baseRollProperties = rolls[0]?.options?.properties ?? [];
     rolls.forEach(roll => {
       setRollOperatorEvaluated(roll);
@@ -7673,21 +8296,16 @@ return {
       if (!rolls[i]._evaluated) rolls[i] = await rolls[i].evaluate();
     }
     for (let i = 1; i < rolls.length; i++) {
-      // @ts-expect-error no dnd5e-types
       foundry.utils.setProperty(rolls[i], "options.properties", (rolls[i].options?.properties ?? []).concat(baseRollProperties));
     }
     this.damageRolls = rolls;
-    this.damageTotal = sumRolls(this.damageRolls, "positive")
-    this.healingAdjustedDamageTotal = sumRolls(this.damageRolls, "negativeIgnoreTemp")
-    this.damageRollHTML = "";
     for (let roll of this.damageRolls) {
       foundry.utils.setProperty(roll, `options.${MODULE_ID}.rollType`, "defaultDamage");
+      this.#linkRollToCard(roll, "damage");
       foundry.utils.setProperty(roll, "options.flavor", "");
-
-      this.damageRollHTML += await midiRenderDamageRoll(roll);
     }
     this.flavor = i18n("DND5E.Damage");
-    this.rawDamageDetail = createDamageDetail({ roll: this.damageRolls, activity: this.activity, defaultType: this.defaultDamageType });
+    this.deriveDamage();
     this.damageDetail = foundry.utils.deepClone(this.rawDamageDetail);
     return;
   }
@@ -7709,14 +8327,11 @@ return {
       if (!rolls[i]._evaluated) rolls[i] = await rolls[i].evaluate();
     }
     this.bonusDamageRolls = rolls;
-    this.bonusDamageTotal = sumRolls(this.bonusDamageRolls, "positive");
-    this.healingAdjustedBonusDamageTotal = sumRolls(this.bonusDamageRolls, "negativeIgnoreTemp");
-    this.bonusDamageRollHTML = "";
     for (let roll of this.bonusDamageRolls) {
       foundry.utils.setProperty(roll, `options.${MODULE_ID}.rollType`, "bonusDamage");
-      this.bonusDamageRollHTML += await midiRenderBonusDamageRoll(roll);
+      this.#linkRollToCard(roll, "damage");
     }
-    this.rawBonusDamageDetail = createDamageDetail({ roll: this.bonusDamageRolls, activity: this.activity, defaultType: this.defaultDamageType });
+    this.deriveBonusDamage();
     this.bonusDamageDetail = foundry.utils.deepClone(this.rawBonusDamageDetail);
     return;
   }
@@ -7742,14 +8357,11 @@ return {
       if (!rolls[i]._evaluated) rolls[i] = await rolls[i].evaluate();
     }
     this.otherDamageRolls = rolls;
-    this.otherDamageTotal = sumRolls(this.otherDamageRolls, "positive");
-    this.healingAdjustedOtherDamageTotal = sumRolls(this.otherDamageRolls, "negativeIgnoreTemp");
-    this.otherDamageRollHTML = "";
     for (let roll of this.otherDamageRolls) {
       foundry.utils.setProperty(roll, `options.${MODULE_ID}.rollType`, "otherDamage");
-      this.otherDamageRollHTML += await midiRenderOtherDamageRoll(roll);
+      this.#linkRollToCard(roll, "damage");
     }
-    this.rawOtherDamageDetail = createDamageDetail({ roll: this.otherDamageRolls, activity: this.activity, defaultType: this.defaultDamageType });
+    this.deriveOtherDamage();
     this.otherDamageDetail = foundry.utils.deepClone(this.rawOtherDamageDetail);
     return;
   }
@@ -7764,6 +8376,7 @@ return {
         warn(`chooseEffect | no effects found for ${this.item.name}`);
       return [];
     }
+    await this.flushCardWrites(); // a person decides next
     const { DialogV2 } = foundry.applications.api;
     const buttons = effects.map(effect => ({
       action: effect.uuid,
@@ -7796,12 +8409,12 @@ export class SavesFirstWorkflow extends Workflow {
     return this.WorkflowState_WaitForSaves;
   }
 
-  async WorkflowState_WaitForSaves(context: WorkflowContext = {}): Promise<WorkflowState> {
-    await super.WorkflowState_WaitForSaves(context);
+  async WorkflowState_WaitForSaves(): Promise<WorkflowState> {
+    await super.WorkflowState_WaitForSaves();
     return this.WorkflowState_SavesComplete;
   }
 
-  async WorkflowState_SavesComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_SavesComplete(): Promise<WorkflowState> {
     expireMyEffects.bind(this)(["1Action", "1Spell"]);
     if (configSettings.allowUseMacro && this.workflowOptions.noOnUseMacro !== true) {
       await this.callMacros(this.item, this.onUseMacros?.getMacros("postSave"), "OnUse", "postSave");
@@ -7810,48 +8423,48 @@ export class SavesFirstWorkflow extends Workflow {
     const hasDamageRoll = this.activity.hasDamage || this.otherActivity?.hasDamage || this.activity.hasHealing || this.otherActivity?.hasHealing;
     if (!hasDamageRoll) return this.WorkflowState_AllRollsComplete;
     if (getAutoRollDamage(this) === "always") return this.WorkflowState_WaitForDamageRoll;
-    const noHits = this.hitTargets.size === 0 && this.hitTargetsEC.size === 0;
-    const allMissed = noHits && this.targets.size !== 0;
+    const noHits = this.hitTargets.count === 0 && this.hitTargetsEC.count === 0;
+    // With hits not checked there are no hit targets, which is not a miss.
+    const allMissed = configSettings.autoCheckHit !== "none" && noHits && this.targets.count !== 0;
+    if (!allMissed && this.outcome === "allMissed") this.outcome = "ok"; // a re-rolled attack that hits
     if (allMissed) {
+      this.outcome = "allMissed";
       if (configSettings.confirmAttackDamage !== "none" && !this.workflowOptions.forceCompletion)
         return this.WorkflowState_ConfirmRoll;
       if (this.workflowOptions.forceCompletion || configSettings.autoCompleteWorkflow) {
-        expireMyEffects.bind(this)(["1Attack", "1Action", "1Spell"])
-        return this.WorkflowState_RollFinished;
+        expireMyEffects.bind(this)(["1Attack", "1Action", "1Spell", "1Critical", "1Fumble"])
+        // Nothing to roll, but the effects stage still runs: "apply to self always" effects, its macro passes and hooks
+        return this.WorkflowState_ApplyDynamicEffects;
       }
     }
     return this.WorkflowState_WaitForDamageRoll;
   }
 
-  async WorkflowState_WaitForDamageRoll(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (context.damageRoll || context.otherDamageRoll) {
-      // record the data - currently done in item handling
-      return this.WorkflowState_ConfirmRoll;
-    }
+  async WorkflowState_WaitForDamageRoll(): Promise<WorkflowState> {
     const hasDamageRoll = this.activity.hasDamage || this.otherActivity?.hasDamage || this.activity.hasHealing || this.otherActivity?.hasHealing;
     if (!hasDamageRoll) return this.WorkflowState_AllRollsComplete;
-    return super.WorkflowState_WaitForDamageRoll(context);
+    return super.WorkflowState_WaitForDamageRoll();
   }
 
-  async WorkflowState_DamageRollComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
-    await super.WorkflowState_DamageRollComplete(context);
+  async WorkflowState_DamageRollComplete(): Promise<WorkflowState> {
+    await super.WorkflowState_DamageRollComplete();
     return this.WorkflowState_AllRollsComplete;
   }
 }
 
 export class ActiveDefenceWorkflow extends Workflow {
-  async WorkflowState_WaitForAttackRoll(context?: WorkflowContext): Promise<WorkflowState> {
+  async WorkflowState_WaitForAttackRoll(): Promise<WorkflowState> {
     this.workflowOptions.attackRollDSN = false;
-    return super.WorkflowState_WaitForAttackRoll(context);
+    return super.WorkflowState_WaitForAttackRoll();
   }
   async processAttackRoll() {
     return super.processAttackRoll();
   }
 
-  async WorkflowState_AttackRollComplete(context?: WorkflowContext): Promise<WorkflowState> {
+  async WorkflowState_AttackRollComplete(): Promise<WorkflowState> {
     const attackBonus = (this.attackRoll?.total ?? 0) - (this.attackRoll?.dice[0]?.total ?? 0); // TODO see if there is a better way to work out roll plusses
     this.activeDefenceDC = configSettings.optionalRules.activeDefenceModifier + attackBonus;
-    return super.WorkflowState_AttackRollComplete(context);
+    return super.WorkflowState_AttackRollComplete();
   }
 
   async checkHits() {
@@ -7876,9 +8489,9 @@ export class ActiveDefenceWorkflow extends Workflow {
 
       await this.displayAttackRoll();
       await this.checkActiveAttacks(false, this.attackRoll);
-      this.hitTargets = this.hitTargets; // force update
       const isHitEC = false;
-      for (let targetToken of this.targets) {
+      // Active defence: the drawn targets (cover, the player asked to roll)
+      for (let targetToken of this.targets.tokens) {
         let targetAC: number | undefined;
         let adRoll: Roll | undefined;
         const targetTokenDocument = getTokenDocument(targetToken);
@@ -7927,14 +8540,7 @@ export class ActiveDefenceWorkflow extends Workflow {
           }
           let hitStyle = "";
 
-          let img = targetTokenDocument.texture.src || targetTokenDocument.actor?.img;
-          // @ts-expect-error no dnd5e-types
-          if (configSettings.usePlayerPortrait && targetTokenDocument.actor?.type === "character") {
-            img = targetTokenDocument.actor?.img || targetTokenDocument.texture.src;
-          }
-          if (foundry.helpers.media.VideoHelper.hasVideoExtension(img ?? "")) {
-            img = await game.video?.createThumbnail(img ?? "", { width: 100, height: 100 }) ?? "";
-          }
+          const img = await tokenPortrait(targetTokenDocument);
           // Why?
           let acBonusString: string | undefined;
           const acDisplay = `${adRoll.total}${acBonusString ?? ""}`;
@@ -7945,7 +8551,7 @@ export class ActiveDefenceWorkflow extends Workflow {
           this.hitDisplayData ??= {};
           this.hitDisplayData[targetUuid] = {
             targetClass: !!targetTokenDocument.actor?.hasPlayerOwner ? "midi-qol-player-target" : "midi-qol-npc-target",
-            target: targetToken,
+            target: hookTarget(targetToken),
             actorUuid: targetTokenDocument.actor?.uuid,
             uuid: targetUuid,
             hitStyle,
@@ -7961,7 +8567,6 @@ export class ActiveDefenceWorkflow extends Workflow {
             img: img as string ?? "",
             isHit,
             gmName: getTokenName(targetTokenDocument),
-            playerName: getTokenPlayerName(targetTokenDocument) ?? "",
             hitResultNumeric: String(adRoll.total),
             attackTotal: adRoll.total
           };
@@ -7979,7 +8584,7 @@ export class ActiveDefenceWorkflow extends Workflow {
     //@ts-expect-error
     const BasicRoll = CONFIG.Dice.BasicRoll;
     if (debugEnabled > 1) debug(`active defence : whisper ${whisper}  hit targets ${this.targets}`)
-    if (this.targets.size <= 0) {
+    if (this.targets.count <= 0) {
       return;
     }
     //@ts-expect-error no dnd5e types
@@ -7989,11 +8594,13 @@ export class ActiveDefenceWorkflow extends Workflow {
     const fumbleTarget = 20 - (roll.options.criticalSuccess ?? 20) + 1;
     let advantageMode = roll?.options?.advantageMode ?? D20Roll.NORMAL;
     let promises: Promise<any>[] = [];
-    for (let target of this.targets) {
+    // Active defence rolls are for the drawn targets; results are read back in the same order below
+    for (let target of this.targets.tokens) {
       if (!target.actor) continue;  // no actor means multi levels or bugged actor - but we won't roll a save
       const targetActor = target.actor;
       const targetActorSystem = target.actor.system;
-      const midiFlagsAttackBonus = targetActor.flags?.[MODULE_ID]?.grants?.attack?.bonus;
+      // Already in the attack roll for a single target (attackRollParts)
+      const midiFlagsAttackBonus = this.grantedAttackBonusInRollUuid === targetActor.uuid ? undefined : targetActor.flags?.[MODULE_ID]?.grants?.attack?.bonus;
 
       // TODO: Add in AC Bonus for cover
       // @ts-expect-error no dnd5e-types
@@ -8073,8 +8680,24 @@ export class ActiveDefenceWorkflow extends Workflow {
       // if (!player || !player.active) player = ChatMessage.getWhisperRecipients("GM").find(u => u.active);
       if (debugEnabled > 0) warn(`checkSaves | Player ${player?.name} controls actor ${target.actor.name} - requesting DC ${this.activeDefenceDC} save`);
       if (player && player.active && !player.isGM && target.actor) {
-        promises.push(new Promise((resolve) => {
-          const requestId = target.actor?.uuid ?? foundry.utils.randomID();
+        const requestId = target.actor.uuid ?? foundry.utils.randomID();
+        // As the player's own defence roll would have been shown (Active Defence roll display, whispered to them unless blind)
+        const rollForThem = async () => {
+          const result = await (new D20Roll(formula, {}, options)).evaluate();
+          result.toMessage({ flavor: `${this.item.name} ${i18n("midi-qol.ActiveDefenceString")}`, speaker: ChatMessage.getSpeaker({ actor: target.actor }),
+            flags: { [MODULE_ID]: { rollFor: player.id } } }, { messageMode: toMessageMode((checkRule("activeDefenceShow") as string) || "self") });
+          return result;
+        };
+        promises.push(trackPlayerWait({
+          kind: "defence", userId: player.id!, actorUuid: target.actor.uuid, tokenUuid: getTokenDocument(target)?.uuid,
+          label: i18nFormat("midi-qol.PlayerWaits.DefenceLabel", { item: this.item?.name ?? "" }),
+          choices: { roll: rollForThem },
+          onSettled: () => {
+            delete this.defenceRequests[requestId];
+            clearTimeout(this.defenceTimeouts[requestId]);
+            delete this.defenceTimeouts[requestId];
+          }
+        }, () => new Promise((resolve) => {
           this.defenceRequests[requestId] = resolve;
           if (player) requestPCActiveDefence(player, target.actor!, this.item.name, requestId, { formula, rollOptions: options, bonus: dcMod, coverBonus, workflow: this })
           // set a timeout for taking over the roll
@@ -8089,12 +8712,12 @@ export class ActiveDefenceWorkflow extends Workflow {
               }
             }, configSettings.playerSaveTimeout * 1000);
           }
-        }));
+        })));
       } else {  // must be a GM so can do the roll direct
         promises.push(
           new Promise(async (resolve) => {
             const result = await (new D20Roll(formula, {}, options)).evaluate();
-            result.toMessage({ flavor: `${this.item.name} ${i18n("midi-qol.ActiveDefenceString")} ${options.criticalSuccess}/${options.criticalFailure}` }, { rollMode: configSettings.optionalRules.activeDefenceShow });
+            result.toMessage({ flavor: `${this.item.name} ${i18n("midi-qol.ActiveDefenceString")} ${options.criticalSuccess}/${options.criticalFailure}` }, { messageMode: toMessageMode(configSettings.optionalRules.activeDefenceShow) });
             // displayDSNForRoll(result, "attackRoll")
             resolve(result);
           })
@@ -8103,10 +8726,8 @@ export class ActiveDefenceWorkflow extends Workflow {
     }
     if (debugEnabled > 1) debug("check saves: requests are ", this.saveRequests)
     var results = await Promise.all(promises);
-
-    this.rollResults = results;
     let i = 0;
-    for (let target of this.targets) {
+    for (let target of this.targets.tokens) {
       if (!target.actor) continue; // these were skipped when doing the rolls so they can be skipped now
       if (!results[i]) {
         const message = `Token ${target?.name} ${getTokenDocument(target)?.uuid}, "could not roll active defence assuming 1`;
@@ -8163,7 +8784,6 @@ export class ActiveDefenceWorkflow extends Workflow {
         this.hitTargets = this.hitTargets.add(target);
       else {
         this.hitTargets.delete(target);
-        this.hitTargets = this.hitTargets;
       }
       if (game.user?.isGM) log(`Active defence: ${target.name} rolled ${rollTotal} vs attack DC ${this.activeDefenceDC}`, results[i]);
       i++;
@@ -8171,27 +8791,10 @@ export class ActiveDefenceWorkflow extends Workflow {
   }
 
   async displayAttackRoll() {
-    const chatMessage = this.chatCard;
-    let newFlags = {};
-    const searchRe = /<div[^>]*?class="midi-qol-attack-roll[^"]*"[\s\S]*?<div class="end-midi-qol-attack-roll">/;
-    let DCString = "DC";
-    DCString = i18n("DND5E.AbbreviationDC") ?? "DC";
+    const DCString = i18n("DND5E.AbbreviationDC") ?? "DC";
     const attackString = `<label class="midi-qol-active-defence-dc">${DCString} ${this.activeDefenceDC}</label> ${i18n("midi-qol.ActiveDefenceString")}`;
-    const replaceString = `<div class="midi-qol-attack-roll midi-qol-section-filled"><div class="midi-roll-label">${attackString}</div><div class="end-midi-qol-attack-roll">`;
-    let content = chatMessage?.content.replace(searchRe, replaceString) ?? "";
-    newFlags = {
-      "midi-qol":
-      {
-        isHit: this.hitTargets.size > 0,
-        isHitEC: this.hitTargetsEC.size > 0,
-        isCritical: this.isCritical,
-        isFumble: this.isFumble,
-        targets: Array.from(this.targets).map(t => ({ uuid: getTokenDocument(t)?.uuid, name: getTokenDocument(t)?.name })),
-        hitTargetUuids: Array.from(this.hitTargets).map(t => getTokenDocument(t)?.uuid),
-        hitECTargetUuids: Array.from(this.hitTargetsEC).map(t => getTokenDocument(t)?.uuid),
-      }
-    };
-    await this.performThrottledUpdate(chatMessage, { content, flags: newFlags, rolls: this.chatRolls });
+    const section = { label: attackString, html: "" };
+    await this.setCardSection("attack", section);
   }
 }
 export class UserWorkflow extends Workflow {
@@ -8199,7 +8802,12 @@ export class UserWorkflow extends Workflow {
 }
 
 export class DamageOnlyWorkflow extends Workflow {
-  itemCard: ChatMessage.Implementation | undefined;
+  /** @deprecated use itemCardUuid */
+  get itemCard(): ChatMessage.Implementation | undefined {
+    foundry.utils.logCompatibilityWarning("midi-qol | DamageOnlyWorkflow#itemCard is deprecated and will be removed in 14.8.0: use itemCardUuid.", { since: "14.6.9", until: "14.8.0", once: true });
+    return this.itemCardUuid ? fromUuidSync(this.itemCardUuid) as ChatMessage.Implementation | undefined : undefined;
+  }
+  ready!: Promise<void>;
   constructor(
     actor: Actor.Implementation | null,
     token: Token.Implementation,
@@ -8212,7 +8820,8 @@ export class DamageOnlyWorkflow extends Workflow {
       itemCardId: string,
       itemCardUuid: string,
       damageList: DamageListEntry[],
-      useOther: boolean,
+      /** The damage is the workflow's other damage */
+      useOther?: boolean,
       itemData: Item.Source,
       isCritical: boolean,
       item?: Item,
@@ -8220,7 +8829,8 @@ export class DamageOnlyWorkflow extends Workflow {
     }) {
     if (options.storeWorkflow === undefined) options.storeWorkflow = true;
     if (!actor) actor = token.actor ?? targets[0]?.actor;
-    const theTargets = Array.from(targets).map(t => getToken(t)).filter(t => !!t);
+    // A target that isn't drawn (another level or scene) stays as its document
+    const theTargets = Array.from(targets).map(t => getToken(t) ?? getTokenDocument(t)).filter(t => !!t);
     let damageRoll = roll;
     if (!damageRoll) {
       // @ts-expect-error no dnd5e-types
@@ -8236,7 +8846,6 @@ export class DamageOnlyWorkflow extends Workflow {
             type: "damage",
             _id: foundry.utils.randomID(),
             damage: {
-              // @ts-expect-error no dnd5e-types
               parts: [{ custom: { enabled: true, formula: damageRoll.formula }, types: [damageRoll.options.type] }],
             },
             range: {
@@ -8290,6 +8899,7 @@ export class DamageOnlyWorkflow extends Workflow {
     theItem.prepareFinalAttributes();
     // @ts-expect-error no dnd5e-types
     super(actor, theItem.system.activities.contents[0], ChatMessage.getSpeaker({ token, actor }), new Set(theTargets), { event: shiftOnlyEvent as KeyboardEvent, workflowOptions: { noOnUseMacro: true } });
+    this.damageOnly = true;
     // Do the supplied damageRoll
     this.flavor = options.flavor;
     this.defaultDamageType = GameSystemConfig.damageTypes[damageType]?.label ?? damageType;
@@ -8307,17 +8917,24 @@ export class DamageOnlyWorkflow extends Workflow {
       const message = game.messages?.get(options.itemCardId);
       if (message) this.itemCardUuid = message?.uuid;
     }
-    this.setDamageRolls([damageRoll]).then(() => {
-      this.damageTotal = damageTotal;
+    // On another workflow's card it has no card of its own: an id of its own tags the rolls it adds there (addedBy)
+    if (this.itemCardUuid && this.itemCardUuid !== "new") this.id = foundry.utils.randomID();
+    // Undo is kept by workflow id: one on its own card saves it once the card exists (WorkflowState_Start)
+    if (configSettings.undoWorkflow && this.id) saveUndoData(this);
+    this.useOther = options.useOther ?? false;
+    this.ready = (this.useOther ? this.setOtherDamageRolls([damageRoll]) : this.setDamageRolls([damageRoll])).then(async () => {
+      if (!this.useOther) this.damageTotal = damageTotal;
       this.isCritical = options.isCritical ?? false;
-      this.kickStart = false;
       this.suspended = false;
-      this.performState(this.WorkflowState_Start);
-    })
+      await this.performState(this.WorkflowState_Start);
+    });
     return this;
   }
   static get forceCreate() { return false; }
-  async WorkflowState_Start(context: WorkflowContext = {}): Promise<WorkflowState> {
+  get otherDamageFlavor() {
+    return this.useOther && this.flavor ? this.flavor : super.otherDamageFlavor;
+  }
+  async WorkflowState_Start(): Promise<WorkflowState> {
     this.effectsAlreadyExpired = [];
 
     if (this.itemCardUuid === "new" || !fromUuidSync(this.itemCardUuid)) {
@@ -8325,28 +8942,28 @@ export class DamageOnlyWorkflow extends Workflow {
       const messageConfig = foundry.utils.mergeObject({
         create: true,
         data: {
-          flags: {
-            dnd5e: {
-              ...(this.activity.messageFlags as AnyObject),
-              messageType: "usage",
-              use: {
-                effects: activityEffectReferences(this.activity)
-              }
-            }
-          },
+          system: { effects: this.activity?.applicableEffects?.map(e => e.relativeUUID) },
           rolls: this.damageRolls,
+          // The synthetic item is on no actor: the card keeps it (getAssociatedItem), so the workflow can be rebuilt
+          flags: { [MODULE_ID]: { itemData: this.item?.toObject() } }
         },
         hasConsumption: false
       }, message);
       // @ts-expect-error no dnd5e-types
-      this.itemCard = await this.activity._createUsageMessage(messageConfig);
-      this.itemCardUuid = this.itemCard?.uuid;
+      const itemCard = await this.activity._createUsageMessage(messageConfig);
+      // Its own card: filed under it, its state and records stored there
+      if (itemCard) {
+        this.id = itemCard.uuid;
+        this.itemCardUuid = itemCard.uuid;
+        Workflow.addWorkflow(this);
+        if (configSettings.undoWorkflow) await saveUndoData(this);
+      }
     }
-    const whisperCard = configSettings.autoCheckHit === "whisper" || safeGetGameSetting("core", "rollMode") === getRollModes().BLIND;
+    const whisperCard = configSettings.autoCheckHit === "whisper" || safeGetGameSetting("core", "messageMode") === "blind";
     if (this.actor) { // Hacky process bonus flags
       // TODO come back and fix this for dnd3
-      const newRolls = await this.processDamageRollBonusFlags(this.damageRolls);
-      await this.setDamageRolls(newRolls);
+      if (this.useOther) await this.setOtherDamageRolls(await this.processDamageRollBonusFlags(this.otherDamageRolls ?? []));
+      else await this.setDamageRolls(await this.processDamageRollBonusFlags(this.damageRolls));
     }
 
     if (this.itemCardUuid) {
@@ -8354,15 +8971,16 @@ export class DamageOnlyWorkflow extends Workflow {
       this.attackTotal = 9999;
       this.recordTargetACModifiers();
       await this.checkHits(this.workflowOptions);
-      this.hitTargets = new Set(this.targets);
-      await this.displayHits(whisperCard, false);
+      this.hitTargets = new TokenDocumentSet(this.targets);
+      // Another workflow's card keeps its hits and targets: only the damage is added
+      if (this.ownsCard) await this.displayHits(whisperCard, false);
       await this.displayDamageRolls();
     } else {
       await this.damageRoll?.toMessage({ flavor: this.flavor });
     }
-    this.hitTargets = new Set(this.targets);
+    this.hitTargets = new TokenDocumentSet(this.targets);
     this.hitTargetsEC = new Set();
-    this.effectTargets = new Set(this.targets);
+    this.effectTargets = new TokenDocumentSet(this.targets);
     // TODO change this to the new apply token damage call - sigh
     //this.damageList = await applyTokenDamage(this.rawDamageDetail, this.damageTotal, this.targets, this.item, new Set(), { existingDamage: this.damageList, superSavers: new Set(), semiSuperSavers: new Set(), workflow: this, updateContext: undefined, forceApply: false })
     const result = await this.WorkflowState_AllRollsComplete()
@@ -8373,7 +8991,6 @@ export class DamageOnlyWorkflow extends Workflow {
 export class TrapWorkflow extends Workflow {
   templateLocation: { x: number, y: number, direction?: number, removeDelay?: number } | undefined;
   saveTargets: any;
-  onUseMacroCalled: boolean | undefined;
   targetsPassedToConstructor: boolean;
   static get forceCreate() { return false; }
   constructor(
@@ -8401,7 +9018,6 @@ export class TrapWorkflow extends Workflow {
     this.rollOptions.event = undefined;
     this.rollOptions.fastForwardAttack = true;
     this.rollOptions.fastForwardDamage = true;
-    this.kickStart = false;
     this.suspended = false;
     // @ts-expect-error no dnd5e-types
     this.activity.use({ configure: false, workflow: this, midiOptions: { workflowOptions: this.workflowOptions } }, {}, {})
@@ -8411,15 +9027,14 @@ export class TrapWorkflow extends Workflow {
 
   get workflowType() { return "TrapWorkflow" }
 
-  async WorkflowState_Start(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_Start(): Promise<WorkflowState> {
     this.saveTargets = validTargetTokens(new Set(game.user?.targets));
     this.effectsAlreadyExpired = [];
-    this.onUseMacroCalled = false;
     if (debugEnabled > 1) debug(" Trapworkflow | WorkflowState_Start ", this.item, getActivityAutoTargetAction(this.activity), activityHasAreaTarget(this.activity), this.targets);
     // don't support the placement of a template
     return this.WorkflowState_AwaitTemplate
   }
-  async WorkflowState_AwaitTemplate(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_AwaitTemplate(): Promise<WorkflowState> {
     if (activityHasEmanationNoTemplate(this.activity)) {
       // Targets have already been set in activity.use
       return this.WorkflowState_TemplatePlaced;
@@ -8427,56 +9042,49 @@ export class TrapWorkflow extends Workflow {
     if (!activityHasAreaTarget(this.activity) || !this.templateLocation) {
       return this.WorkflowState_TemplatePlaced;
     }
-    if (usesSystemChatData()) {
-      const regions = await createActivityRegions(this.activity, this.templateLocation);
-      await this.processPlacedTemplates(regions, this.activity);
-      if (this.templateLocation.removeDelay) setTimeout(() => {
-        regions.forEach(region => region.delete());
-      }, this.templateLocation.removeDelay * 1000);
-      return this.WorkflowState_TemplatePlaced;
-    }
-    //@ts-expect-error no dnd5e-types
-    const TemplateClass = game.system.canvas.AbilityTemplate;
-    const abilityTemplates = TemplateClass.fromActivity(this.activity);
-    const templateData: any = abilityTemplates[0].document.toObject(false);
-    // template.draw();
-    // get the x and y position from the trapped token
-    templateData.x = this.templateLocation?.x || 0;
-    templateData.y = this.templateLocation?.y || 0;
-    templateData.direction = this.templateLocation?.direction || 0;
-
-    // Create the template
-    let templates = await (canvas.scene as unknown as Scene)?.createEmbeddedDocuments("MeasuredTemplate", [templateData]);
-    if (templates) {
-      for (const tDoc of templates) {
-        if (!tDoc?.uuid) continue;
-        this.templateUuid = tDoc.uuid;
-        await this.setupTemplateCleanup(tDoc as MeasuredTemplateDocument);
+    // Regions directly — the deprecated AbilityTemplate skipped dnd5e's unit conversion, which is
+    // why trap templates came out the wrong size.
+    const templates = await createActivityTemplateRegions(this.activity, [{
+      x: this.templateLocation?.x || 0,
+      y: this.templateLocation?.y || 0,
+      direction: this.templateLocation?.direction || 0
+    }]);
+    if (templates?.length) {
+      for (const docToStore of templates) {
+        if (!docToStore?.uuid) continue;
+        this.templateUuid = docToStore.uuid;
+        await this.setupTemplateCleanup(docToStore);
       }
       this.placedTemplateCount = templates.length;
       this.selectAllTemplateTargets();
       if (this.templateLocation?.removeDelay) {
-        let ids: string[] = templates.map(td => td._id as string)
-        //TODO test this again
-        setTimeout(() => canvas.scene?.deleteEmbeddedDocuments("MeasuredTemplate", ids), this.templateLocation.removeDelay * 1000);
+        const ids: string[] = templates.map(td => td.id as string);
+        // Template cleanup may already have removed them; delete only what is left.
+        setTimeout(() => {
+          const left = ids.filter(id => canvas.scene?.regions.has(id));
+          if (left.length) canvas.scene?.deleteEmbeddedDocuments("Region", left).catch(() => { });
+        }, this.templateLocation.removeDelay * 1000);
       }
     }
     return this.WorkflowState_TemplatePlaced
   }
-  async WorkflowState_TemplatePlaced(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_TemplatePlaced(): Promise<WorkflowState> {
     return this.WorkflowState_ValidateRoll;
   }
-  async WorkflowState_ValidateRoll(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_ValidateRoll(): Promise<WorkflowState> {
     // do pre roll checks
     return this.WorkflowState_WaitForAttackRoll
   }
-  async WorkflowState_WaitForAttackRoll(context: WorkflowContext = {}): Promise<WorkflowState> {
-    // Check if we're being unsuspended after attack roll completed
-    if (context.attackRoll) return this.WorkflowState_AttackRollComplete;
 
+  override stateAfter(event: WorkflowEvent): WorkflowState {
+    if (this.currentAction === this.WorkflowState_WaitForAttackRoll && event === "attackRolled") return this.WorkflowState_AttackRollComplete;
+    if (this.currentAction === this.WorkflowState_WaitForDamageRoll) return event === "damageRolled" ? this.WorkflowState_DamageRollComplete : this.currentAction;
+    return super.stateAfter(event);
+  }
+  async WorkflowState_WaitForAttackRoll(): Promise<WorkflowState> {
     if (!this.activity.attack && !this.activity.hasAttack) {
       // No attack on activity, all targets are hit
-      this.hitTargets = new Set(this.targets);
+      this.hitTargets = new TokenDocumentSet(this.targets);
       this.hitTargetsEC = new Set();
       return this.WorkflowState_WaitForSaves;
     }
@@ -8485,24 +9093,23 @@ export class TrapWorkflow extends Workflow {
     this.activity.rollAttack?.({ workflow: this, midiOptions: { workflowOptions: this.workflowOptions } }, {}, {});
     return this.WorkflowState_Suspend;
   }
-  async WorkflowState_AttackRollComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_AttackRollComplete(): Promise<WorkflowState> {
     await this.processAttackRoll();
     this.recordAttackStats();
     await this.displayAttackRoll();
     this.recordTargetACModifiers();
     await this.checkHits(this.workflowOptions);
-    const whisperCard = configSettings.autoCheckHit === "whisper" || safeGetGameSetting("core", "rollMode") === getRollModes().BLIND;
+    const whisperCard = configSettings.autoCheckHit === "whisper" || safeGetGameSetting("core", "messageMode") === "blind";
     await this.displayHits(whisperCard);
     return this.WorkflowState_WaitForSaves;
   }
   setDescriptorACModifiers() {
     throw new Error("Method not implemented.");
   }
-  async WorkflowState_WaitForSaves(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_WaitForSaves(): Promise<WorkflowState> {
     if (!this.activityHasSave) {
       this.saves = new Set(); // no saving throw, so no-one saves
-      const allHitTargets = new Set([...this.hitTargets, ...this.hitTargetsEC]);
-      this.failedSaves = new Set(allHitTargets);
+      this.failedSaves = this.hitTargets.union(this.hitTargetsEC);
       return this.WorkflowState_WaitForDamageRoll;
     }
     let hookId = Hooks.on("createChatMessage", this.processSaveRoll.bind(this));
@@ -8510,7 +9117,7 @@ export class TrapWorkflow extends Workflow {
     //@ts-expect-error flash-rolls-5e custom hook
     let flashId = Hooks.on("flash-rolls-5e.rollComplete", this.flashSavingCheck.bind(this));
     try {
-      const saveDisplay = (this.activity.saveDisplay ?? "default") === "default" ? configSettings.autoCheckSaves : this.activity.saveDisplay;
+      const saveDisplay = saveDisplayMode();
       await this.checkSaves(saveDisplay !== "allShow");
     } catch (err) {
       TroubleShooter.recordError(err, "checkSaves");
@@ -8521,16 +9128,15 @@ export class TrapWorkflow extends Workflow {
       Hooks.off("flash-rolls-5e.rollComplete", flashId);
     }
     if (debugEnabled > 1) debug("Check Saves: renderChat message hooks length ", Hooks.events["renderChatMessageHTML"]?.length);
-    const saveDisplay = (this.activity.saveDisplay ?? "default") === "default" ? configSettings.autoCheckSaves : this.activity.saveDisplay;
+    const saveDisplay = saveDisplayMode();
     await this.displaySaves(saveDisplay === "whisper");
     return this.WorkflowState_SavesComplete;
   }
-  async WorkflowState_SavesComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_SavesComplete(): Promise<WorkflowState> {
     return this.WorkflowState_WaitForDamageRoll
   }
 
-  async WorkflowState_WaitForDamageRoll(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (context.damageRoll) return this.WorkflowState_DamageRollComplete;
+  async WorkflowState_WaitForDamageRoll(): Promise<WorkflowState> {
     if (!this.activity.hasDamage && !this.activity.hasHealing) return this.WorkflowState_AllRollsComplete;
 
     if (this.isFumble) {
@@ -8542,7 +9148,7 @@ export class TrapWorkflow extends Workflow {
     this.activity.rollDamage({ workflow: this, midiOptions: { ...this.rollOptions, workflowOptions: this.workflowOptions } }, {}, {});
     return this.WorkflowState_Suspend; // wait for a damage roll to advance the state.
   }
-  async WorkflowState_DamageRollComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_DamageRollComplete(): Promise<WorkflowState> {
     // If the item does damage, use the same damage type as the item
     /*
     let defaultDamageType = getActivityDefaultDamageType(this) ?? this.defaultDamageType
@@ -8563,13 +9169,13 @@ export class TrapWorkflow extends Workflow {
     }
     return this.WorkflowState_AllRollsComplete;
   }
-  async WorkflowState_AllRollsComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_AllRollsComplete(): Promise<WorkflowState> {
     if (debugEnabled > 1) debug("all rolls complete ", foundry.utils.duplicate(this.rawDamageDetail))
     if (this.rawDamageDetail?.length) await processDamageRoll(this, this.rawDamageDetail[0].type)
     this.recordDamageStats();
     return this.WorkflowState_ApplyDynamicEffects;
   }
-  async WorkflowState_RollFinished(context: WorkflowContext = {}): Promise<WorkflowState> {
+  async WorkflowState_RollFinished(): Promise<WorkflowState> {
     // area effect trap, put back the targets the way they were
     if (this.saveTargets && activityHasAreaTarget(this.activity)) {
       game.user?.targets.forEach(t => {
@@ -8585,131 +9191,8 @@ export class TrapWorkflow extends Workflow {
   }
 }
 
-export class DDBGameLogWorkflow extends Workflow {
-  DDBGameLogHookId: number | undefined;
-  needsDamage: boolean;
-  needsOtherDamage: boolean | undefined;
-  static get forceCreate() { return false }
-  static get(id: string): DDBGameLogWorkflow | undefined {
-    return Workflow.getWorkflow(id) as DDBGameLogWorkflow | undefined;
-  }
-
-  constructor(actor: Actor.Implementation, activity: Activity, speaker: ChatMessage.SpeakerData, targets: Token.Implementation[], options: any) {
-    super(actor, activity, speaker, targets, options);
-    this.expectedTemplateCount = activityHasAreaTarget(this.activity) ? 1 : 0;
-    this.templateUuids = [];
-    // this.needItemCard = false; TODO see where this is used
-    this.needsDamage = !!this.activity.hasDamage;
-    this.attackRolled = !activity.hasAttack;
-    // @ts-expect-error TODO: this
-    if (configSettings.undoWorkflow) this.undoData = { actorUuid: actor?.uuid, itemUuid: this.item.uuid, targets: Array.from(targets).map(t => t.id), options: options };
-    this.kickStart = true;
-    this.flagTags = { "ddb-game-log": { "midi-generated": true } };
-    if (configSettings.undoWorkflow) saveUndoData(this);
-  }
-
-  async complete() {
-    if (this.chatCard) {
-      await this.chatCard.update({
-        flags: { "midi-qol": { type: MESSAGE_TYPES.HITS } },
-      });
-    }
-  }
-  async WorkflowState_PreambleComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
-    return super.WorkflowState_PreambleComplete(context);
-  }
-
-  async WorkflowState_WaitForAttackRoll(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (context.attackRoll) return this.WorkflowState_AttackRollComplete;
-    if (!this.activity.attack) {
-      return this.WorkflowState_AttackRollComplete;
-    }
-    if (!this.attackRolled) return this.WorkflowState_Suspend;
-    return this.WorkflowState_AttackRollComplete;
-  }
-  async WorkflowState_AttackRollComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
-    this.effectsAlreadyExpired = [];
-    if (checkRule("removeHiddenInvis")) await removeHidden.bind(this)();
-    await this.callMidiHooks("midi-qol.preCheckHits");
-
-    if (debugEnabled > 1) debug(this.attackRollHTML)
-    if (configSettings.autoCheckHit !== "none" && this.activity.attack) {
-      this.recordTargetACModifiers(); // Not sure this is relevant
-      await this.checkHits(this.workflowOptions);
-      await this.displayHits(configSettings.autoCheckHit === "whisper");
-    }
-    await this.callMidiHooks("midi-qol.AttackRollComplete");
-    if (this.aborted) return this.WorkflowState_Abort;
-    return this.WorkflowState_WaitForDamageRoll;
-  }
-
-  async WorkflowState_AwaitTemplate(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (!activityHasAreaTarget(this.activity)) return super.WorkflowState_AwaitTemplate;
-    if (usesSystemChatData()) {
-      const regions = await globalThis.dnd5e.canvas.TemplatePlacement.fromActivity(this.activity);
-      if (regions?.length) await this.processPlacedTemplates(regions, this.activity);
-      return super.WorkflowState_AwaitTemplate(context);
-    }
-    let system: any = game.system;
-    // Create the template
-    const template = system.canvas.AbilityTemplate.Activity(this.activity);
-    if (template) template.drawPreview();
-    return super.WorkflowState_AwaitTemplate;
-  }
-  async WorkflowState_WaitForDamageRoll(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (this.needsDamage && this.activity.hasDamage) return this.WorkflowState_Suspend;
-    if (this.needsOtherDamage) return this.WorkflowState_Suspend;
-    if (context.attackRoll) return this.WorkflowState_AttackRollComplete;
-    const allHitTargets = new Set([...this.hitTargets, ...this.hitTargetsEC]);
-    this.failedSaves = new Set(allHitTargets);
-    if (!this.activity.hasDamage && !this.activity.hasHealing) return this.WorkflowState_WaitForSaves;
-    return this.WorkflowState_DamageRollComplete;
-  }
-  async WorkflowState_DamageRollComplete(context: WorkflowContext = {}): Promise<WorkflowState> {
-    this.defaultDamageType = getActivityDefaultDamageType(this) ?? this.defaultDamageType ?? MidiQOL.MQdefaultDamageType;
-    if (this.activity.actionType === "heal" && !Object.keys(GameSystemConfig.healingTypes).includes(this.defaultDamageType ?? "")) this.defaultDamageType = "healing";
-
-    this.rawDamageDetail = createDamageDetail({ roll: this.damageRolls, activity: this.activity, defaultType: this.defaultDamageType });
-
-    const damageBonusMacros = this.getDamageBonusMacros();
-    if (damageBonusMacros) {
-      await this.rollBonusDamage(damageBonusMacros);
-    }
-    this.rawOtherDamageDetail = [];
-    if (this.bonusDamageRolls) {
-      const messageData = {
-        flavor: this.bonusDamageFlavor,
-        speaker: this.speaker
-      }
-      // foundry.utils.setProperty(messageData, `flags.${game.system?.id}.roll.type`, "midi");
-      this.bonusDamageRoll?.toMessage(messageData); // see if this can deal with an array of rolls
-    }
-    expireMyEffects.bind(this)(["1Attack", "1Action", "1Spell"]);
-
-    if (getActivityAutoTargetAction(this.activity) === "none" && activityHasAreaTarget(this.activity) && !this.activity.attack) {
-      // we are not auto targeting so for area effect attacks, without hits (e.g. fireball)
-      this.targets = validTargetTokens(new Set(game.user?.targets));
-      this.hitTargets = validTargetTokens(new Set(game.user?.targets));
-      this.hitTargetsEC = new Set();
-    }
-    // apply damage to targets plus saves plus immunities
-    if (this.isFumble) { //TODO: Is this right?
-      return this.WorkflowState_RollFinished;
-    }
-    if (this.activity.save) return this.WorkflowState_WaitForSaves
-    return this.WorkflowState_AllRollsComplete;
-  }
-
-  async WorkflowState_RollFinished(context: WorkflowContext = {}): Promise<WorkflowState> {
-    if (this.postSummonHookId) Hooks.off("dnd5e.postSummon", this.postSummonHookId);
-    await super.WorkflowState_RollFinished();
-    return this.WorkflowState_Suspend;
-  }
-}
-
 export class DummyWorkflow extends Workflow {
   static get forceCreate() { return false }
-  expectedAttackRoll: number | undefined;
   _dummyActor: Actor.Implementation | undefined;
   //@ts-expect-error dnd5e v10
   constructor(actor: globalThis.dnd5e.documents.Actor5e, activity: any, speaker, targets, options: any) {
@@ -8770,11 +9253,6 @@ export class DummyWorkflow extends Workflow {
     } finally {
       Hooks.off("dnd5e.rollAttack", hookId)
     }
-    const maxroll = (await this.attackRoll?.reroll({ maximize: true }))?.total;
-    const minroll = (await this.attackRoll?.reroll({ minimize: true }))?.total;
-    this.expectedAttackRoll = ((maxroll || 0) + (minroll || 0)) / 2;
-    if (this.advantage) this.expectedAttackRoll += 3.325;
-    if (this.disadvantage) this.expectedAttackRoll -= 3.325;
     return this;
   }
 }
@@ -8788,15 +9266,19 @@ export const WorkflowRegistry: Record<string, new (...args: any[]) => Workflow> 
   UserWorkflow,
   DamageOnlyWorkflow,
   TrapWorkflow,
-  DDBGameLogWorkflow,
   DummyWorkflow,
 };
+
+// The classes a card's workflow is rebuilt as: a damage-only workflow's card as a Workflow (its state says damage-only)
+const RESTORABLE_WORKFLOWS: Record<string, typeof Workflow> = { Workflow, SavesFirstWorkflow, ActiveDefenceWorkflow, UserWorkflow, DamageOnlyWorkflow: Workflow };
 
 // `options` arg for Workflow
 type WorkflowConstructorOptions = InexactPartial<{
   chatCardUuid: string;
+  readOnly: boolean;
   event: MouseEvent | KeyboardEvent;
   item: Item.Implementation;
+  /** @deprecated since 14.6.9: has no effect */
   noOptionalRules: boolean;
   noTemplateHook: boolean;
   rollOptions: WorkflowRollOptions
@@ -8805,16 +9287,27 @@ type WorkflowConstructorOptions = InexactPartial<{
   workflowOptions: WorkflowOptions
 }>;
 
-type TrapWorkflowConstructorOptions = WorkflowConstructorOptions & {
-  templateLocation: { x: number, y: number, direction?: number, removeDelay?: number };
-  trapSound: { playlist: string, sound: string };
-}
 
 // `workflowOptions`
 export type WorkflowOptions = InexactPartial<{
   advantage: boolean;
   allowIncapacitated: boolean;
+  /**
+   * Caller-supplied control over per-target attack splitting: true forces it on, false off,
+   * absent falls through to the activity flag and the world setting. The pre-13 item-based
+   * implementation passed false into each iteration of its own loop to stop it re-splitting.
+   * Nothing has written it since that implementation was replaced (68664c1f, 2024-11-10), so
+   * the sole remaining read — activityHelpers.requiresTargetConfirmation — is vestigial.
+   */
   attackPerTarget: boolean;
+  /**
+   * Status, not control: this invocation is one iteration of a per-target attack roll. Set by
+   * AttackActivity via setProperty. Distinct from attackPerTarget above, which is an input.
+   */
+  rollAttackPerTarget: boolean;
+  /** One target's use of an attack per target: its index among `count`, and the ammunition the first chose. */
+  attackSplit: { index: number, count: number, ammunition?: string };
+  attackMode: string;
   attackRollDSN: boolean;
   autoConsumeResource: string;
   autoFastAttack: boolean;
@@ -8864,6 +9357,12 @@ export type WorkflowOptions = InexactPartial<{
   coverOrigin: { x: number, y: number, elevation?: number };
   templateUuid: string;
   preSelectedTargetUuids: string[];
+  // UUID of the over-time effect that triggered this workflow, used by overtime processing.
+  overTimeEffectUuid: string;
+  // A teleport's destinations, or "button" to leave a Plan: Auto teleport to the card's button.
+  teleport: TeleportOption;
+  // A reaction's use: the client that asked for it, which waits with a timeout (paused while its user places).
+  reactionRequest: { id: string, userId: string };
 }>
 
 // Workflow's `rollOptions`
@@ -8885,8 +9384,11 @@ export type UndoData = {
   tokendocUuid?: string;
   actorUuid: string;
   actorName?: string;
+  /** Messages the use produced that aren't linked to its card (another module's rolls, a re-posted card) */
   chatCardUuids: string[];
   isReaction: boolean;
+  /** When the GM started the entry (Date.now()): started entries whose use never finished are dropped */
+  startedAt?: number;
   templateUuids: string[];
   sequencerUuid?: string;
   serverTime?: number;
@@ -8910,11 +9412,10 @@ export type UndoData = {
 }
 
 // `context` passed to some functions
+/** unSuspend's (deprecated) argument */
 type WorkflowContext = InexactPartial<{
   attackRoll: Roll;
   damageRoll: Roll;
-  itemCardUuid: string;
-  itemUseComplete: boolean;
   noDamage: boolean;
   otherDamageRoll: Roll;
   utilityRolls: Roll[];
@@ -8929,7 +9430,6 @@ type MidiMacroData = {
   attackRoll?: Roll;
   attackTotal: number;
   bonusDamageDetail?: DamageDescription[];
-  bonusDamageHTML?: string;
   bonusDamageRoll?: Roll;
   bonusDamageRolls?: Roll[];
   bonusDamageTotal?: number;
@@ -8953,7 +9453,8 @@ type MidiMacroData = {
   hitTargetsEC: TokenDocument.Implementation[];
   hitTargetUuids: string[];
   hitTargetUuidsEC: string[];
-  id: string;
+  /** The workflow's id (its card's uuid): undefined in a use's passes before its card exists */
+  id: string | undefined;
   isCritical?: boolean;
   isFumble: boolean;
   item: Item.Source & { uuid?: string };
@@ -8963,7 +9464,6 @@ type MidiMacroData = {
   macroPass?: string;
   options?: AnyObject;
   otherDamageDetail?: DamageDescription[];
-  otherDamageList?: DamageListEntry[];
   otherDamageTotal?: number;
   roll?: Roll;
   rollData: AnyObject;
@@ -8988,7 +9488,7 @@ type MidiMacroData = {
   utilityRolls?: Roll[];
   uuid?: string;
   workflow: Workflow;
-  workflowId: string;
+  workflowId: string | undefined;
   workflowOptions: WorkflowOptions;
 }
 
@@ -8998,4 +9498,12 @@ export interface AugmentedEvent extends Event {
   ctrlKey: boolean;
   metaKey: boolean;
   type: string;
+}
+
+/** The natural roll of a die term: the sum of its kept dice, so a replacement die such as 2d10 counts as a whole. */
+/** The active dice's faces, or with `counted` the values they count as (a minimum or maximum changes those) */
+function activeDiceTotal(term: foundry.dice.terms.DiceTerm | undefined, counted = false): number | undefined {
+  const active = term?.results?.filter(r => r.active);
+  if (!active?.length) return undefined;
+  return active.reduce((sum, r) => sum + Number(counted ? r.count ?? r.result : r.result), 0);
 }

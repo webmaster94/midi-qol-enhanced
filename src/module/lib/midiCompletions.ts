@@ -18,6 +18,29 @@ interface CompletionEntry {
   constructorDetail?: string;
 }
 
+/** A workflow token set (TokenDocumentSet): members added, removed and tested as a Token, TokenDocument or uuid */
+function tokenSetEntry(info: string): CompletionEntry {
+  return {
+    type: "property", detail: "TokenDocumentSet",
+    info: `${info}. Read it with documents (every member), tokens (the drawn Tokens), uuids or count; plain iteration, size and first() give Tokens, or TokenDocuments in document mode`,
+    children: {
+      documents: { type: "property", detail: "TokenDocument5e[]", info: "Every member's TokenDocument, drawn or not" },
+      tokens: { type: "property", detail: "Token5e[]", info: "The members drawn on the canvas, as Tokens" },
+      uuids: { type: "property", detail: "string[]", info: "Every member's TokenDocument uuid" },
+      count: { type: "property", detail: "number", info: "How many members, drawn or not" },
+      has: { type: "method", detail: "(member) => boolean", info: "Whether a Token, TokenDocument or uuid is a member" },
+      add: { type: "method", detail: "(member) => TokenDocumentSet", info: "Add a Token, TokenDocument or uuid" },
+      delete: { type: "method", detail: "(member) => boolean", info: "Remove a Token, TokenDocument or uuid" },
+      clear: { type: "method", detail: "() => void", info: "Remove every member" },
+      difference: { type: "method", detail: "(other: Set) => TokenDocumentSet", info: "Members not in other (matched by document)" },
+      union: { type: "method", detail: "(other: Set) => TokenDocumentSet", info: "Members of either set" },
+      intersection: { type: "method", detail: "(other: Set) => TokenDocumentSet", info: "Members of both sets" },
+      size: { type: "property", detail: "number", info: "Drawn Tokens, or every member in document mode; count is the same in both" },
+      first: { type: "method", detail: "() => Token5e | TokenDocument5e | undefined", info: "The first drawn Token, or TokenDocument in document mode; documents[0] / tokens[0] are the same in both" },
+    }
+  };
+}
+
 interface CompletionNode {
   [key: string]: CompletionEntry;
 }
@@ -30,6 +53,7 @@ const MIDI_COMPLETIONS: CompletionNode = {
         type: "class", detail: "class", info: "Main workflow class",
         children: {
           getWorkflow: { type: "function", detail: "(uuid) => Workflow", info: "Get a workflow by its message UUID" },
+          workflowFor: { type: "function", detail: "(activity) => Workflow", info: "The workflow of the use an activity belongs to, before its card exists" },
         }
       },
       DamageOnlyWorkflow: { type: "class", detail: "class", info: "Workflow for damage-only rolls" },
@@ -41,15 +65,19 @@ const MIDI_COMPLETIONS: CompletionNode = {
       completeActivityUse: { type: "function", detail: "(activity, usage?, dialog?, message?) => Promise<Workflow>", info: "Complete an activity use workflow.\n- activity: Activity or UUID string\n- usage.midiOptions: {advantage, disadvantage, critical, fastForward, fastForwardAttack, fastForwardDamage, targetUuids, targetsToUse, rollAs, ignoreUserTargets, ...}\nReturns: Workflow or undefined" },
 
       // Distance and targeting
-      computeDistance: { type: "function", detail: "(token1, token2, options?) => number", info: "Compute distance between two tokens in grid units.\n- options.wallsBlock: block if no LOS (default false)\n- options.includeCover: include cover calc (default true)\n- options.includeElevation: include height difference\nReturns: distance or -1 if fully blocked" },
+      getDistance: { type: "function", detail: "(token1, token2, options?) => number", info: "Preferred. Distance between two tokens in grid units, honouring the Distance Measurement setting (default/centre/perimeter) and the fudge factor, so it agrees with midi's own range checks.\n- options.wallsBlock: block if no LOS (default false)\n- options.includeCover: include cover calc (default true)\n- options.includeElevation: include height difference\nReturns: distance or -1 if fully blocked" },
+      computeDistance: { type: "function", detail: "(token1, token2, options?) => number", info: "Centre-based primitive; prefer getDistance, which also honours perimeter measurement. Compute distance between two tokens in grid units.\n- options.wallsBlock: block if no LOS (default false)\n- options.includeCover: include cover calc (default true)\n- options.includeElevation: include height difference\nReturns: distance or -1 if fully blocked" },
       checkDistance: { type: "function", detail: "(t1, t2, distance, options?) => boolean", info: "Check if two tokens are within a given distance.\n- distance: max distance in grid units\n- options.wallsBlock: block if no LOS (default false)\n- options.includeCover: include cover calc (default true)\nReturns: true if distance <= threshold" },
       findNearby: { type: "function", detail: "(disposition, token, distance, options?) => Token[]", info: "Find all tokens within distance matching disposition.\n- disposition: -1=hostile, 0=neutral, 1=friendly, null/\"all\"=any, or array\n- options: {includeIncapacitated, canSee, isSeen, includeToken, maxSize, relative}\n- relative (default true): disposition relative to token\nReturns: Token[]" },
       findNearbyCount: { type: "function", detail: "(disposition, token, distance, options?) => number", info: "Count tokens within distance matching disposition.\n- disposition: -1=hostile, 0=neutral, 1=friendly, null/\"all\"=any, or array\n- options: {includeIncapacitated, canSee, isSeen, includeToken, maxSize, relative}\nReturns: number of matching tokens" },
       checkNearby: { type: "function", detail: "(disposition, token, distance, options?) => boolean", info: "Check if any token is within distance matching disposition.\n- disposition: -1=hostile, 0=neutral, 1=friendly, null/\"all\"=any\n- options: {includeIncapacitated, canSee, isSeen, includeToken, maxSize, relative}\nReturns: true if at least one match found" },
-      computeCoverBonus: { type: "function", detail: "(attacker, target, activity?) => number", info: "Compute cover AC bonus for target against attacker.\n- attacker/target: Token or TokenDocument\n- activity: optional, used for ignore-cover checks\nReturns: 0=none, 2=half, 5=three-quarters, 999=full" },
+      computeCoverBonus: { type: "function", detail: "(attacker, target, activity?) => number", info: "Compute cover AC bonus for target against attacker.\n- attacker/target: Token or TokenDocument\n- activity: optional, used for ignore-cover checks\nReturns: 0=none, 2=half, 5=three-quarters, Infinity=total" },
+      getCoverBonus: { type: "function", detail: "(attacker, target, activity?) => number", info: "The target's cover AC bonus against attacker, as midi applies it: total cover from the Cover Total status, else the larger of the status cover bonus and computeCoverBonus.\nReturns: 0=none, 2=half, 5=three-quarters, Infinity=total" },
+      highlightTokens: { type: "function", detail: "(tokens, options?) => {setActive, remove}", info: "Pulsing rings around tokens, seen only by this client (e.g. the tokens a choice applies to).\n- options.color: ring colour (number), default the user's colour\nReturns: setActive(token?) pulses that token brighter (none when omitted); remove() clears the rings. Call remove when done, e.g. in a finally block." },
       checkActivityRange: { type: "function", detail: "(activity, token, targets?, showWarning?) => object", info: "Check if targets are within activity's range.\n- showWarning: display UI warning if out of range (default true)\nReturns: {result, attackingToken, range, longRange}\n- result: \"normal\", \"longRange\", or \"outOfRange\"" },
       selectTargetsFromTemplates: { type: "function", detail: "(templates, selfTokenRef?, ignoreSelf?, AoETargetType?, autoTarget?) => Token[]", info: "Target tokens in template area and update game.user.targets.\n- AoETargetType: \"any\", \"enemy\", \"ally\", \"self\", \"neutral\"\n- autoTarget: \"none\", \"wallsBlock\", \"wallsBlockIgnoreDefeated\", \"wallsBlockIgnoreIncapacitated\", \"walledtemplates\"\nReturns: Token[]" },
       computeTargetsFromTemplates: { type: "function", detail: "(templates, selfTokenRef?, ignoreSelf?, AoETargetType?, autoTarget?) => Token[]", info: "Compute tokens in template area WITHOUT modifying game.user.targets.\n- AoETargetType: \"any\", \"enemy\", \"ally\", \"self\", \"neutral\"\n- autoTarget: \"none\", \"wallsBlock\", \"wallsBlockIgnoreDefeated\", \"wallsBlockIgnoreIncapacitated\"\nReturns: Token[]" },
+      requiresTargetConfirmation: { type: "function", detail: "(activity, options) => boolean", info: "Whether using the activity with the current targets would show the target confirmation dialog" },
 
       // Conditions and effects
       hasCondition: { type: "function", detail: "(actorRef, condition) => 0 | 1", info: "Check if actor/token has a condition.\n- actorRef: Actor, Token, TokenDocument, or UUID string\n- condition: status id (e.g. \"prone\", \"blinded\", \"concentrating\", \"stunned\")\nReturns: 1 if condition exists, 0 if not or immune" },
@@ -63,15 +91,32 @@ const MIDI_COMPLETIONS: CompletionNode = {
       chooseEffect: { type: "function", detail: "({actor, token?, item?, ...}) => Promise<ActiveEffect | false>", info: "Show dialog to choose which effect to apply from an item.\n- Fields: {actor, token, item, workflow, options}\n- options.chooseAll: auto-apply all without dialog\n- options.timeout: dialog timeout in ms\nReturns: selected ActiveEffect or false" },
 
       // Damage
-      applyTokenDamage: { type: "function", detail: "(damageDetail, totalDamage, targets, item, saves, options?) => Promise<string[]>", info: "Apply damage to a set of tokens, creating damage cards.\n- damageDetail: [{value, type, properties}] array\n- targets/saves: Set<Token>\n- options: {workflow, superSavers, semiSuperSavers, forceApply, noConcentrationCheck}\nReturns: array of damage card UUIDs" },
+      applyTokenDamage: { type: "function", detail: "(damageDetail, totalDamage, targets, item, saves, options?) => Promise<string[]>", info: "Apply damage to a set of tokens, creating damage cards.\n- damageDetail: [{value, type, properties}] array\n- targets/saves: Sets of Tokens or TokenDocuments (a workflow token set works)\n- options: {workflow, superSavers, semiSuperSavers, forceApply, noConcentrationCheck}\nReturns: array of damage card UUIDs" },
       applyTokenDamageMany: { type: "function", detail: "(targetDamages, item, options?) => Promise<string[]>", info: "Apply different damage/healing amounts to multiple targets, producing a single damage card.\n- targetDamages: [{token, damageDetail, totalDamage}] — each entry has its own damage detail and total\n- item: Item responsible for the damage (used for card display)\n- options: {workflow, forceApply, updateOptions}\nReturns: array of damage card UUIDs" },
       createDamageDetail: { type: "function", detail: "({roll, activity, defaultType?}) => DamageDescription[]", info: "Create damage detail from roll results.\n- roll: Roll or Roll[]\n- activity: Activity (for damage type info)\n- defaultType: fallback damage type\nReturns: [{value, type, formula, properties}]" },
       getTraitMult: { type: "function", detail: "(actor, damageType, item, props?) => number", info: "Get damage trait multiplier for an actor.\n- damageType: e.g. \"fire\", \"slashing\", \"healing\"\n- props: string[] of damage properties (e.g. \"mgc\")\nReturns: -1=healing, 0=immune, 0.5=resistant, 1=normal, 2=vulnerable" },
       modifyDamageBy: { type: "function", detail: "({damageItem, value, multiplier?, type?, reason?}) => object", info: "Modify damage during isDamaged macro pass only.\n- damageItem: DamageListEntry from workflow\n- value: amount to add/subtract\n- multiplier: optional damage multiplier\n- type/reason: for logging\nReturns: damage modification object" },
 
       // Rolls
-      addRollTo: { type: "function", detail: "(roll, bonusRoll) => Roll", info: "Add a bonus roll to another roll" },
+      addRollTo: { type: "function", detail: "(roll, bonusRoll) => Roll", info: "Add a bonus roll to another roll; rolls with dice must already be rolled" },
+      addRollToAsync: { type: "function", detail: "async (roll, bonusRoll) => Roll", info: "Add a bonus roll to another roll, rolling either first if needed" },
       doConcentrationCheck: { type: "function", detail: "(actor, saveDC) => Promise<Roll>", info: "Perform a concentration check" },
+      playerWaits: {
+        type: "object", info: "Waits on players, shown to the GM in the player list with choices to answer for them (see MACROS.md, Waiting on Players).",
+        children: {
+          begin: { type: "function", detail: "(spec) => PlayerWait | undefined", info: "Register a wait on a player: spec { kind, userId, actorUuid?, label, source?, choices: { id: () => value | { label, value } }, onSettled?, keepDialogs? }. The first choice is the default; keepDialogs leaves the player's open roll dialog alone when the GM answers. Returns { id, ref, settled, end(), active }, or undefined for a GM. End it when the player answers." },
+          track: { type: "function", detail: "(spec, start: (ref) => Promise) => Promise", info: "begin + your request: start(ref) sends it; resolves with the player's answer or the value of the GM's choice, whichever comes first." },
+          claim: { type: "function", detail: "async (ref) => boolean", info: "On the player's client before acting on their answer: false if the GM has already answered for them." },
+          settle: { type: "function", detail: "async (id, choice) => boolean", info: "Answer a wait with one of its choices (as the GM's popover does)." },
+          known: { type: "function", detail: "() => WaitInfo[]", info: "On a GM: every pending wait." }
+        }
+      },
+      addCardNote: { type: "function", detail: "async (card | uuid | workflow, html, options?) => Promise<ChatMessage | undefined>", info: "Add a note to a midi usage card: a message linked to the card, drawn by it and hidden in the log.\n- options.anchor: buttons, attack, hits, damage, otherDamage, bonusDamage, utility, saves, top, bottom (default bottom)\n- options.position: before, prepend, append, after (default append)\n- options.key: adding again with the same key replaces your earlier note\n- options.visibility: all, gm, owner; or options.whisper (user ids)\n- options.label, cssClass, sort\n- options.kind, options.data: drawn by the renderer registered for kind (registerCardNoteRenderer); html is the fallback\nhtml may hold links, inline rolls and enricher text." },
+      removeCardNote: { type: "function", detail: "async (card | uuid | workflow, key) => Promise<number>", info: "Remove the notes with this key that you may delete" },
+      registerCardNoteRenderer: { type: "function", detail: "(kind, renderer) => void", info: "Draw card notes of this kind with your function: renderer({ note, card, data, messages }) => html, called per viewer whenever the card is drawn. messages are the note's own (see cardNoteMessageData). Register on every client at load (a module or world script). A note whose renderer is not registered shows its html." },
+      cardNoteMessageData: { type: "function", detail: "(note, role?) => object", info: "Message data making a roll's message belong to a card note: pass as the roll's message data, e.g. actor.rollSkill({ skill }, {}, { data: MidiQOL.cardNoteMessageData(note, \"source\") })." },
+      renderLinkedMessage: { type: "function", detail: "async (message) => string", info: "A message as a card draws it (dnd5e's summary), or \"\" if this viewer may not see it or it is shown in the log instead." },
+      visibleRollTotal: { type: "function", detail: "(message) => number | undefined", info: "A message's roll total if this viewer may see it (not private to others, hidden, or obscured by midi's Blind roll display), else undefined." },
       contestedRoll: { type: "function", detail: "(data) => Promise<{result, rolls}>", info: "Perform a contested roll between two actors.\n- data.source/target: {rollType, ability, token, rollOptions}\n- rollType: \"test\" (ability check), \"save\", \"skill\"\n- data.success/failure/drawn: callback functions\nReturns: {result: number (+source wins, -target wins, 0=draw), rolls}" },
       displayDSNForRoll: { type: "function", detail: "(rolls?, rollType?, rollMode?) => Promise", info: "Display Dice So Nice 3D dice animation" },
       sumRolls: { type: "function", detail: "(rolls?, countHealing?) => number", info: "Sum roll results" },
@@ -252,56 +297,10 @@ const MIDI_COMPLETIONS: CompletionNode = {
           reset: { type: "method", detail: "(options?)", info: "Reset all sub-trackers and attribution" },
         }
       },
-      targets: {
-        type: "property", detail: "Set<Token5e>", info: "The targeted tokens",
-        children: {
-          size: { type: "property", detail: "number", info: "Number of elements in the set" },
-          has: { type: "method", detail: "(value) => boolean", info: "Check if a value is in the set" },
-          add: { type: "method", detail: "(value) => Set", info: "Add a value to the set" },
-          delete: { type: "method", detail: "(value) => boolean", info: "Remove a value from the set" },
-          clear: { type: "method", detail: "() => void", info: "Remove all elements" },
-          forEach: { type: "method", detail: "(callback) => void", info: "Execute a function for each element" },
-          values: { type: "method", detail: "() => Iterator", info: "Returns an iterator of values" },
-          first: { type: "method", detail: "() => Token5e | undefined", info: "Get the first element (Foundry Set)" },
-        }
-      },
-      hitTargets: {
-        type: "property", detail: "Set<Token5e>", info: "Tokens that were hit",
-        children: {
-          size: { type: "property", detail: "number", info: "Number of elements in the set" },
-          has: { type: "method", detail: "(value) => boolean", info: "Check if a value is in the set" },
-          add: { type: "method", detail: "(value) => Set", info: "Add a value to the set" },
-          delete: { type: "method", detail: "(value) => boolean", info: "Remove a value from the set" },
-          clear: { type: "method", detail: "() => void", info: "Remove all elements" },
-          forEach: { type: "method", detail: "(callback) => void", info: "Execute a function for each element" },
-          values: { type: "method", detail: "() => Iterator", info: "Returns an iterator of values" },
-          first: { type: "method", detail: "() => Token5e | undefined", info: "Get the first element (Foundry Set)" },
-        }
-      },
-      failedSaves: {
-        type: "property", detail: "Set<Token5e>", info: "Tokens that failed saves",
-        children: {
-          size: { type: "property", detail: "number", info: "Number of elements in the set" },
-          has: { type: "method", detail: "(value) => boolean", info: "Check if a value is in the set" },
-          add: { type: "method", detail: "(value) => Set", info: "Add a value to the set" },
-          delete: { type: "method", detail: "(value) => boolean", info: "Remove a value from the set" },
-          forEach: { type: "method", detail: "(callback) => void", info: "Execute a function for each element" },
-          values: { type: "method", detail: "() => Iterator", info: "Returns an iterator of values" },
-          first: { type: "method", detail: "() => Token5e | undefined", info: "Get the first element (Foundry Set)" },
-        }
-      },
-      savedTargets: {
-        type: "property", detail: "Set<Token5e>", info: "Tokens that succeeded saves",
-        children: {
-          size: { type: "property", detail: "number", info: "Number of elements in the set" },
-          has: { type: "method", detail: "(value) => boolean", info: "Check if a value is in the set" },
-          add: { type: "method", detail: "(value) => Set", info: "Add a value to the set" },
-          delete: { type: "method", detail: "(value) => boolean", info: "Remove a value from the set" },
-          forEach: { type: "method", detail: "(callback) => void", info: "Execute a function for each element" },
-          values: { type: "method", detail: "() => Iterator", info: "Returns an iterator of values" },
-          first: { type: "method", detail: "() => Token5e | undefined", info: "Get the first element (Foundry Set)" },
-        }
-      },
+      targets: tokenSetEntry("The targeted tokens"),
+      hitTargets: tokenSetEntry("Tokens that were hit"),
+      failedSaves: tokenSetEntry("Tokens that failed their save"),
+      saves: tokenSetEntry("Tokens that saved"),
       actor: {
         type: "property", detail: "Actor5e", info: "The D&D 5e actor performing the action",
         children: {
@@ -368,6 +367,9 @@ const MIDI_COMPLETIONS: CompletionNode = {
           inCombat: { type: "property", detail: "boolean", info: "Whether token is in combat" },
         }
       },
+      tokenDocument: { type: "property", detail: "TokenDocument5e", info: "The TokenDocument of the token performing the action (workflow.token.document)" },
+      inCombat: { type: "property", detail: "boolean", info: "Whether the actor was in a combat when the use started" },
+      isTurn: { type: "property", detail: "boolean", info: "Whether it was the actor's turn when the use started" },
       isCritical: { type: "property", detail: "boolean", info: "Whether the attack is a critical hit" },
       isFumble: { type: "property", detail: "boolean", info: "Whether the attack is a fumble" },
       attackRoll: {
@@ -480,14 +482,12 @@ const MIDI_ARGS0: CompletionEntry = {
 
     // Bonus damage
     bonusDamageDetail: { type: "property", detail: "DamageDescription[]", info: "Bonus damage breakdown by type" },
-    bonusDamageHTML: { type: "property", detail: "string", info: "Bonus damage HTML display" },
     bonusDamageRoll: { type: "property", detail: "Roll", info: "The combined bonus damage roll" },
     bonusDamageRolls: { type: "property", detail: "Roll[]", info: "Individual bonus damage rolls" },
     bonusDamageTotal: { type: "property", detail: "number", info: "Total bonus damage" },
 
     // Other damage
     otherDamageDetail: { type: "property", detail: "DamageDescription[]", info: "Other damage breakdown by type" },
-    otherDamageList: { type: "property", detail: "DamageListEntry[]", info: "Other damage list entries" },
     otherDamageTotal: { type: "property", detail: "number", info: "Other damage total" },
 
     // Targets
@@ -827,8 +827,8 @@ export function injectMidiCompletions(): void {
       },
 
       // Effects
-      effects: { type: "property", detail: "ActivityEffectData[]", info: "Activity effect data entries" },
-      applicableEffects: { type: "property", detail: "ActiveEffect[]", info: "Active effects applicable from this activity" },
+      effects: { type: "property", detail: "ActivityEffectData[]", info: "Effect profiles: a local effect by _id or a standalone one by uuid; resolve with await profile.getEffect()" },
+      applicableEffects: { type: "property", detail: "ActivityEffectData[]", info: "Effect profiles applicable at this activity's level; resolve with await profile.getEffect()" },
 
       // Conditions (midi-qol MidiActivityMixin getters)
       useCondition: { type: "property", detail: "string", info: "Use activation condition text" },
@@ -969,7 +969,6 @@ export function injectMidiCompletions(): void {
     if (mergeCompletions && (globalThis as any).chrisPremades) {
       const fn = (detail: string, info: string): CompletionEntry => ({ type: "function", detail, info });
       const prop = (detail: string, info: string): CompletionEntry => ({ type: "property", detail, info });
-      const method = (detail: string, info: string): CompletionEntry => ({ type: "method", detail, info });
 
       const CPR_UTILS: CompletionNode = {
         actorUtils: {

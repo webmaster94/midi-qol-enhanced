@@ -1,17 +1,17 @@
 {
   "id": "{{name}}",
-  "title": "{{title}}",
+  "title": "Midi QOL Enhanced",
   "description": "{{description}}",
   "version": "{{version}}",
   "authors": [
     {
       "name": "Tim Posney",
-      "url": "https://gitlab.com/tposney",
+      "url": "https://github.com/tposney",
       "discord": "tposney#1462",
       "twitter": "",
       "patreon": "",
       "gitlab": "tposney",
-      "github": "",
+      "github": "tposney",
       "ko-fi": "tposney",
       "reddit": "",
       "email": ""
@@ -41,9 +41,9 @@
         "id": "dnd5e",
         "type": "system",
         "compatibility": {
-          "minimum": "5.2.0",
-          "maximum": "6.0.99",
-          "verified": "6.0.6"
+          "minimum": "6.0.6",
+          "verified": "6.1.0",
+          "maximum": "6.1.999"
         }
       }
     ],
@@ -59,11 +59,22 @@
       {
         "id": "dae",
         "type": "module",
+        "manifest": "https://github.com/tposney/dae/releases/download/latest-dnd6/module.json",
         "compatibility": {
-          "minimum": "13.0.23"
+          "minimum": "14.6.7"
         }
       }
     ]
+  },
+  "documentTypes": {
+    "RegionBehavior": {
+      "regionActivity": {},
+      "regionLight": {}
+    },
+    "ChatMessage": {
+      "damage": {},
+      "note": {}
+    }
   },
   "packs": [
     {
@@ -74,6 +85,24 @@
       "type": "Item",
       "system": "dnd5e",
       "lang": []
+    },
+    {
+      "name": "midiqol-active-effects",
+      "label": "Midi Active Effects",
+      "path": "./packs/activeeffects",
+      "module": "world",
+      "type": "ActiveEffect",
+      "system": "dnd5e",
+      "lang": []
+    }
+  ],
+  "packFolders": [
+    {
+      "name": "Midi Samples",
+      "packs": [
+        "midiqol-sample-items",
+        "midiqol-active-effects"
+      ]
     }
   ],
   "languages": [
@@ -84,12 +113,12 @@
     },
     {
       "lang": "cs",
-      "name": "Češky",
+      "name": "\u010ce\u0161ky",
       "path": "lang/cs.json"
     },
     {
       "lang": "ja",
-      "name": " 日本語",
+      "name": " \u65e5\u672c\u8a9e",
       "path": "lang/ja.json"
     },
     {
@@ -99,12 +128,12 @@
     },
     {
       "lang": "fr",
-      "name": "Français",
+      "name": "Fran\u00e7ais",
       "path": "lang/fr.json"
     },
     {
       "lang": "pt-BR",
-      "name": "Português (Brasil)",
+      "name": "Portugu\u00eas (Brasil)",
       "path": "lang/pt-BR.json"
     },
     {
@@ -124,26 +153,21 @@
     },
     {
       "lang": "zh-tw",
-      "name": "正體中文",
+      "name": "\u6b63\u9ad4\u4e2d\u6587",
       "path": "lang/zh-tw.json"
     }
   ],
   "compatibility": {
-    "minimum": "13",
+    "minimum": "14.369",
     "verified": "14.369",
     "maximum": "14.999"
   },
-  "bugs": "https://gitlab.com/tposney/midi-qol/-/issues",
+  "bugs": "https://github.com/webmaster94/midi-qol-enhanced/issues",
   "flags": {
     "allowBugReporter": true
   },
-  "url": "https://gitlab.com/garrysmod367/midi-qol-mr",
-  "manifest": "https://gitlab.com/garrysmod367/midi-qol-mr/-/raw/v13/package/module.json",
-  "download": "https://gitlab.com/garrysmod367/midi-qol-mr/-/raw/v13/package/midi-qol-v{{version}}.zip",
-  "changelog": "https://gitlab.com/garrysmod367/midi-qol-mr/-/raw/v13/Changelog.md",
-  "documentTypes": {
-    "ChatMessage": {
-      "damage": {}
-    }
-  }
+  "url": "https://github.com/webmaster94/midi-qol-enhanced",
+  "manifest": "https://github.com/webmaster94/midi-qol-enhanced/releases/latest/download/module.json",
+  "download": "https://github.com/webmaster94/midi-qol-enhanced/releases/download/v{{version}}/midi-qol-v{{version}}.zip",
+  "changelog": "https://github.com/webmaster94/midi-qol-enhanced/blob/main/Changelog.md"
 }

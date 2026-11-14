@@ -1,0 +1,151 @@
+{{!--
+  midi's usage card.
+
+  Composed from dnd5e's own partials rather than reproducing them: the header, description, rows and
+  system buttons are `dnd5e.card-face`, and midi contributes only what dnd5e has no equivalent for —
+  its attack and damage buttons, the containers its enrichment fills, and the damage tray.
+
+  Reproducing the card face is what cost the card its appearance under 6.0. midi's copy did not paint
+  dnd5e's card background but still inherited its card *text* colour, so dark text landed on the dark
+  chat panel at about 1.2:1 contrast; it kept a speaker avatar the card had asked not to draw; and it
+  had nowhere for the tray dnd5e now declares in markup. One duplication, four symptoms.
+
+  The `content` branch stays. Cards written before this template, and any activity still supplying the
+  deprecated `usage.chatCard`, arrive with their markup already rendered into `content`; dnd5e's own
+  usage card branches the same way, for the same reason.
+--}}
+{{#if content}}
+{{{ content }}}
+{{else}}
+
+{{> "dnd5e.card-face" }}
+
+{{!-- Notes on midi's buttons (after dnd5e's, which the card face draws): before them here; prepend and append inside
+  the button block, before the first and after the last; after them, ahead of the results. --}}
+{{#each midi.notes.buttons.before}}{{{ this }}}{{/each}}
+<div class="card-buttons midi-buttons">
+  {{#each midi.notes.buttons.prepend}}{{{ this }}}{{/each}}
+
+  {{#if midi.buttons.attack}}
+  {{#if midi.mergeCardMulti}}
+  <div class="midi-qol-attack-buttons flexrow 5">
+    <button data-action="rollAttackDisadvantage" style="flex: 1 1 0"
+      data-tooltip="{{localize 'DND5E.Disadvantage'}}"><i class="fas fa-caret-down"></i><i
+        class="fas fa-dice-d20"></i><i class="fas fa-dice-d20"></i></button>
+    <button data-action="rollAttack" style="flex: 3 1 0">{{#if (gt midi.attackRollCount 1)}}[{{ midi.attackRollCount }}] {{/if}}{{#if midi.attackBtnText}}{{ midi.attackBtnText }}{{else}}{{ localize "DND5E.Attack" }}{{/if}}</button>
+    <button data-action="rollAttackAdvantage" style="flex: 1 1 0" data-tooltip="{{localize 'DND5E.Advantage'}}"><i
+        class="fas fa-caret-up"></i><i class="fas fa-dice-d20"></i><i class="fas fa-dice-d20"></i></button>
+  </div>
+  {{else}}
+  <div class="midi-qol-attack-buttons flexrow 1">
+    <button type="button" data-action="rollAttack"><span>{{#if (gt midi.attackRollCount 1)}}[{{ midi.attackRollCount }}] {{/if}}{{#if midi.attackBtnText}}{{ midi.attackBtnText }}{{else}}{{ localize "DND5E.Attack" }}{{/if}}</span></button>
+  </div>
+  {{/if}}
+  {{/if}}
+
+  {{#if midi.buttons.damage}}
+  {{#if midi.mergeCardMulti}}
+  <div class="midi-qol-damage-buttons flexrow 5">
+    <button data-action="rollDamageNoCritical" style="flex: 1 1 0" data-tooltip="{{localize 'DND5E.Normal'}}"><i
+        class="fas fa-dice-d6"></i></button>
+    <button data-action="rollDamage" style="flex:3 1 0">{{ midi.dmgBtnText }}</button>
+    <button data-action="rollDamageCritical" style="flex: 1 1 0" data-tooltip="{{localize 'DND5E.Critical'}}"><i
+        class="fas fa-dice-d6"></i><i class="fas fa-dice-d6"></i></button>
+  </div>
+  {{else}}
+  <div class="midi-qol-damage-buttons flexrow 1">
+    <button data-action="rollDamage"><span>{{ midi.dmgBtnText }}</span></button>
+  </div>
+  {{/if}}
+  {{/if}}
+
+  {{#if midi.buttons.effects}}
+  <button data-action="midiApplyEffects">{{ localize "midi-qol.ApplyEffects" }}</button>
+  {{/if}}
+
+  {{#if midi.buttons.confirm}}
+  <div class="midi-qol-confirm-damage-roll">
+    {{#if midi.buttons.confirmHitMiss}}
+    <div class="flexrow 3">
+      <button class="midi-qol-confirm-damage-roll-complete-miss"
+        data-action="confirmDamageRollCompleteMiss">{{localize "midi-qol.ConfirmMiss"}}</button>
+      <button class="midi-qol-confirm-damage-roll-complete"
+        data-action="confirmDamageRollComplete">{{#if (gt midi.attackRollCount 1)}}[{{ midi.attackRollCount }} {{ midi.nextDamageRollCount }}] {{/if}}{{localize "midi-qol.ConfirmRoll"}}</button>
+      <button class="midi-qol-confirm-damage-roll-complete-hit"
+        data-action="confirmDamageRollCompleteHit">{{localize "midi-qol.ConfirmHit"}}</button>
+    </div>
+    {{else}}
+    <div class="midi-qol-confirm-damage-roll flexrow 1">
+      <button class="midi-qol-confirm-damage-roll-complete"
+        data-action="confirmDamageRollComplete">{{localize "midi-qol.ConfirmRoll"}}</button>
+    </div>
+    {{/if}}
+    {{#if midi.buttons.cancel}}
+    <button class="midi-qol-confirm-damage-roll-cancel"
+      data-action="confirmDamageRollCancel">{{localize "Cancel"}}</button>
+    {{/if}}
+  </div>
+  {{/if}}
+  {{#each midi.notes.buttons.append}}{{{ this }}}{{/each}}
+  {{#each midi.notes.buttons.after}}{{{ this }}}{{/each}}
+
+  {{!--
+    The roll sections, from `system.midi.sections`. The class names and `end-` divs are kept: midi's stylesheet, its DSN
+    hooks and other modules' macros select on them.
+  --}}
+  <div class="midi-results">
+    {{#each midi.notes.top.before}}{{{ this }}}{{/each}}
+    {{#each midi.notes.top.prepend}}{{{ this }}}{{/each}}
+    {{#each midi.notes.top.append}}{{{ this }}}{{/each}}
+    {{#each midi.notes.top.after}}{{{ this }}}{{/each}}
+    {{#if midi.condensed}}
+    <div class="flexrow 2">
+      {{> "midi.section" name="attack-roll" section=midi.sections.attack notes=midi.notes.attack }}
+      {{> "midi.section" name="damage-roll" section=midi.sections.damage notes=midi.notes.damage }}
+    </div>
+    {{> "midi.section" name="hits-display" section=midi.sections.hits notes=midi.notes.hits }}
+    {{else}}
+    {{> "midi.section" name="attack-roll" section=midi.sections.attack notes=midi.notes.attack }}
+    {{> "midi.section" name="hits-display" section=midi.sections.hits notes=midi.notes.hits }}
+    {{> "midi.section" name="damage-roll" section=midi.sections.damage notes=midi.notes.damage }}
+    {{/if}}
+    {{> "midi.section" name="other-damage-roll" section=midi.sections.otherDamage notes=midi.notes.otherDamage }}
+    {{> "midi.section" name="bonus-damage-roll" section=midi.sections.bonusDamage notes=midi.notes.bonusDamage }}
+    {{> "midi.section" name="utility-roll"      section=midi.sections.utility notes=midi.notes.utility }}
+    {{> "midi.section" name="saves-display"     section=midi.sections.saves notes=midi.notes.saves }}
+    {{#each midi.notes.bottom.before}}{{{ this }}}{{/each}}
+    {{#each midi.notes.bottom.prepend}}{{{ this }}}{{/each}}
+    {{#each midi.notes.bottom.append}}{{{ this }}}{{/each}}
+    {{#each midi.notes.bottom.after}}{{{ this }}}{{/each}}
+  </div>
+</div>
+{{!-- dnd5e's save/check summaries follow midi's saves heading, not above the rolls as on dnd5e's card; outside
+  .card-buttons, whose dnd5e styling stretches every button in it. --}}
+{{#each summaries}}
+<div class="card-summary" data-message-id="{{ id }}" data-target-uuid="{{ token.uuid }}">{{{ html }}}</div>
+{{/each}}
+
+
+{{!-- Follow-ups offered after the attack hit; ignoring them costs nothing. --}}
+{{#if midi.followUps.length}}
+<div class="card-buttons midi-qol-follow-ups">
+  {{#each midi.followUps}}
+  <button type="button" data-action="midiFollowUp" data-follow-up="{{ index }}" {{#if disabled}}disabled{{/if}}>{{ label }}</button>
+  {{/each}}
+</div>
+{{/if}}
+
+{{!-- One tray per damage roll type: each applies its own save multiplier. --}}
+{{#each midi.damageApplicationTypes}}
+<midi-damage-application class="dnd5e2" data-damage-type="{{this}}"></midi-damage-application>
+{{/each}}
+
+{{#if effects.length}}
+<effect-application class="dnd5e2">
+    {{#each effects}}
+    <option value="{{ uuid }}"></option>
+    {{/each}}
+</effect-application>
+{{/if}}
+
+{{/if}}

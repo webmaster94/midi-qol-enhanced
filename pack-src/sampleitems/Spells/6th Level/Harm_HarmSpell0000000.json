@@ -10,27 +10,19 @@
       "transfer": false,
       "_id": "harmHpMaxReduce0",
       "type": "base",
-      "system": {},
-      "changes": [
-        {
-          "key": "system.attributes.hp.tempmax",
-          "mode": 2,
-          "value": "-@damageTotal",
-          "priority": 20
-        }
-      ],
-      "disabled": false,
-      "duration": {
-        "startTime": null,
-        "seconds": null,
-        "combat": null,
-        "rounds": null,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+      "system": {
+        "changes": [
+          {
+            "key": "system.attributes.hp.tempmax",
+            "value": "-@damageTotal",
+            "priority": 20,
+            "type": "add"
+          }
+        ]
       },
+      "disabled": false,
+      "duration": {},
       "description": "<p>Hit Point maximum is reduced by an amount equal to the Necrotic damage taken. This reduction lasts until the target finishes a Long Rest.</p>",
-      "tint": "#ffffff",
       "statuses": [],
       "sort": 0,
       "flags": {
@@ -47,7 +39,7 @@
           "disableCondition": "",
           "disableIncapacitated": false,
           "dontApply": false,
-          "showIcon": true
+          "applicationMode": "legacy"
         }
       },
       "_stats": {
@@ -61,7 +53,8 @@
         "lastModifiedBy": null,
         "exportSource": null
       },
-      "_key": "!items.effects!HarmSpell0000000.harmHpMaxReduce0"
+      "_key": "!items.effects!HarmSpell0000000.harmHpMaxReduce0",
+      "showIcon": 2
     }
   ],
   "flags": {
@@ -101,16 +94,15 @@
         "effect": []
       }
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.51"
+    "cat": {
+      "automation": {
+        "version": "14.6.5"
       }
     }
   },
   "system": {
     "description": {
-      "value": "<p>You unleash virulent magic on a creature you can see within range. The target makes a Constitution saving throw. On a failed save, it takes 14d6 Necrotic damage, and its Hit Point maximum is reduced by an amount equal to the Necrotic damage it took. On a successful save, it takes half as much damage only. This spell can't reduce a target's Hit Point maximum below 1.</p>\n<p><strong>midi-qol</strong>: No macros required. Uses a save activity for 14d6 Necrotic (half on save). On a failed save, applies an HP Maximum Reduced effect that reduces <code>system.attributes.hp.tempmax</code> by <code>@damageTotal</code>. The effect lasts until a long rest (via DAE specialDuration).</p>",
+      "value": "<p>You unleash virulent magic on a creature you can see within range. The target makes a Constitution saving throw. On a failed save, it takes 14d6 Necrotic damage, and its Hit Point maximum is reduced by an amount equal to the Necrotic damage it took. On a successful save, it takes half as much damage only. This spell can't reduce a target's Hit Point maximum below 1.</p><div class=\"cat-description\"><p><strong>midi-qol</strong>: No macros required. Uses a save activity for 14d6 Necrotic (half on save). On a failed save, applies an HP Maximum Reduced effect that reduces <code>system.attributes.hp.tempmax</code> by <code>@damageTotal</code>. The effect lasts until a long rest (via DAE specialDuration).</p></div>",
       "chat": "<p>You unleash virulent magic on a creature you can see within range. The target makes a Constitution saving throw. On a failed save, it takes 14d6 Necrotic damage, and its Hit Point maximum is reduced by an amount equal to the Necrotic damage it took. On a successful save, it takes half as much damage only. This spell can't reduce a target's Hit Point maximum below 1.</p>"
     },
     "source": {

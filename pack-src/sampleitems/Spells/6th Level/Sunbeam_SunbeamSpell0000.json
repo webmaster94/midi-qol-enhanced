@@ -10,20 +10,15 @@
       "transfer": false,
       "_id": "sunBlindedEff000",
       "type": "base",
-      "system": {},
-      "changes": [],
+      "system": {
+        "changes": []
+      },
       "disabled": false,
       "duration": {
-        "startTime": null,
-        "seconds": null,
-        "combat": null,
-        "rounds": 1,
-        "turns": null,
-        "startRound": null,
-        "startTurn": null
+        "value": 1,
+        "units": "rounds"
       },
       "description": "<p>The target has the Blinded condition until the start of your next turn.</p>",
-      "tint": "#ffffff",
       "statuses": [
         "blinded"
       ],
@@ -41,8 +36,7 @@
           "enableCondition": "",
           "disableCondition": "",
           "disableIncapacitated": false,
-          "dontApply": false,
-          "showIcon": true
+          "dontApply": false
         }
       },
       "_stats": {
@@ -56,7 +50,8 @@
         "lastModifiedBy": null,
         "exportSource": null
       },
-      "_key": "!items.effects!SunbeamSpell0000.sunBlindedEff000"
+      "_key": "!items.effects!SunbeamSpell0000.sunBlindedEff000",
+      "showIcon": 2
     }
   ],
   "flags": {
@@ -96,16 +91,15 @@
         "effect": []
       }
     },
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.51"
+    "cat": {
+      "automation": {
+        "version": "14.6.5"
       }
     }
   },
   "system": {
     "description": {
-      "value": "<p>You launch a sunbeam in a 5-foot-wide, 60-foot-long Line. Each creature in the Line makes a Constitution saving throw. On a failed save, a creature takes 6d8 Radiant damage and has the Blinded condition until the start of your next turn. On a successful save, it takes half as much damage only.</p><p>Until the spell ends, you can take a Magic action to create a new Line of radiance.</p><p>For the duration, a mote of brilliant radiance shines above you. It sheds Bright Light in a 30-foot radius and Dim Light for an additional 30 feet. This light is sunlight.</p>\n<p><strong>midi-qol</strong>: No macros required. Two save activities — Initial Cast (consumes spell slot, places line template) and Create New Sunbeam (free, places new line). Both deal 6d8 Radiant (half on save) and apply Blinded on failed save. The Blinded effect expires at the start of the caster's next turn via DAE specialDuration.</p>",
+      "value": "<p>You launch a sunbeam in a 5-foot-wide, 60-foot-long Line. Each creature in the Line makes a Constitution saving throw. On a failed save, a creature takes 6d8 Radiant damage and has the Blinded condition until the start of your next turn. On a successful save, it takes half as much damage only.</p><p>Until the spell ends, you can take a Magic action to create a new Line of radiance.</p><p>For the duration, a mote of brilliant radiance shines above you. It sheds Bright Light in a 30-foot radius and Dim Light for an additional 30 feet. This light is sunlight.</p><div class=\"cat-description\"><p><strong>midi-qol</strong>: No macros required. Two save activities — Initial Cast (consumes spell slot, places line template) and Create New Sunbeam (free, places new line). Both deal 6d8 Radiant (half on save) and apply Blinded on failed save. The Blinded effect expires at the start of the caster's next turn via DAE specialDuration.</p></div>",
       "chat": "<p>You launch a sunbeam in a 5-foot-wide, 60-foot-long Line. Each creature in the Line makes a Constitution saving throw. On a failed save, a creature takes 6d8 Radiant damage and has the Blinded condition until the start of your next turn. On a successful save, it takes half as much damage only.</p><p>Until the spell ends, you can take a Magic action to create a new Line of radiance.</p><p>For the duration, a mote of brilliant radiance shines above you. It sheds Bright Light in a 30-foot radius and Dim Light for an additional 30 feet. This light is sunlight.</p>"
     },
     "source": {

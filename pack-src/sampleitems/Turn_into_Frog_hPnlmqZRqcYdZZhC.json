@@ -253,7 +253,7 @@
       "value": "",
       "chat": ""
     },
-    "identifier": "new-feature",
+    "identifier": "turn-into-frog",
     "source": {
       "revision": 1,
       "rules": "2024"
@@ -279,10 +279,9 @@
       "sourceId": "Actor.ZPvI3KQT4Y3yC7qJ.Item.9ptrRJuSD8tUvS8e"
     },
     "dnd5e": {},
-    "chris-premades": {
-      "info": {
-        "source": "midi-qol.midiqol-sample-items",
-        "version": "13.0.58"
+    "cat": {
+      "automation": {
+        "version": "14.6.9"
       }
     }
   },

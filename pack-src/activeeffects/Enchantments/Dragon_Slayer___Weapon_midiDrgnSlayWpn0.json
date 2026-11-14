@@ -1,0 +1,80 @@
+{
+  "name": "Dragon Slayer - Weapon",
+  "type": "enchantment",
+  "img": "icons/weapons/swords/greatsword-crossguard-embossed-gold.webp",
+  "system": {
+    "changes": [
+      {
+        "key": "name",
+        "value": "{} of Dragon Slaying",
+        "priority": 50,
+        "type": "override"
+      },
+      {
+        "key": "system.properties",
+        "value": "mgc",
+        "priority": 20,
+        "type": "add"
+      },
+      {
+        "key": "system.magicalBonus",
+        "value": "1",
+        "priority": 40,
+        "type": "upgrade"
+      },
+      {
+        "key": "flags.dae.macro.command",
+        "value": "const version = \"14.0.6\";\ntry {\n  if (args[0]?.macroPass !== \"DamageBonus\") return {};\n  const target = workflow?.hitTargets?.first();\n  if (!target) return {};\n  const tactor = target.actor;\n  const detailsRace = (tactor?.system?.details?.race ?? \"\").toString();\n  const detailsType = tactor?.system?.details?.type?.value ?? \"\";\n  const raceOrType = `${detailsRace} ${detailsType}`.toLowerCase();\n  if (!raceOrType.includes(\"dragon\")) return {};\n  const baseTypes = rolledItem?.system?.damage?.base?.types ?? [];\n  const dmgType = [...baseTypes][0] ?? \"slashing\";\n  return { damageRoll: `3d6[${dmgType}]`, flavor: \"Dragon Slayer bonus damage\" };\n} catch (err) {\n  console.error(`Dragon Slayer Weapon ${version}`, err);\n}",
+        "priority": 50,
+        "type": "override"
+      },
+      {
+        "key": "flags.midi-qol.onUseMacroName",
+        "value": "ItemMacro, DamageBonus",
+        "priority": 50,
+        "type": "custom"
+      }
+    ]
+  },
+  "disabled": true,
+  "start": null,
+  "duration": {
+    "value": null,
+    "units": "seconds",
+    "expiry": null,
+    "expired": false
+  },
+  "description": "Enchants a weapon as Dragon Slayer. Adds the magical property and +1 magical bonus.",
+  "origin": "Compendium.midi-qol.midiqol-active-effects.ActiveEffect.midiDrgnSlayWpn0",
+  "tint": "#ffffff",
+  "transfer": false,
+  "statuses": [],
+  "showIcon": 0,
+  "folder": "midiEnchantFldr0",
+  "sort": 0,
+  "flags": {
+    "dae": {
+      "specialDuration": [],
+      "enableCondition": "",
+      "disableCondition": "",
+      "stackable": "multi",
+      "macroRepeat": "none"
+    },
+    "dnd5e": {
+      "riders": {
+        "statuses": []
+      }
+    },
+    "core": {
+      "overlay": false
+    },
+    "chris-premades": {
+      "info": {
+        "source": "midi-qol.midiqol-active-effects",
+        "version": "14.6.0"
+      }
+    }
+  },
+  "_id": "midiDrgnSlayWpn0",
+  "_key": "!effects!midiDrgnSlayWpn0"
+}

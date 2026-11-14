@@ -1,0 +1,551 @@
+{
+  "name": "Nature's Ward",
+  "type": "feat",
+  "img": "icons/magic/nature/root-vine-caduceus-healing.webp",
+  "effects": [
+    {
+      "_id": "RZ2jmcmhFX8uMrPN",
+      "flags": {
+        "dae": {
+          "stackable": "none",
+          "specialDuration": [],
+          "transfer": true,
+          "selfTarget": false
+        }
+      },
+      "disabled": false,
+      "duration": {},
+      "origin": null,
+      "transfer": true,
+      "name": "Nature's Ward",
+      "description": "",
+      "statuses": [],
+      "_stats": {
+        "compendiumSource": null,
+        "duplicateSource": null,
+        "coreVersion": "13.346",
+        "systemId": "dnd5e",
+        "systemVersion": "4.3.6",
+        "createdTime": null,
+        "modifiedTime": null,
+        "lastModifiedBy": null,
+        "exportSource": null
+      },
+      "img": "icons/magic/nature/root-vine-caduceus-healing.webp",
+      "type": "base",
+      "system": {
+        "changes": [
+          {
+            "key": "system.traits.ci.value",
+            "value": "poisoned",
+            "priority": 20,
+            "type": "add"
+          }
+        ]
+      },
+      "sort": 0,
+      "_key": "!items.effects!A6fVeyfHvnmYVONs.RZ2jmcmhFX8uMrPN"
+    },
+    {
+      "_id": "natWardAridEff00",
+      "name": "Nature's Ward: Land",
+      "img": "icons/magic/fire/flame-burning-campfire-yellow-blue.webp",
+      "type": "base",
+      "transfer": false,
+      "disabled": false,
+      "description": "<p>Arid: Resistance to Fire damage until you choose another land.</p>",
+      "duration": {},
+      "statuses": [],
+      "origin": null,
+      "sort": 0,
+      "flags": {
+        "dae": {
+          "selfTarget": true,
+          "stackable": "noneNameOnly",
+          "specialDuration": [],
+          "transfer": false
+        }
+      },
+      "system": {
+        "changes": [
+          {
+            "key": "system.traits.dr.value",
+            "value": "fire",
+            "priority": 20,
+            "type": "add"
+          }
+        ]
+      },
+      "_key": "!items.effects!A6fVeyfHvnmYVONs.natWardAridEff00"
+    },
+    {
+      "_id": "natWardPolarEff0",
+      "name": "Nature's Ward: Land",
+      "img": "icons/magic/water/snowflake-ice-blue-white.webp",
+      "type": "base",
+      "transfer": false,
+      "disabled": false,
+      "description": "<p>Polar: Resistance to Cold damage until you choose another land.</p>",
+      "duration": {},
+      "statuses": [],
+      "origin": null,
+      "sort": 0,
+      "flags": {
+        "dae": {
+          "selfTarget": true,
+          "stackable": "noneNameOnly",
+          "specialDuration": [],
+          "transfer": false
+        }
+      },
+      "system": {
+        "changes": [
+          {
+            "key": "system.traits.dr.value",
+            "value": "cold",
+            "priority": 20,
+            "type": "add"
+          }
+        ]
+      },
+      "_key": "!items.effects!A6fVeyfHvnmYVONs.natWardPolarEff0"
+    },
+    {
+      "_id": "natWardTempEff00",
+      "name": "Nature's Ward: Land",
+      "img": "icons/magic/lightning/bolt-strike-blue.webp",
+      "type": "base",
+      "transfer": false,
+      "disabled": false,
+      "description": "<p>Temperate: Resistance to Lightning damage until you choose another land.</p>",
+      "duration": {},
+      "statuses": [],
+      "origin": null,
+      "sort": 0,
+      "flags": {
+        "dae": {
+          "selfTarget": true,
+          "stackable": "noneNameOnly",
+          "specialDuration": [],
+          "transfer": false
+        }
+      },
+      "system": {
+        "changes": [
+          {
+            "key": "system.traits.dr.value",
+            "value": "lightning",
+            "priority": 20,
+            "type": "add"
+          }
+        ]
+      },
+      "_key": "!items.effects!A6fVeyfHvnmYVONs.natWardTempEff00"
+    },
+    {
+      "_id": "natWardTropEff00",
+      "name": "Nature's Ward: Land",
+      "img": "icons/magic/nature/leaf-glow-green.webp",
+      "type": "base",
+      "transfer": false,
+      "disabled": false,
+      "description": "<p>Tropical: Resistance to Poison damage until you choose another land.</p>",
+      "duration": {},
+      "statuses": [],
+      "origin": null,
+      "sort": 0,
+      "flags": {
+        "dae": {
+          "selfTarget": true,
+          "stackable": "noneNameOnly",
+          "specialDuration": [],
+          "transfer": false
+        }
+      },
+      "system": {
+        "changes": [
+          {
+            "key": "system.traits.dr.value",
+            "value": "poison",
+            "priority": 20,
+            "type": "add"
+          }
+        ]
+      },
+      "_key": "!items.effects!A6fVeyfHvnmYVONs.natWardTropEff00"
+    }
+  ],
+  "flags": {
+    "core": {},
+    "midiProperties": {
+      "confirmTargets": "default",
+      "autoFailFriendly": false,
+      "autoSaveFriendly": false,
+      "critOther": false,
+      "offHandWeapon": false,
+      "magicdam": false,
+      "magiceffect": false,
+      "noConcentrationCheck": false,
+      "toggleEffect": false,
+      "ignoreTotalCover": false,
+      "idr": false,
+      "idi": false,
+      "idv": false,
+      "ida": false
+    },
+    "midi-qol": {
+      "rollAttackPerTarget": "default",
+      "itemCondition": "",
+      "effectCondition": "",
+      "reactionCondition": "",
+      "otherCondition": "",
+      "AoETargetType": "any",
+      "AoETargetTypeIncludeSelf": true,
+      "autoTarget": "default",
+      "removeAttackDamageButtons": "default"
+    },
+    "tidy5e-sheet": {
+      "section": "",
+      "actionSection": ""
+    },
+    "dnd5e": {
+      "riders": {
+        "activity": []
+      }
+    },
+    "crux": {
+      "trayVisibility": "default"
+    },
+    "cat": {
+      "automation": {
+        "version": "14.6.9"
+      }
+    }
+  },
+  "system": {
+    "description": {
+      "value": "<p>You are immune to the Poisoned condition, and you have Resistance to a damage type associated with your current land choice in the Circle Spells feature, as shown in the Nature's Ward table.</p><table><caption>Nature's Ward</caption><thead><tr><td>Land Type</td><td>Resistance</td></tr></thead><tbody><tr><td>Arid</td><td>Fire</td></tr><tr><td>Polar</td><td>Cold</td></tr><tr><td>Temperate</td><td>Lightning</td></tr><tr><td>Tropical</td><td>Poison</td></tr></tbody></table><p><strong>Automation:</strong> the Poisoned immunity is always on. When you choose your land after a Long Rest, use that land's activity: it gives the matching Resistance, replacing the previous land's.</p>",
+      "chat": ""
+    },
+    "source": {
+      "custom": "",
+      "rules": "2024",
+      "revision": 1,
+      "license": "CC-BY-4.0",
+      "book": "SRD 5.2"
+    },
+    "uses": {
+      "max": "",
+      "spent": 0,
+      "recovery": []
+    },
+    "type": {
+      "value": "",
+      "subtype": ""
+    },
+    "requirements": "Circle of the Land 10",
+    "activities": {
+      "natWardArid00000": {
+        "_id": "natWardArid00000",
+        "type": "utility",
+        "name": "Arid Land",
+        "sort": 100,
+        "img": "icons/magic/fire/flame-burning-campfire-yellow-blue.webp",
+        "activation": {
+          "type": "special",
+          "value": null,
+          "condition": "When you choose your land after a Long Rest",
+          "override": true
+        },
+        "consumption": {
+          "targets": [],
+          "scaling": {
+            "allowed": false
+          },
+          "spellSlot": false
+        },
+        "target": {
+          "override": true,
+          "prompt": false,
+          "template": {
+            "type": "",
+            "count": "",
+            "contiguous": false,
+            "units": "ft"
+          },
+          "affects": {
+            "type": "self",
+            "count": "",
+            "choice": false
+          }
+        },
+        "range": {
+          "override": true,
+          "units": "self"
+        },
+        "duration": {
+          "units": "inst",
+          "override": true,
+          "concentration": false
+        },
+        "effects": [
+          {
+            "_id": "natWardAridEff00"
+          }
+        ],
+        "roll": {
+          "formula": "",
+          "name": "",
+          "prompt": false,
+          "visible": false
+        },
+        "midiProperties": {
+          "confirmTargets": "none",
+          "autoConsume": false,
+          "forceConsumeDialog": "never",
+          "automationOnly": false,
+          "otherActivityId": "none",
+          "otherActivityCompatible": false,
+          "identifier": "natures-ward-arid"
+        },
+        "macroData": {
+          "name": "",
+          "command": ""
+        }
+      },
+      "natWardPolar0000": {
+        "_id": "natWardPolar0000",
+        "type": "utility",
+        "name": "Polar Land",
+        "sort": 200,
+        "img": "icons/magic/water/snowflake-ice-blue-white.webp",
+        "activation": {
+          "type": "special",
+          "value": null,
+          "condition": "When you choose your land after a Long Rest",
+          "override": true
+        },
+        "consumption": {
+          "targets": [],
+          "scaling": {
+            "allowed": false
+          },
+          "spellSlot": false
+        },
+        "target": {
+          "override": true,
+          "prompt": false,
+          "template": {
+            "type": "",
+            "count": "",
+            "contiguous": false,
+            "units": "ft"
+          },
+          "affects": {
+            "type": "self",
+            "count": "",
+            "choice": false
+          }
+        },
+        "range": {
+          "override": true,
+          "units": "self"
+        },
+        "duration": {
+          "units": "inst",
+          "override": true,
+          "concentration": false
+        },
+        "effects": [
+          {
+            "_id": "natWardPolarEff0"
+          }
+        ],
+        "roll": {
+          "formula": "",
+          "name": "",
+          "prompt": false,
+          "visible": false
+        },
+        "midiProperties": {
+          "confirmTargets": "none",
+          "autoConsume": false,
+          "forceConsumeDialog": "never",
+          "automationOnly": false,
+          "otherActivityId": "none",
+          "otherActivityCompatible": false,
+          "identifier": "natures-ward-polar"
+        },
+        "macroData": {
+          "name": "",
+          "command": ""
+        }
+      },
+      "natWardTemperate": {
+        "_id": "natWardTemperate",
+        "type": "utility",
+        "name": "Temperate Land",
+        "sort": 300,
+        "img": "icons/magic/lightning/bolt-strike-blue.webp",
+        "activation": {
+          "type": "special",
+          "value": null,
+          "condition": "When you choose your land after a Long Rest",
+          "override": true
+        },
+        "consumption": {
+          "targets": [],
+          "scaling": {
+            "allowed": false
+          },
+          "spellSlot": false
+        },
+        "target": {
+          "override": true,
+          "prompt": false,
+          "template": {
+            "type": "",
+            "count": "",
+            "contiguous": false,
+            "units": "ft"
+          },
+          "affects": {
+            "type": "self",
+            "count": "",
+            "choice": false
+          }
+        },
+        "range": {
+          "override": true,
+          "units": "self"
+        },
+        "duration": {
+          "units": "inst",
+          "override": true,
+          "concentration": false
+        },
+        "effects": [
+          {
+            "_id": "natWardTempEff00"
+          }
+        ],
+        "roll": {
+          "formula": "",
+          "name": "",
+          "prompt": false,
+          "visible": false
+        },
+        "midiProperties": {
+          "confirmTargets": "none",
+          "autoConsume": false,
+          "forceConsumeDialog": "never",
+          "automationOnly": false,
+          "otherActivityId": "none",
+          "otherActivityCompatible": false,
+          "identifier": "natures-ward-temperate"
+        },
+        "macroData": {
+          "name": "",
+          "command": ""
+        }
+      },
+      "natWardTropical0": {
+        "_id": "natWardTropical0",
+        "type": "utility",
+        "name": "Tropical Land",
+        "sort": 400,
+        "img": "icons/magic/nature/leaf-glow-green.webp",
+        "activation": {
+          "type": "special",
+          "value": null,
+          "condition": "When you choose your land after a Long Rest",
+          "override": true
+        },
+        "consumption": {
+          "targets": [],
+          "scaling": {
+            "allowed": false
+          },
+          "spellSlot": false
+        },
+        "target": {
+          "override": true,
+          "prompt": false,
+          "template": {
+            "type": "",
+            "count": "",
+            "contiguous": false,
+            "units": "ft"
+          },
+          "affects": {
+            "type": "self",
+            "count": "",
+            "choice": false
+          }
+        },
+        "range": {
+          "override": true,
+          "units": "self"
+        },
+        "duration": {
+          "units": "inst",
+          "override": true,
+          "concentration": false
+        },
+        "effects": [
+          {
+            "_id": "natWardTropEff00"
+          }
+        ],
+        "roll": {
+          "formula": "",
+          "name": "",
+          "prompt": false,
+          "visible": false
+        },
+        "midiProperties": {
+          "confirmTargets": "none",
+          "autoConsume": false,
+          "forceConsumeDialog": "never",
+          "automationOnly": false,
+          "otherActivityId": "none",
+          "otherActivityCompatible": false,
+          "identifier": "natures-ward-tropical"
+        },
+        "macroData": {
+          "name": "",
+          "command": ""
+        }
+      }
+    },
+    "identifier": "natures-ward",
+    "enchant": {},
+    "prerequisites": {
+      "level": null,
+      "repeatable": false
+    },
+    "properties": [],
+    "advancement": [],
+    "cover": null,
+    "crewed": false
+  },
+  "_stats": {
+    "compendiumSource": "Compendium.midi-qol.midiqol-sample-items.Td3v4mqUETTolcm0",
+    "duplicateSource": null,
+    "coreVersion": "13.346",
+    "systemId": "dnd5e",
+    "systemVersion": "4.3.6",
+    "createdTime": 1741782991287,
+    "modifiedTime": 1744024456334,
+    "lastModifiedBy": "Zl1BOUaPLwDEujaL",
+    "exportSource": null
+  },
+  "folder": "fZIl4G4qj3C894LI",
+  "_id": "A6fVeyfHvnmYVONs",
+  "sort": 400000,
+  "ownership": {
+    "default": 0,
+    "Zl1BOUaPLwDEujaL": 3
+  },
+  "_key": "!items!A6fVeyfHvnmYVONs"
+}
