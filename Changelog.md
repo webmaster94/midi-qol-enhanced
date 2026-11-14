@@ -1,3 +1,7 @@
+### 14.6.12.3 - Restore the module display name
+* Restored the Foundry display title to Midi QOL. The module ID remains midi-qol.
+* Published a new module version so installed copies receive the corrected title through the normal update process.
+
 ### 14.6.12.2 - GPS/CPR integration fixes
 * Fixed self-targeted triggered OverTime being dropped after successful attacks or failed enemy saves. Trigger eligibility is now independent of the controller recipient.
 * Retargeted OverTime now opens target confirmation and applies to the selected recipients. Cancelled or unsuccessful triggers create no controller.

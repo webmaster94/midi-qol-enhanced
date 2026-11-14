@@ -22,5 +22,5 @@ jobs:
           test "$(jq -r .manifest package/module.json)" = "$repo/releases/latest/download/module.json"
           test "$(jq -r .download package/module.json)" = "$repo/releases/download/$tag/$zip"
           test -f "package/$zip"
-          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --verify-tag --title "Midi QOL Enhanced $version" --notes-file "docs/Release-$version.md"
+          gh release view "$tag" >/dev/null 2>&1 || gh release create "$tag" --verify-tag --title "Midi QOL $version" --notes-file "docs/Release-$version.md"
           gh release upload "$tag" package/module.json "package/$zip" --clobber

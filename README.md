@@ -1,4 +1,4 @@
-# Midi QOL Enhanced
+# Midi QOL
 
 This fork follows [upstream Midi QOL](https://github.com/tposney/midi-qol) and keeps additional triggered OverTime automation and condition-change chat notifications.
 

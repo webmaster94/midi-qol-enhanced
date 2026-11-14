@@ -1,6 +1,6 @@
 {
   "id": "{{name}}",
-  "title": "Midi QOL Enhanced",
+  "title": "{{title}}",
   "description": "{{description}}",
   "version": "{{version}}",
   "authors": [
