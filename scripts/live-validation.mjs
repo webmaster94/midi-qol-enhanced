@@ -25,8 +25,24 @@ try {
  const forkResult=await page.evaluate(await fs.readFile('scripts/dnd6-fork-runtime.js','utf8'));
  console.log('forkRuntime',JSON.stringify({pass:forkResult.pass,checks:forkResult.checks.length,failures:forkResult.checks.filter(c=>!c.pass)}));
  await fs.writeFile('../midi-fork-runtime-results.json',JSON.stringify(forkResult,null,2));
+ await page.evaluate(code=>{window.midiIntegrationResult=null;window.midiIntegrationError=null;void eval(code).then(r=>window.midiIntegrationResult=r).catch(e=>window.midiIntegrationError=e.message);},await fs.readFile('scripts/dnd6-integration-runtime.js','utf8'));
+ await page.waitForFunction(()=>document.querySelector('#midi-qol-targetConfirmation [data-action="roll"]') || window.midiIntegrationError,{},{timeout:15000});
+ const integrationError=await page.evaluate(()=>window.midiIntegrationError);
+ if(integrationError) throw new Error(integrationError);
+ await page.evaluate(()=>{
+   globalThis.midiRetargetDialogSeen=true;
+   const source=game.actors.find(a=>a.name==='Compatibility Caster');
+   const token=canvas.tokens.placeables.find(t=>t.actor.id===source.id);
+   for(const target of [...game.user.targets]) target.setTarget(false,{user:game.user,releaseOthers:false,groupSelection:true});
+   token.setTarget(true,{user:game.user,releaseOthers:true});
+ });
+ await page.locator('#midi-qol-targetConfirmation [data-action="roll"]').click();
+ await page.waitForFunction(()=>window.midiIntegrationResult||window.midiIntegrationError,{},{timeout:15000});
+ const integrationResult=await page.evaluate(()=>window.midiIntegrationResult??{pass:false,checks:[],error:window.midiIntegrationError});
+ console.log('integrationRuntime',JSON.stringify(integrationResult));
+ await fs.writeFile('../midi-integration-runtime-results.json',JSON.stringify(integrationResult,null,2));
  console.log('errors',errors);
- if(!cardResult.pass || !forkResult.pass || errors.length) process.exitCode=1;
+ if(!cardResult.pass || !forkResult.pass || !integrationResult.pass || errors.length) process.exitCode=1;
  await page.screenshot({path:'../midi-startup.png',fullPage:true});
 } finally {await browser.close();}
 

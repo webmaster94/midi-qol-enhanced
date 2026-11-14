@@ -126,7 +126,7 @@ import { TroubleShooter } from "./apps/TroubleShooter.js";
 import { restoredUse, useChangesJson } from "./lib/useChanges.js";
 import { SECTION_TEMPLATES, USAGE_MESSAGE_TYPE, cardSaveRoll, type MidiCardSection, type SectionName } from "./ChatClasses/UsageCardMessage.js";
 import { MidiSummonActivity } from "./activities/SummonActivity.js";
-import { activityHasScaledTargetCount, computeActivityTemplateTargets, computeOffLevelTemplateTargets, createActivityTemplateRegions, postTemplateConfirmTargets, regionShapeOrigin, setDamageRollMinTerms } from "./activities/activityHelpers.js";
+import { activityHasScaledTargetCount, computeActivityTemplateTargets, computeOffLevelTemplateTargets, createActivityTemplateRegions, postTemplateConfirmTargets, resolveTargetConfirmation, regionShapeOrigin, setDamageRollMinTerms } from "./activities/activityHelpers.js";
 import { Activity, Dnd5eChatMessage, ActivitySave, ActivityCheck, ActivityUseConfiguration, DamageDescription, DamageListEntry, TokenOrDocument, DND5ETargetDescriptor, CombinedTargetDescriptor, ActivityEffectData, QueueSaveRollOptions, SaveDetails, ProcessTargetSaveContext, ModuleIntegrationFlags, ModuleIntegrationRequests, MonksTokenBarRequest, FlashRollsRequest, EpicRollsRequest, RollProcessConfig, RollDialogConfig } from "../globals.js";
 import { AnyMutableObject, AnyObject, EmptyObject, InexactPartial } from "fvtt-types/utils";
 import Token = foundry.canvas.placeables.Token;
@@ -3697,6 +3697,7 @@ export class Workflow {
             ? (hasSave ? this.hitTargets.union(this.hitTargetsEC).intersection(this.failedSaves) : this.hitTargets.union(this.hitTargetsEC))
             : (hasSave ? this.failedSaves : this.targets);
           const allowedTargetUuids = new Set(passedTargets.uuids);
+          if (enforceTriggerSaveHit && (hasSave || this.activity.attack) && passedTargets.count === 0) shouldTrigger = false;
 
 
           if (this.activity.midiProperties?.triggeredActivityRollAs) {
@@ -3722,11 +3723,20 @@ export class Workflow {
               case "saveTargets": targetUuids = toUuids(this.saves); break;
               case "targets": targetUuids = toUuids(this.targets); break;
               case "retarget":
+                if (triggeredActivity.isOverTimeFlag && shouldTrigger) {
+                  // A controller has no activity-use workflow to ask for its recipients.
+                  shouldTrigger = await resolveTargetConfirmation(triggeredActivity, { workflowOptions: usage.midiOptions.workflowOptions });
+                  if (shouldTrigger) targetUuids = new TokenDocumentSet(game.user?.targets).uuids;
+                }
+                break;
               default:
-                // targetUuids = [];
                 break;
             }
-          if (enforceTriggerSaveHit && (hasSave || this.activity.attack)) targetUuids = targetUuids.filter(uuid => allowedTargetUuids.has(uuid));
+          // Self and retarget select recipients independently of the triggering roll's targets.
+          if (enforceTriggerSaveHit && (hasSave || this.activity.attack)
+            && !["self", "retarget"].includes(this.activity.midiProperties?.triggeredActivityTargets)) {
+            targetUuids = targetUuids.filter(uuid => allowedTargetUuids.has(uuid));
+          }
           if (triggeredActivity.isOverTimeFlag && !targetUuids.length) shouldTrigger = false;
           usage.midiOptions.targetUuids = targetUuids;
           usage.midiOptions.triggeredActivity = true;
@@ -5113,7 +5123,8 @@ export class Workflow {
     if (!macro?.command) return undefined;
 
     const actorToUse = (options.actor as Actor.Implementation | undefined) ?? this.actor;
-    const scope: Macro.UnknownScope = {
+    // Core forwards token unchanged; its declarations only describe drawn Tokens.
+    const scope: Omit<Macro.UnknownScope, "token"> = {
       workflow: this,
       rolledActivity: this.activity,
       macroActivity: resolved.macroActivity,
@@ -5123,7 +5134,7 @@ export class Workflow {
       args: [workflowContext],
       options: options,
       actor: actorToUse,
-      token: tokenForActor(actorToUse),
+      token: options.token ?? tokenForActor(actorToUse),
       midiData: workflowContext
     };
 

@@ -1,3 +1,8 @@
+### 14.6.12.2 - GPS/CPR integration fixes
+* Fixed self-targeted triggered OverTime being dropped after successful attacks or failed enemy saves. Trigger eligibility is now independent of the controller recipient.
+* Retargeted OverTime now opens target confirmation and applies to the selected recipients. Cancelled or unsuccessful triggers create no controller.
+* Target macros retain the exact supplied token or TokenDocument, including off-canvas targets and actors with multiple linked tokens.
+
 ### 14.6.12.1 - Midi QOL Enhanced
 * Merged upstream 14.6.12, including its native D&D 6 cards, region automation, workflow storage, and player-wait controls.
 * Updated and tested against D&D 6.1.0 on Foundry 14.369 with DAE 14.6.9.
